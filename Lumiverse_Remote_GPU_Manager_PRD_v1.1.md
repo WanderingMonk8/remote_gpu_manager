@@ -27,22 +27,21 @@ The extension must own **runtime lifecycle management (start, shutdown, health a
 
 ### 2.2 Existing local artifact
 
-`wildthingsstudio101.ipynb` (in this directory; the PRD's `MOSS_Image_Colab_Studio.ipynb`) is the reference implementation; it was inspected in full for M0 (2026-11-17), including the user's corrections (async `ngrok.forward()` startup; toggleable workflow download via `DOWNLOAD_WORKFLOW`). Preserve its interactive generation mode as a regression baseline. Committed generation defaults are 1024 × 1024 / 30 steps (user-edited; see §15).
+`Unified_MOSS_Anima_Colab_Studio.ipynb` is the reference implementation; inspect the actual working notebook and its latest user-side edits before extracting code. It **supersedes** `wildthingsstudio101.ipynb` (kept in history) as of 2026-11-17: one ComfyUI checkout (`/content/Unified_ComfyUI`) serves **two model families** — MOSS (SFT/Base INT8, `Comfy-Org/MOSS-Image`) and Anima (Turbo/Aesthetic v1.0–v1.1, Base v1.0, `circlestone-labs/Anima`) — with family-specific LoRA directories (`models/loras/<family>`), per-family cache, managed model-switch semantics (idle check before `stop_owned_server()`), a dedicated Civitai installer with family-aware base matching and signature validation, an Anima-only Reference Adapter path (`ComfyUI-Anima-Ref-Adapter`, Base v1.0 target), and a corrected ngrok cell (default OFF, awaited forward, 12-attempt verified health check, auto-closes the tunnel if anonymous access returns HTTP 200). Preserve its interactive generation mode as a regression baseline.
 
 | Component | Reference value |
 |---|---|
-| ComfyUI | Native MOSS-capable build; pin the tested commit after discovery |
-| Model (default) | `moss_image_sft_int8_convrot.safetensors` |
-| Alternative | `moss_image_base_int8_convrot.safetensors` |
-| Text encoder | `qwen3.5_9b_w4a8_gptq.safetensors` |
-| VAE | `flux2-vae_small.safetensors` |
-| Weight repository | `Comfy-Org/MOSS-Image` |
+| ComfyUI | Native MOSS+Anima-capable build; `git clone --depth 1` of master with optional `UPDATE_COMFYUI`; no commit pinning yet — **pin the tested commit after discovery** |
+| MOSS (default family for this project) | SFT INT8 `moss_image_sft_int8_convrot.safetensors` / Base INT8 `moss_image_base_int8_convrot.safetensors`; encoder `qwen3.5_9b_w4a8_gptq.safetensors`; VAE `flux2-vae_small.safetensors`; repo `Comfy-Org/MOSS-Image`; clip_type `moss_image`; latent `EmptyFlux2LatentImage` |
+| Anima (supported workbook family) | Checkpoints `anima-{turbo,aesthetic}-v{1.0,1.1}(b?).safetensors` + `anima-base-v1.0.safetensors`; encoder `qwen_3_06b_base.safetensors`; VAE `qwen_image_vae.safetensors`; repo `circlestone-labs/Anima`; clip_type `stable_diffusion`; latent `EmptyLatentImage`; defaults Turbo 10 steps/CFG 1.0, Base/Aesthetic 30/4.5 |
 | Local endpoint | `http://127.0.0.1:8188` |
-| Launch | `main.py --listen 127.0.0.1 --port 8188 --lowvram` |
-| Defaults | 768 × 768, 25 steps, CFG 2.5 proposed; the reference notebook as committed (`wildthingsstudio101.ipynb`) ships **1024 × 1024, 30 steps** (user-side edits) — notebook is authoritative for its own widgets; PRD table updated per M0 |
+| Launch | `main.py --listen 127.0.0.1 --port 8188 --lowvram` (mode configurable `lowvram`/`normalvram`) |
+| Defaults (as committed) | 768 × 768, `USE_MODEL_PRESET=True` (profile supplies steps/CFG), CFG 2.5/steps 25 for MOSS, `er_sde`, `simple`, batch 1, `SEED=-1` |
 | Seed | -1 = randomize (normalize to native supported range) |
-| Export | `/content/moss_workflow_api.json` |
-| Optional cache | `/content/drive/MyDrive/MOSS_Colab_Assets` when Drive is mounted interactively |
+| Export | `/content/unified_workflow_api.json` and `/content/<family>_workflow_api.json` |
+| Optional cache | `/content/unified_model_cache` (or Drive `MyDrive/Unified_Image_Assets` only when interactively mounted) |
+
+Naming of record: family-specific LoRA names `civitai_<versionId>_<fileId>_<sanitized original name>` (unchanged); family-prefixed weights (e.g. `moss/…`, `anima/…`) appear in the exported API graph. Anima Reference Adapter must never be applied to MOSS; it is Anima-Base-v1.0-targeted and Experimental-gated elsewhere. Notebook defaults `INSTALL_ANIMA_ADAPTER = True` and `MODEL_CHOICE = 'Anima Turbo v1.1'` as committed — the user's Lumiverse target profile (MOSS vs Anima) is pending confirmation; see §15.
 
 The notebook uses `LoraLoaderModelOnly` by default, and offers `LoraLoaderBypassModelOnly` only if available. Additional loaders and weight types must be tested with this quantized model before release.
 
@@ -411,7 +410,7 @@ Begin with M0 in a separate local branch. Read the actual notebook and upstream 
 
 ## 14. Reference material (reviewed 2026-11-17)
 
-- Working artifact: `MOSS_Image_Colab_Studio.ipynb` (original notebook inspected; latest Colab-side fixes not available as an exported file). User-reported successful base/LoRA/tunnel tests form the baseline, not independent reproduction.
+- Working artifact: `Unified_MOSS_Anima_Colab_Studio.ipynb` (user-provided 2026-11-17, supersedes `wildthingsstudio101.ipynb`; inspected in full for M0). MOSS path shares the previously proven configuration; Anima path (default in the file) is user-managed and its generation quality/validity is the user's verification, not independently reproduced here.
 - Lumiverse upstream repository: https://github.com/prolix-oc/Lumiverse
 - Native image generation setup and workflow import: https://lumiverse.chat/guides/image-generation/setup/
 - Spindle image generation API: https://docs.lumiverse.chat/backend-api/image-generation/
@@ -442,3 +441,5 @@ Managed Google Colab (all tiers) prohibits remote proxies and web-service offeri
 Notebook `wildthingsstudio101.ipynb` committed defaults are 1024×1024/30 steps (superseding the 768²/25-step figures), `ENABLE_NGROK = True` in the committed file, and the user-side ngrok `await` fix is present. Remote config delivery to an offline or unauthorized worker is not verified; it is M2/M4 work and is never claimed complete until proven on an authorized host.
 
 Gates still open: Space-side end-to-end test (no Space changes approved by the user yet), read-only Colab OAuth eligibility test (user approved running it — see `tools/colab-eligibility-check.py`), Space persistent path (upstream Dockerfile confirms `/app/data` and `PORT=7860`), exact deployed staging commit behind the Space's "v1.3.0" label. No changes to the deployed Space or to upstream Lumiverse have been made.
+
+**Reference artifact switch (2026-11-17, user):** the project now targets `Unified_MOSS_Anima_Colab_Studio.ipynb` — one ComfyUI checkout serving MOSS **and** Anima families (Anima Turbo/Aesthetic v1.0/v1.1, Anima Base v1.0; models switch via managed `require_idle()` → `stop_owned_server()`; family-scoped LoRA dirs; family-aware Civitai resolver; Anima-only Reference Adapter; ngrok rebuilt with default OFF + verified-listener + auto-close on anonymous 200). The MOSS inventory in §15 below and in `docs/m0-discovery-report.md` remains accurate for the MOSS family; the unified adds: `MODEL_CHOICE` (8 variants, family param), `USE_MODEL_PRESET` (profile steps/CFG), `UPDATE_COMFYUI`, `INSTALL_ANIMA_ADAPTER`, `DOWNLOAD_ADAPTER_WEIGHTS`, `VRAM_MODE`, Anima Reference Adapter fields (`USE_REFERENCE_ADAPTER`, `ALLOW_EXPERIMENTAL_ADAPTER`, `REF_GUIDANCE`, `ADAPTER_STRENGTH`, `REF_END`, `REF_MEGAPIXELS`, `REFERENCE_LOCAL_PATH`), `PREFERRED_DOMAIN`, family-scoped LoRA manifest semantics, and `/free` idle cache release. Whether the Lumiverse integration ships MOSS-only, Anima, or both is pending user confirmation.

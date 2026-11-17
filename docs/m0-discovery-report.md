@@ -14,7 +14,9 @@
 | New in v1.3.0 (not present on main) | Inference scheduler (in-process admission queue, opt-in via `inferenceSchedulerConfig`; chat/embeddings/image generation leases; ComfyUI requests admitted as class `user`; loopback endpoints grouped as "local" resources); image-gen service wraps every provider call in `withInferenceLease`; `resolveImageProviderApiUrl` for default api_url; ~20 new hosted image providers (BFL, Replicate, Stability, …); `lumiverse-spindle-types` 0.6.49 → **0.6.80** | ComfyUI auth, WS ordering, LoRA patching, and connection-profile read-only semantics unchanged. Scheduler is orthogonal to gateway readiness but relevant for single-concurrent-inference sizing |
 | Installed/deployed Space version | **v1.3.0** (user-reported; best match = `staging` @ `5361e4fa`; exact deployed commit unconfirmed) | behavior verified against staging, not against the running Space |
 | Spindle types (host pin) | v1.2.5: 0.6.49 · **v1.3.0: 0.6.80** (= latest npm) | extension should target ^0.6.80 or feature-detect |
-| Reference notebook | `wildthingsstudio101.ipynb` (2 618 834 bytes; 15 code + 14 markdown cells) = **MOSS-Image Colab Studio** (the PRD's `MOSS_Image_Colab_Studio.ipynb`) | user-side fixes already applied: `await ngrok.forward()` async startup, toggleable `DOWNLOAD_WORKFLOW` |
+| Reference notebook (superseded 2026-11-17) | `wildthingsstudio101.ipynb` (2 618 834 bytes; 15 code + 14 markdown cells) = MOSS-Image Colab Studio | kept in git for reference |
+| Reference notebook (current) | **`Unified_MOSS_Anima_Colab_Studio.ipynb`** (48 263 bytes; 26 cells; user-provided 2026-11-17) — one ComfyUI checkout serving MOSS + Anima families; committed default `MODEL_CHOICE='Anima Turbo v1.1'`, `INSTALL_ANIMA_ADAPTER=True` | user's new baseline; see PRD §2.2/§15 and §3′ below. MOSS family defaults 25 steps/CFG 2.5; `USE_MODEL_PRESET=True` |
+| Unified notebook — new capabilities | family registry (8 model variants), family-scoped LoRA dirs (`models/loras/<family>`), managed model switch w/ `require_idle()` + `stop_owned_server()`, family-aware Civitai base matching, LoRA signature validation, Anima-only Reference Adapter (Base v1.0 target), ngrok rebuilt (default OFF, PREFERRED_DOMAIN, verified listener, auto-close on anonymous 200), `/free` idle cache release, `unified_workflow_api.json` + `<family>_workflow_api.json` exports | required for §3′ inventory; interface-wise forces a model-profile registry design in §7.5 of the PRD |
 | Notebook ComfyUI revision | **Unpinned** (`git clone --depth 1 …/ComfyUI.git`, `git pull --ff-only`; "Use recent ComfyUI (0.42+)") | pin after local verification |
 | MOSS model files | `moss_image_sft_int8_convrot.safetensors` (default) / `moss_image_base_int8_convrot.safetensors`; encoder `qwen3.5_9b_w4a8_gptq.safetensors`; VAE `flux2-vae_small.safetensors`; repo `Comfy-Org/MOSS-Image` | matches PRD §2.2 |
 | Notebook generation defaults (as committed) | WIDTH=**1024**, HEIGHT=**1024**, STEPS=**30** (PRD says 768×768 / 25 — user edited the notebook; PRD table is stale) · CFG 2.5 · `er_sde`/`simple` · SEED −1 · CLIP_DEVICE `default` · LORA_LOADER `LoraLoaderModelOnly` | flag: PRD §2.2 should be updated |
@@ -37,9 +39,30 @@
 10. **Storage:** `spindle.storage` (per-extension) / `spindle.userStorage` (per-user) for durable JSON state; no raw host DB access from extensions.
 11. **No inbound listener:** see ADR-001 §3 — gateway is required on the request path for cold-start.
 
+**Reference-artifact switch (2026-11-17):** the user replaced the MOSS-only notebook with `Unified_MOSS_Anima_Colab_Studio.ipynb` (full inspection: see PRD §2.2). The M0 findings that matter for integration **carry over unchanged in substance** — the workflow builder still emits `1 UNETLoader, 2 CLIPLoader, 3 VAELoader, 4/5 CLIPTextEncode, 6 latent, 7 KSampler, 8 VAEDecode, 9 SaveImage` with LoRAs ≥ 100 (`LoraLoaderModelOnly`), and the MOSS graph is byte-equivalent to the old notebook's for MOSS selections (same repositories/files). Anima adds: different encoder/VAE/clip_type/latent (`qwen_3_06b_base.safetensors`, `qwen_image_vae.safetensors`, `stable_diffusion`, `EmptyLatentImage`), Anima-only `AnimaRefAdapter` node (custom external node pack `ArcAnima/ComfyUI-Anima-Ref-Adapter`), Turbo defaults 10 steps/CFG 1.0.
+
 ## 3. Notebook settings inventory → apply-mode classification
 
-Source: `wildthingsstudio101.ipynb` (code cell numbers shown). All `@param` widgets and hardcoded bootstrap choices are covered; native prompt fields are noted for completeness (native UI remains authoritative).
+Source (MOSS baseline): `wildthingsstudio101.ipynb` (code cell numbers shown). For the unified notebook (`Unified_MOSS_Anima_Colab_Studio.ipynb`) the same table applies plus these deltas:
+
+| Setting (unified cell) | Control | Apply class |
+|---|---|---|
+| `MODEL_CHOICE` 8 variants (6) | Model profile selector (family-aware; fetch/verify before activate) | **Reprovision / idle apply** |
+| `UPDATE_COMFYUI` bool (4) | Confirmed update action | Worker restart / bootstrap |
+| `INSTALL_ANIMA_ADAPTER` bool (4) | Custom-node install action (approved revision only) | Bootstrap / worker restart |
+| `DOWNLOAD_ADAPTER_WEIGHTS` bool (6) | Asset install (Anima-only) | Asset operation |
+| `VRAM_MODE` lowvram/normalvram (8) | Memory mode selector | Worker restart |
+| `USE_MODEL_PRESET` bool (18) | Preset vs. manual override toggle | Next job |
+| `USE_REFERENCE_ADAPTER` + `ALLOW_EXPERIMENTAL_ADAPTER` (18) | Anima-only adapter gate | Next job / idle apply |
+| `REF_GUIDANCE`, `ADAPTER_STRENGTH`, `REF_END`, `REF_MEGAPIXELS` (18) | Adapter tuning fields | Next job |
+| `PREFERRED_DOMAIN` (23) | Tunnel approved domain | Idle reconnect / bootstrap |
+| LoRA dirs `models/loras/<family>`; LORA rows carry family prefix (16) | Native LoRA Studio names are family-prefixed in the API graph | Asset / next job |
+| `/free` unload (25, diagnostics) | Idle-only cache release action | Explicit action |
+| `UPLOAD_REFERENCE` + `REFERENCE_LOCAL_PATH` (12) | Authenticated single-image reference upload (Anima only) | Asset operation |
+
+The rest of the MOSS inventory below remains valid; treat MOSS rows as the MOSS-family subset of the unified profile registry.
+
+All `@param` widgets and hardcoded bootstrap choices are covered; native prompt fields are noted for completeness (native UI remains authoritative).
 
 | # | Notebook setting (cell) | Lumiverse control (proposed) | Apply class |
 |---|---|---|---|
