@@ -1,0 +1,115 @@
+# M0 — Discovery report
+
+**Milestone:** M0 · **Status:** Findings complete; ADRs written; live tests outstanding
+**Date:** 2026-11-17
+**Branch:** `m0-discovery` · Project root: `D:\Programming\remote_GPU_manager`
+
+## 1. Version and artifact records
+
+| Item | Record | Notes |
+|---|---|---|
+| Lumiverse upstream (inspected) | `main` @ `45f8db563e1c314ed2aab227613b28eb5ea1084e` · package `lumiverse-backend` **1.2.5** (pushed 2026-11-17T01:27Z; commit dated 2026-11-01) | cloned `D:\Programming\Lumiverse` (depth 50) |
+| Latest Lumiverse release tag | `v1.2.5` (tags: v1.2.5, v1.2.0, v1.1.6, v1.1.5, v1.1.0) | `desktop-v0.3.2-nightly.*` also exist |
+| Installed/deployed Space version | **Unknown — pending user confirmation** | Host-side behavior may differ from upstream main |
+| Spindle types (host pin) | `lumiverse-spindle-types` **0.6.49** (Lumiverse `package.json`) | verified present: `spindle.imageGen.{generate, generateNative, generateStream, getPromptPresets?}`, `SPINDLE_FILE_*`, `connections.{list,get,getModels?}` |
+| Spindle types (latest npm) | **0.6.80** (2026-11-11) | docs say QuickGen additions landed in 0.6.38; host pin 0.6.49 includes them |
+| Lumiverse runtime | Bun ≥ 1.4.4; Hono; better-auth | irrelevant here except for gateway runtime |
+| Reference notebook | `wildthingsstudio101.ipynb` (2 618 834 bytes; 15 code + 14 markdown cells) = **MOSS-Image Colab Studio** (the PRD's `MOSS_Image_Colab_Studio.ipynb`) | user-side fixes already applied: `await ngrok.forward()` async startup, toggleable `DOWNLOAD_WORKFLOW` |
+| Notebook ComfyUI revision | **Unpinned** (`git clone --depth 1 …/ComfyUI.git`, `git pull --ff-only`; "Use recent ComfyUI (0.42+)") | pin after local verification |
+| MOSS model files | `moss_image_sft_int8_convrot.safetensors` (default) / `moss_image_base_int8_convrot.safetensors`; encoder `qwen3.5_9b_w4a8_gptq.safetensors`; VAE `flux2-vae_small.safetensors`; repo `Comfy-Org/MOSS-Image` | matches PRD §2.2 |
+| Notebook generation defaults (as committed) | WIDTH=**1024**, HEIGHT=**1024**, STEPS=**30** (PRD says 768×768 / 25 — user edited the notebook; PRD table is stale) · CFG 2.5 · `er_sde`/`simple` · SEED −1 · CLIP_DEVICE `default` · LORA_LOADER `LoraLoaderModelOnly` | flag: PRD §2.2 should be updated |
+| `ENABLE_NGROK` in committed notebook | **`True`** (cell 25), contradicting the cell's own guidance ("Leave OFF on restricted Colab Free runtimes") and §2.2's "Disabled by default" | flagged for user review |
+| Google Colab API | REST `v1beta` runtimes create/get/list/delete; `runtimespecs.list` (with `eligible`); `getSubscription`; MCP endpoint `colaboratory.googleapis.com/mcp` (create_runtime/create_session/execute_code/list_runtime_specs/list_runtimes/delete_runtime) | see `adr-002-provider-feasibility.md` |
+
+## 2. Native Lumiverse image-generation path — verified facts
+
+(Lumiverse `src/image-gen/*`, `src/services/image-gen.service.ts`, `src/services/character-lora.service.ts`)
+
+1. **Auth:** The ComfyUI provider sends **no credentials** — `_apiKey` unused, `apiKeyRequired: false`. Validation = `GET /system_stats` (no headers). Only the **SwarmUI** path sends a `Cookie` (`swarm_token`) to `/ComfyBackendDirect`. There is no `Authorization: Basic|Bearer` support; WS open likewise carries headers only in the SwarmUI case. → **Native ComfyUI + ngrok Basic Auth = always 401/403.**
+2. **Ordering:** `/ws?clientId=<uuid>` opens **before** `POST /prompt` (`client_id` included). Progress via WS (`progress`, `executing`, `execution_error`; binary preview frames are 8-byte-prefixed). Then `GET /history/{prompt_id}` → find image descriptors → `GET /view?filename=…`. Cancel = `POST /queue {delete:[id]}` + `POST /interrupt` if running.
+3. **Workflow patching** (`patchWorkflow`): writes values into **pre-existing mapped nodes only; never inserts nodes**. Ordered LoRA stack entries map positionally onto mapped LoRA nodes (`buildLoraEntryMap`). Node classes with auto-detection hints: `CLIPTextEncode` (+1:1 heuristic: 2nd encode = negative), `KSampler`, `CheckpointLoaderSimple`, `UNETLoader`, `LoraLoader`. **No hints for `LoraLoaderModelOnly`/`LoraLoaderBypassModelOnly`, `CLIPLoader`, `VAELoader`, `EmptyFlux2LatentImage`** → manual field mappings required for the MOSS graph (seed/steps/CFG/sampler/scheduler OK; width/height/checkpoint/unet/LoRA need manual mapping; positive/negative OK).
+4. **LoRA weight semantics:** `strength_clip` exists only on `LoraLoader`; `LoraLoaderModelOnly` has `strength_model` only → mapping a `lora_strength_clip` field onto a ModelOnly node would inject an unknown input ComfyUI rejects. MOSS LoRA sets must map `lora_name` + `lora_strength_model` only.
+5. **Object info at generation time:** `getComfyUIObjectInfo` (5-minute cache) is fetched during the native generation patch path; failure returns `null`, no throw. Capability discovery (`discoverCapabilities`) fires parallel node queries — honoring "no GPU allocation for discovery" semantics on the worker side is the worker's responsibility; no native code polls health in the background.
+6. **LoRA Studio storage:** lora presets live in image-gen settings (`loraPresets`, `activeLoraPresetId`, `loraStrengthScale`, bypass flags) — a native, per-user feature the extension must reuse via `ImageGenNativeRequestDTO.extraLoras`/`bypassActiveLoraPreset` semantics, or via the native panel; **no second LoRA UI** (PRD non-goal).
+7. **Spindle write surfaces:** no connection-profile create/update/field-mapping mutation; no pre-image-generation hook; `generateNative()` runs the whole native pipeline (scene analysis, LoRA stack, workflow patch) and is the only native-route generator; `getPromptPresets?()` / `cancelNative?()` exist with QuickGen hosts.
+8. **Permissions available to the extension:** free tier (events, storage, version, variables, …); gated: `image_gen`, `images`, `cors_proxy`, `oauth`, `ui_panels`, `ephemeral_storage`, `generation_parameters`, etc. Hard-blocked (no opt-in): `fs`, `child_process`, raw `http(s)`/`net`/`tls`, `Bun.serve`, `Bun.spawn`, `process.env` reads, sqlite. Install-time capabilities: `dynamic_code_execution`, `base64_decode` only.
+9. **Enclave:** AES-256-GCM at-rest, per-user (`enclave.put/get/delete/has/list`) — correct place for ngrok/Civitai/Colab secret refs; profiles export opaque refs only.
+10. **Storage:** `spindle.storage` (per-extension) / `spindle.userStorage` (per-user) for durable JSON state; no raw host DB access from extensions.
+11. **No inbound listener:** see ADR-001 §3 — gateway is required on the request path for cold-start.
+
+## 3. Notebook settings inventory → apply-mode classification
+
+Source: `wildthingsstudio101.ipynb` (code cell numbers shown). All `@param` widgets and hardcoded bootstrap choices are covered; native prompt fields are noted for completeness (native UI remains authoritative).
+
+| # | Notebook setting (cell) | Lumiverse control (proposed) | Apply class |
+|---|---|---|---|
+| 1 | GPU/runtime check (2; no widget) | Runtime-spec selector + capacity display; capability-gated | **Reprovision** |
+| 2 | `USE_DRIVE` bool (4) | Persistence toggle + approved-storage preset/root (Drive mount stays interactive-only) | **Bootstrap / restart or reprovision** |
+| 3 | `CACHE = /content/moss_cache` (4, hardcoded) | Storage root preset; Drive path only when interactively mounted | Bootstrap |
+| 4 | ComfyUI checkout: `git clone --depth 1`, `git pull --ff-only` (6) | Pinned approved revision picker + confirmed update action | **Worker restart / bootstrap** |
+| 5 | pip installs: `-r requirements.txt`, `huggingface_hub`, `requests`, `pillow`, `ipywidgets`, `safetensors` (6) | Pinned dependency profile (no arbitrary installs); restart on change | Worker restart |
+| 6 | `MODEL_CHOICE` = `SFT INT8`/`Base INT8` (8) | Model profile selector; fetch/verify before activation | **Stage + idle apply** |
+| 7 | `ENCODER` `qwen3.5_9b_w4a8_gptq.safetensors` (8, hidden) | Encoder selector (registered, pinned, hash-verified) | **Stage + idle apply** |
+| 8 | `VAE` `flux2-vae_small.safetensors` (8, hidden) | VAE selector (registered, pinned) | **Stage + idle apply** |
+| 9 | Weight source `Comfy-Org/MOSS-Image` (8, hardcoded repo/path) | Approved repository registry (no arbitrary URLs) | Bootstrap |
+| 10 | `acquire_weight()` cache/hardlink logic (8) | Shared cache restore (idempotent; hardlink→copy fallback) | Bootstrap |
+| 11 | LoRA cache restore glob (10) | Restore policy: required/pinned/none | **Bootstrap / idle apply** |
+| 12 | ComfyUI launch `--listen 127.0.0.1 --port 8188 --lowvram` (12) | Memory mode (low/normal VRAM), loopback bind, fixed port | **Worker restart** |
+| 13 | `LOG=/content/comfyui.log` (12, hardcoded) | Log path within approved root; redacted viewing in diagnostics | Config / explicit action |
+| 14 | `BASE_URL` local (12/14, hardcoded) | Read-only managed endpoint (gateway-owned) | Config / next job |
+| 15 | `/object_info` verify list incl. `LoraLoaderModelOnly` (14) | Readiness fingerprint (nodes + MOSS encoder + names); config via schema | Config / next job |
+| 16 | Workflow export `/content/moss_workflow_api.json` (22) | Signed workflow template artifact; native import path unchanged | Explicit action |
+| 17 | `DOWNLOAD_WORKFLOW` bool — **user fix** (23) | UI toggle in settings (no forced download) | Explicit action |
+| 18 | `UPLOAD_LOCAL_LORA` bool (16) | Authenticated manual `.safetensors` upload on supported worker | **Asset operation** |
+| 19 | Civitai token `Password` widget (18) | Write-only secret → enclave ref; sent only to Civitai hosts | **Asset operation** |
+| 20 | LoRA rows: source / strength −5..5 / enabled (18; 2 rows by default) | **Native LoRA Studio is authoritative** (presets/character bindings); worker installs assets + manifest | Asset / next job |
+| 21 | Civitai resolve rules (MOSS base match, `.safetensors`, SHA-256, `civitai_<ver>_<file>_<name>`) (18) | Reused verbatim in worker installer (M3) | Asset operation |
+| 22 | `POSITIVE_PROMPT` / `NEGATIVE_PROMPT` (20) | Native prompt fields / scene parser; standalone defaults only | **Next job** |
+| 23 | `WIDTH`/`HEIGHT` (1024), `STEPS` (30), `CFG` (2.5), `SEED` (−1), `SAMPLER` (`er_sde`), `SCHEDULER` (`simple`) (20) | Native generation controls / workflow mappings (profile = defaults only) | **Next job** |
+| 24 | `CLIP_DEVICE` `default`/`cpu` (20) | Advanced compatibility field, validated vs `/object_info` | Next job / idle apply |
+| 25 | `LORA_LOADER` `LoraLoaderModelOnly` / `LoraLoaderBypassModelOnly` (20) | Advanced field; exactly-once loader; validated | Next job / idle apply |
+| 26 | `ENABLE_NGROK` bool — **currently `True`** (25) | Tunnel mode off/on, approved domain or dynamic endpoint | **Idle reconnect / bootstrap** |
+| 27 | ngrok authtoken + Basic Auth creds via `getpass` (25) | Enclave refs (`ngrok_auth_token`, `tunnel_basic_auth`); rotate action | Asset/secret op (bootstrap applies) |
+| 28 | Tunnel health check + URL print (25) | Authenticated gateway probe; epoch registration | Bootstrap / reconnect |
+| 29 | Diagnostics: `comfy_ready()`, model/LoRA inventory, last log lines, RAM/VRAM/`nvidia-smi` (27–28) | Dashboard + bounded redacted logs | Explicit action |
+| 30 | Shutdown: optional `comfy_proc.terminate()`; ngrok `close()` | **Stop worker vs. release runtime**, distinct actions | Explicit action |
+| 31 | (Not in notebook) Lifecycle: autoStart, idleMinutes, maxRuntime, jobTimeout, poll interval | Manager settings (extension+gateway) | **Hot apply (controller)** / reprovision if provider requires |
+
+## 4. Technical blockers and unsupported capabilities
+
+| ID | Blocker / unsupported capability | Impact | Route |
+|---|---|---|---|
+| B1 | Native provider cannot send upstream auth (Basic/Bearer) to ComfyUI | M1 native path returns 401/403 against any authenticated worker | Gateway (ADR-001) |
+| B2 | No pre-generation hook anywhere in the native path; WS opens before `/prompt` | Cold-start cannot be added inside the extension | Gateway owns `ensureReady` on the request path |
+| B3 | Native LoRA auto-detection is `LoraLoader`-only; native patcher never inserts nodes | MOSS model-only LoRAs need manual mappings into embedded optional nodes (or a host patch) | M1/M3 test; host patch only with explicit approval |
+| B4 | `EmptyFlux2LatentImage` & `CLIPLoader`/`VAELoader`/`UNETLoader` not auto-detected | MOSS template import needs manual field mappings | Document in setup guide; test in M1 |
+| B5 | Spindle: no inbound listeners, no connection-profile mutation, no image-gen interceptor | "Pure extension" solution impossible | Gateway / fork route (ADR-001) |
+| B6 | Google Colab managed runtimes: **all-tiers** prohibition of remote proxies & web-service offerings; Free additionally prohibits web-UI-primary interaction and is idle/12h-lifetime limited | Unattended Colab (Free or paid consumer) = policy-blocked | Manual mode only; P1 needs user-approved host (ADR-002) |
+| B7 | End-to-end authenticated connectivity **from the Lumiverse Space** unverified (prior test ran Colab→Colab) | M1 exit criterion not yet met | M1 test against real Space (needs Space URL + approval) |
+| B8 | Installed Space Lumiverse version ≠ confirmed; upstream main is v1.2.5 and behavior (e.g. auth) may differ | Findings may not match the deployed build | Ask user for Space version or read it from the Space |
+| B9 | Space persistent-volume path (`/app/data`?) and sleep behavior unknown | Durable state design (M2) and provider watchdog assumptions | Ask user / verify on the Space |
+| B10 | ComfyUI unpinned in notebook (`master`) | Reproducibility (R-04) | Pin tested commit (M1/M2) |
+| B11 | Remote config delivery to a Free managed runtime has no permitted channel (no remote code channel; Drive mount is interactive-only) | R-13/R-15 "configure the running worker remotely" unverifiable on Colab Free | Only on authorized hosts (M4/M5); Free = offline staging + manual apply |
+| B12 | `sessions` on Colab API are Jupyter kernels, not ComfyUI; no first-party "run ComfyUI" action | bootstrap must be delivered by the worker itself (notebook/CLI), not via MCP `execute_code` bypassing policy | Worker-side bootstrap; MCP only under authorized host |
+| B13 | Deploying gateway on the HF Space requires Space container/entrypoint change | Needs explicit user approval; otherwise local-only dev | Ask user; fallback = local-only for M1 dev |
+| B14 | PRD's own defaults table stale (768²/25 steps vs committed 1024²/30) | Docs accuracy | PRD updated alongside this report |
+
+## 5. M0 gate checklist vs. PRD §10
+
+| M0 deliverable | State |
+|---|---|
+| Record installed Lumiverse version/commit and notebook versions | **Partial** — upstream main v1.2.5 @ 45f8db56 recorded; Space install unknown (B8) |
+| Inspect provider auth HTTP/WS, LoRA insertion, request ordering | **Done** (§2, ADR-001) |
+| Verify Colab eligibility and permitted operations separately | **Done (policy + API review)** (ADR-002); live OAuth eligibility test **not yet run** — needs user authorization (no allocation involved) |
+| Inventory notebook settings and classify apply modes | **Done** (§3) |
+| Verify remote config delivery before bootstrap and while running | **Not verified** — requires an authorized running worker; M2/M4 work; documented, not claimed |
+| Produce ADRs for gateway and provider feasibility | **Done** — `docs/adr-001-native-integration.md`, `docs/adr-002-provider-feasibility.md` |
+| No production changes | **Held** — no changes to the Space or upstream Lumiverse |
+
+**M0 verdict:** Source-level M0 is complete. Two gates remain open and are user/deployment dependent: (1) live authenticated connectivity from the actual Space, (2) the Colab OAuth eligibility test. Neither blocks M1 work against mocks and permitted warm hosts, per the PRD's own rule ("M0 must not block M1–M4 against mocks or permitted warm hosts").
+
+## 6. Immediate next actions (after user sign-off)
+
+1. User confirms: deployed Space version + persistent path; OAuth eligibility test go/no-go; unattended-host decision (or manual-only); gateway sidecar approval for the Space (or fork-route variant).
+2. M1 (warm connectivity): stand up mock ComfyUI + loopback gateway; authenticated `/system_stats` → `/object_info` → WS → `/prompt` → `/history` → `/view` path; native workflow import of a MOSS API template with manual field mappings; live Space test if approved.
+3. Keep PRD §2.2/§2.3/§6.1/§12 in sync with this report (done in `PRD` working copy).
