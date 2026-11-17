@@ -8,12 +8,12 @@
 
 | Item | Record | Notes |
 |---|---|---|
-| Lumiverse upstream (inspected) | `main` @ `45f8db563e1c314ed2aab227613b28eb5ea1084e` · package `lumiverse-backend` **1.2.5** (pushed 2026-11-17T01:27Z; commit dated 2026-11-01) | cloned `D:\Programming\Lumiverse` (depth 50) |
-| Latest Lumiverse release tag | `v1.2.5` (tags: v1.2.5, v1.2.0, v1.1.6, v1.1.5, v1.1.0) | `desktop-v0.3.2-nightly.*` also exist |
-| Installed/deployed Space version | **Unknown — pending user confirmation** | Host-side behavior may differ from upstream main |
-| Spindle types (host pin) | `lumiverse-spindle-types` **0.6.49** (Lumiverse `package.json`) | verified present: `spindle.imageGen.{generate, generateNative, generateStream, getPromptPresets?}`, `SPINDLE_FILE_*`, `connections.{list,get,getModels?}` |
-| Spindle types (latest npm) | **0.6.80** (2026-11-11) | docs say QuickGen additions landed in 0.6.38; host pin 0.6.49 includes them |
-| Lumiverse runtime | Bun ≥ 1.4.4; Hono; better-auth | irrelevant here except for gateway runtime |
+| Lumiverse upstream `main` (inspected) | `main` @ `45f8db563e1c314ed2aab227613b28eb5ea1084e` · package **1.2.5** | cloned `D:\Programming\Lumiverse` (depth 50) |
+| Lumiverse **staging** v1.3.0 (deployed build) | `staging` @ `5361e4fa` ("Merge PR #539 …exclude-html-island-images") · package **1.3.0** · pins `lumiverse-spindle-types` **0.6.80** | user reports Space on v1.3.0; staging worktree at `D:\Programming\Lumiverse-staging` |
+| ComfyUI provider delta v1.2.5 → v1.3.0 | **None** — `comfyui.ts`, `comfy-runner.ts`, `comfyui-discovery.ts`, `comfyui-import.ts`, `comfyui-workflow-patch.ts`, `comfyui-workflow-parser.ts`, `comfyui-workflow-storage.ts` are byte-identical between main and staging | M0 findings carry over; no Basic Auth added |
+| New in v1.3.0 (not present on main) | Inference scheduler (in-process admission queue, opt-in via `inferenceSchedulerConfig`; chat/embeddings/image generation leases; ComfyUI requests admitted as class `user`; loopback endpoints grouped as "local" resources); image-gen service wraps every provider call in `withInferenceLease`; `resolveImageProviderApiUrl` for default api_url; ~20 new hosted image providers (BFL, Replicate, Stability, …); `lumiverse-spindle-types` 0.6.49 → **0.6.80** | ComfyUI auth, WS ordering, LoRA patching, and connection-profile read-only semantics unchanged. Scheduler is orthogonal to gateway readiness but relevant for single-concurrent-inference sizing |
+| Installed/deployed Space version | **v1.3.0** (user-reported; best match = `staging` @ `5361e4fa`; exact deployed commit unconfirmed) | behavior verified against staging, not against the running Space |
+| Spindle types (host pin) | v1.2.5: 0.6.49 · **v1.3.0: 0.6.80** (= latest npm) | extension should target ^0.6.80 or feature-detect |
 | Reference notebook | `wildthingsstudio101.ipynb` (2 618 834 bytes; 15 code + 14 markdown cells) = **MOSS-Image Colab Studio** (the PRD's `MOSS_Image_Colab_Studio.ipynb`) | user-side fixes already applied: `await ngrok.forward()` async startup, toggleable `DOWNLOAD_WORKFLOW` |
 | Notebook ComfyUI revision | **Unpinned** (`git clone --depth 1 …/ComfyUI.git`, `git pull --ff-only`; "Use recent ComfyUI (0.42+)") | pin after local verification |
 | MOSS model files | `moss_image_sft_int8_convrot.safetensors` (default) / `moss_image_base_int8_convrot.safetensors`; encoder `qwen3.5_9b_w4a8_gptq.safetensors`; VAE `flux2-vae_small.safetensors`; repo `Comfy-Org/MOSS-Image` | matches PRD §2.2 |

@@ -67,7 +67,7 @@ The ComfyUI connection form has no username/password/bearer fields (`apiKeyRequi
 
 ## Open items (need user input / live tests)
 
-1. HF Space deployment details: base image, how Lumiverse is started there, persistent path (historically `/app/data`), and whether a sidecar gateway process is acceptable (vs. local-fork route).
-2. Installed Space Lumiverse version vs. upstream v1.2.5 @ 45f8db56 (source behavior may differ).
-3. Live authenticated WS handshake test through the gateway from the real Space (M1).
+1. HF Space deployment details: base image, how Lumiverse is started there, persistent path (historically `/app/data`, confirmed by upstream Dockerfile `ENV DATA_DIR=/app/data`), and whether a sidecar gateway process is acceptable (vs. local-fork route). **User chose: no Space change approved yet for v1.3.0.**
+2. Installed Space version: **v1.3.0** (user-reported). Verified as `staging` @ `5361e4fa`; exact deployed commit unconfirmed. Behavior re-checked against staging — ComfyUI provider identical to main; findings stand. WS handshake test still pending.
+3. Live authenticated WS handshake test through the gateway from the real Space (M1). Pending Space approval.
 4. Whether a narrow `ensureReady` entrypoint patch is still wanted if the gateway route variant is adopted (PRD Option 3) — expected answer: no, the gateway covers it.

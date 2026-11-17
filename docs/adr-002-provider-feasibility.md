@@ -1,6 +1,6 @@
 # ADR-002 — Provider feasibility: Google Colab (and the unattended-automation gate)
 
-**Status:** Accepted
+**Status:** Accepted — **owner decision 2026-11-17: manual-only indefinitely; no unattended automation on any provider, including Colab Enterprise/paid hosts.**
 **Date:** 2026-11-17
 **Evidence sources:** Google Colab API (`developers.google.com/colab/api/reference/rest`, `/rest/v1beta/runtimes`, `/rest/v1beta/runtimespecs/list`, `/reference/mcp`), Colab FAQ & usage limitations (`research.google.com/colaboratory/faq.html`, reviewed 2026-11-17), user-confirmed Colab Free usage, prior ngrok connectivity test (from Colab, HTTP 200 + one generated image).
 
@@ -53,14 +53,15 @@ If the user later approves an authorized host (own always-on GPU, dedicated clou
 
 ## Consequences
 
+- **Owner decision (2026-11-17): manual-only indefinitely.** No automatic provisioning will be enabled on any host. This supersedes the PRD's P1 "Automatic start" goal as an implementation plan; P1 is formally descoped by owner direction, not by technical infeasibility of the lifecycle layer alone.
 - M1–M4 proceed against the manual provider + mocks; manual Colab Free mode ships as the supported P0 experience with `needs_manual_start` semantics (R-03 manual path) and no automatic allocation.
-- M5 (cold-start automation on Colab) is **not deliverable** as scoped; it requires explicit user approval of a permitted paid host (or Enterprise) and a fresh eligibility proof. Do not mark M5 done with mocks or with the manually started notebook.
-- The `Capabilities` reported by the Colab adapter (whenever built) must default `externalInferenceAllowed: false` until proven and explicitly enabled; treating API existence as authorization is a hard failure of the PRD's critical constraint.
-- No-new-paid-service constraint is satisfied: nothing is purchased, provisioned or scheduled without the user's explicit opt-in and cost disclosure.
-- The honest-status rule: if no authorized automatic backend is available at release, the delivery is partial and lifecycle automation is marked unfulfilled (PRD release criteria; §10 "If no authorized automation backend is available, deliver partial release…").
+- M5 (cold-start automation on Colab) is **not deliverable** as scoped; it requires explicit user approval of a permitted host and a fresh eligibility proof, which the user has now ruled out for the indefinite future. Lifecycle automation is reported unfulfilled, not claimed complete, per PRD §10/§13.
+- The `Capabilities` reported by any Colab adapter must default `externalInferenceAllowed: false` / `autoProvision: false` with no code path to flip them on in this release.
+- No paid service is touched: nothing is purchased, provisioned or scheduled without explicit opt-in and cost disclosure.
+- The honest-status rule stands: if no authorized automatic backend is available at release, the delivery is partial and lifecycle automation is marked unfulfilled (PRD release criteria; §10 "If no authorized automation backend is available, deliver partial release…").
 
-## Open items (need user input / live tests)
+## Open items
 
-1. **OAuth eligibility test (no allocation):** requires the user to (a) create/enable the Colab API in a Google Cloud project, (b) complete the OAuth flow with the `colaboratory.readonly` scope, (c) store the refresh token server-side. Outcome recorded as: subscription tier, eligible GPU specs (`T4`/`L4`/`HIGHMEM`, etc.), and quota notes. No runtime is created.
-2. **User decision on the unattended host** (own GPU / approved cloud GPU / Colab Enterprise / stay manual-only). This gates P1/M5 and any paid spend.
+1. **OAuth eligibility test (read-only, approved by user 2026-11-17):** user to create/enable a Google Cloud project with the Colab API and run `tools/colab-eligibility-check.py` (provided here). Outcome is recorded in `docs/colab-eligibility-result.json` when produced: subscription tier, eligible GPU specs, quota notes. No runtime is created, started or stopped. **Note: eligibility results do not change the manual-only decision (item 4).**
+2. ~~Unattended host decision~~ — **decided 2026-11-17: manual-only indefinitely.**
 3. Confirmation whether the user's Colab Free usage (manual notebook + manual ngrok) has been terminated or limited by Google to date, to calibrate the manual-mode UX.
