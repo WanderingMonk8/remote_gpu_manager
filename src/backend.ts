@@ -135,6 +135,71 @@ spindle.onFrontendMessage(async (payload: any, userId?: string) => {
     spindle.sendToFrontend({ type: "vast_clear_key_result", ok: true }, userId);
     return;
   }
+
+  // Read-only offer search. The key never leaves this process; the frontend only
+  // receives the top N offers, already stripped to display fields.
+  if (payload?.type === "vast_search_offers") {
+    const apiKey = await spindle.enclave.get(ENCLAVE_KEY, userId);
+    if (!apiKey) {
+      spindle.sendToFrontend({ type: "vast_search_offers_result", ok: false, error: "no Vast.ai key saved yet" }, userId);
+      return;
+    }
+    try {
+      const offers = await searchVastOffers(apiKey);
+      spindle.sendToFrontend({ type: "vast_search_offers_result", ok: true, offers }, userId);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      spindle.log.info(`vast_search_offers failed: ${msg}`);
+      spindle.sendToFrontend({ type: "vast_search_offers_result", ok: false, error: msg }, userId);
+    }
+    return;
+  }
 });
+
+async function searchVastOffers(apiKey: string) {
+  const res = await spindle.cors(
+    "https://console.vast.ai/api/v0/bundles",
+    {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        limit: 20,
+        type: "ondemand",
+        verified: { eq: true },
+        rentable: { eq: true },
+        rented: { eq: false },
+        gpu_name: { in: ["RTX_3090", "RTX_4090", "RTX_5090", "RTX_A5000"] },
+        reliability: { gte: 0.99 },
+        cpu_ram: { gte: 32000 },
+        disk_space: { gte: 80 },
+        gpu_ram: { gte: 24000 },
+        dph_total: { lte: 0.2 },
+        // Sort client-side; ordering server-side can make this query very expensive on Vast.
+      }),
+    },
+  );
+  const body: any = (() => {
+    try { return JSON.parse(res.body); } catch { return {}; }
+  })();
+  if (!body?.offers?.length) return [];
+  return body.offers
+    .slice()
+    .sort((a: any, b: any) => (Number(a?.dph_total ?? Infinity) - Number(b?.dph_total ?? Infinity)))
+    .slice(0, 10)
+    .map((o: any) => ({
+      id: o.id,
+      hostId: o.host_id ?? null,
+      gpuName: o.gpu_name,
+      gpuCount: o.num_gpus,
+      vramMB: o.gpu_ram,
+      ramMB: o.cpu_ram,
+      diskGB: Math.round((o.disk_space ?? 0) * 10) / 10,
+      dphTotal: o.dph_total,
+      reliability: o.reliability,
+      geolocation: o.geolocation,
+      verification: o.verification,
+      duration: o.duration,
+    }));
+}
 
 spindle.log.info("remote-gpu-manager backend loaded (M1/vast: status probe + enclave API-key storage)");
