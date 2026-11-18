@@ -275,7 +275,7 @@ export function setup(ctx: SpindleFrontendContext) {
         if (payload.ok) {
           if (payload.offers?.__empty && payload.offers.debug) {
             const d = payload.offers.debug;
-            box.innerHTML = `<div class="rgm-status" data-tone="bad">Vast.ai returned no offers (HTTP ${escapeHtml(String(d.status))}, body ${escapeHtml(String(d.bodyLength))} bytes)</div><pre class="rgm-out">${escapeHtml(String(d.bodyPreview))}</pre>`;
+            box.innerHTML = `<div class="rgm-status" data-tone="bad">Vast.ai returned no offers (HTTP ${escapeHtml(String(d.status))}, body ${escapeHtml(String(d.bodyLength))} bytes)</div><pre class="rgm-out">${escapeHtml(JSON.stringify(d.requestBody, null, 2))}</pre>`;
           } else if (payload.offers?.length) {
             box.innerHTML = payload.offers.map((o: any) => `
               <div class="rgm-offer">
