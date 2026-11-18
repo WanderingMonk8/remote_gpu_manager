@@ -14,7 +14,7 @@
 | Control plane (`/gateway/v1/status`) | Done | Bearer-token guarded; reports gateway version/uptime + upstream reachability/latency |
 | Integration test suite (`tests/integration.test.ts`) | **9/9 pass** | covers allowlist deny (403), method-path mismatch (403), all catalog reads, full generation lifecycle, control-plane auth |
 | Baseline workflow templates | Done | `workflows/moss-api.json`, `workflows/anima-turbo-v1.1-api.json` — structure validated (`bun tools/validate-moss-workflow.mjs`); content derived from the reference notebook's `build_workflow()`; **NOT yet verified against a live ComfyUI** |
-| Extension shell (Spindle) | Done | `spindle.json` (permissions `cors_proxy`, `ui_panels`; `minimum_lumiverse_version: 1.3.0`), `src/backend.ts` (status RPC via host cors proxy → gateway `/gateway/v1/status` + upstream `/system_stats` read; no provisioning calls), `src/frontend.ts` (status panel; save gateway URL; probe), `bun run build` → `dist/{backend,frontend}.js` |
+| Extension shell (Spindle) | Done | `spindle.json` (permissions `cors_proxy`, `ui_panels`; `minimum_lumiverse_version: 1.3.0`), `src/backend.ts` (status RPC via host cors proxy → gateway `/gateway/v1/status` + upstream `/system_stats` read; no provisioning calls), `src/frontend.ts` (**proper drawer tab** via `ctx.ui.registerDrawerTab` — shortName "GPU"; status panel rendered into `drawer.root`), `bun run build` → `dist/{backend,frontend}.js` |
 
 ## What is NOT done (honest status)
 

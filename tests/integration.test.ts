@@ -56,7 +56,7 @@ beforeAll(async () => {
   mock = Bun.spawn(["bun", "tests/mock-comfyui/server.ts"], {
     env: { ...process.env, MOCK_PORT: String(MOCK_PORT), MOCK_USER: "lumiverse", MOCK_PASS: "test-secret", MOCK_EXECUTION_MS: "100" },
     stdout: "ignore",
-    stderr: "inherit",
+    stderr: "ignore",
   });
   gateway = Bun.spawn(["bun", "host-gateway/gateway.ts"], {
     env: {
@@ -67,7 +67,7 @@ beforeAll(async () => {
       GATEWAY_CONTROL_TOKEN: CONTROL_TOKEN,
     },
     stdout: "ignore",
-    stderr: "inherit",
+    stderr: "ignore",
   });
   gatewayBad = Bun.spawn(["bun", "host-gateway/gateway.ts"], {
     env: {
@@ -77,7 +77,7 @@ beforeAll(async () => {
       GATEWAY_BASIC_AUTH: "lumiverse:wrong-secret",
     },
     stdout: "ignore",
-    stderr: "inherit",
+    stderr: "ignore",
   });
   await waitFor(async () => (await fetch(`${base()}/system_stats`)).ok);
   await waitFor(async () => (await fetch(`${gwBad()}/system_stats`)).status === 401);
