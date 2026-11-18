@@ -145,8 +145,9 @@ spindle.onFrontendMessage(async (payload: any, userId?: string) => {
       return;
     }
     try {
-      const offers = await searchVastOffers(apiKey);
-      spindle.sendToFrontend({ type: "vast_search_offers_result", ok: true, offers }, userId);
+      const policy = normalizeOfferPolicy(payload.policy);
+      const offers = await searchVastOffers(apiKey, policy);
+      spindle.sendToFrontend({ type: "vast_search_offers_result", ok: true, offers, policy }, userId);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       spindle.log.info(`vast_search_offers failed: ${msg}`);
@@ -156,33 +157,120 @@ spindle.onFrontendMessage(async (payload: any, userId?: string) => {
   }
 });
 
-async function searchVastOffers(apiKey: string) {
+export interface OfferPolicyPayload {
+  maxDphTotal?: number;
+  minDphTotal?: number;
+  gpuNames?: string[];
+  minVramGB?: number;
+  maxVramGB?: number;
+  minRamGB?: number;
+  maxRamGB?: number;
+  minDiskGB?: number;
+  minReliability?: number;
+  minDurationSeconds?: number;
+  minInetDownMBs?: number;
+  minInetUpMBs?: number;
+  geolocations?: string[];
+  minCpuCores?: number;
+  minCpuMhz?: number;
+  verification?: "verified" | "unverified" | null;
+  datacenterOnly?: boolean;
+  staticIpOnly?: boolean;
+  excludeRented?: boolean;
+  maxStorageCostPerGBMonth?: number;
+  minDirectPorts?: number;
+  limit?: number;
+}
+
+export function normalizeOfferPolicy(raw: unknown): OfferPolicyPayload {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { limit: 20 };
+  const out: OfferPolicyPayload = { limit: 20 };
+  const num = (k: string) => (typeof (raw as any)[k] === "number" && Number.isFinite((raw as any)[k]) ? (raw as any)[k] as number : undefined);
+  const bool = (k: string) => ((raw as any)[k] === true ? true : undefined);
+  const arr = (k: string) => {
+    const v = (raw as any)[k];
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && x.trim().length > 0) : undefined;
+  };
+  if (num("maxDphTotal") !== undefined) out.maxDphTotal = num("maxDphTotal");
+  if (num("minDphTotal") !== undefined) out.minDphTotal = num("minDphTotal");
+  if (arr("gpuNames")?.length) out.gpuNames = arr("gpuNames");
+  if (num("minVramGB") !== undefined) out.minVramGB = num("minVramGB");
+  if (num("maxVramGB") !== undefined) out.maxVramGB = num("maxVramGB");
+  if (num("minRamGB") !== undefined) out.minRamGB = num("minRamGB");
+  if (num("maxRamGB") !== undefined) out.maxRamGB = num("maxRamGB");
+  if (num("minDiskGB") !== undefined) out.minDiskGB = num("minDiskGB");
+  if (num("minReliability") !== undefined) out.minReliability = num("minReliability");
+  if (num("minDurationSeconds") !== undefined) out.minDurationSeconds = num("minDurationSeconds");
+  if (num("minInetDownMBs") !== undefined) out.minInetDownMBs = num("minInetDownMBs");
+  if (num("minInetUpMBs") !== undefined) out.minInetUpMBs = num("minInetUpMBs");
+  if (arr("geolocations")?.length) out.geolocations = arr("geolocations");
+  if (num("minCpuCores") !== undefined) out.minCpuCores = num("minCpuCores");
+  if (num("minCpuMhz") !== undefined) out.minCpuMhz = num("minCpuMhz");
+  const ver = (raw as any).verification;
+  if (ver === "verified" || ver === "unverified" || ver === null) out.verification = ver;
+  if (bool("datacenterOnly")) out.datacenterOnly = true;
+  if (bool("staticIpOnly")) out.staticIpOnly = true;
+  if ((raw as any).excludeRented === true) out.excludeRented = true;
+  else if ((raw as any).excludeRented === false) out.excludeRented = false;
+  if (num("maxStorageCostPerGBMonth") !== undefined) out.maxStorageCostPerGBMonth = num("maxStorageCostPerGBMonth");
+  if (num("minDirectPorts") !== undefined) out.minDirectPorts = num("minDirectPorts");
+  if (num("limit") !== undefined) out.limit = num("limit");
+  return out;
+}
+
+const DEFAULT_POLICY: Required<Omit<OfferPolicyPayload, "verification" | "datacenterOnly" | "staticIpOnly" | "minDphTotal" | "maxRamGB" | "maxVramGB" | "minInetUpMBs" | "minInetDownMBs" | "minDurationSeconds" | "minCpuCores" | "minCpuMhz" | "maxStorageCostPerGBMonth" | "minDirectPorts">> = {
+  maxDphTotal: 0.5,
+  gpuNames: ["RTX_3090", "RTX_4090", "RTX_5090", "RTX_A5000"],
+  minVramGB: 24,
+  minRamGB: 32,
+  minDiskGB: 80,
+  minReliability: 0.99,
+  geolocations: [],
+  excludeRented: true,
+  limit: 20,
+};
+
+async function searchVastOffers(apiKey: string, policy: OfferPolicyPayload = DEFAULT_POLICY) {
+  const p = { ...DEFAULT_POLICY, ...policy };
+  const body: Record<string, any> = {
+    limit: p.limit,
+    type: "ondemand",
+    rented: { eq: p.excludeRented },
+    gpu_name: { in: p.gpuNames },
+    disk_space: { gte: p.minDiskGB },
+    gpu_ram: { gte: Math.round(p.minVramGB * 1024) },
+    cpu_ram: { gte: Math.round(p.minRamGB * 1024) },
+    dph_total: { gte: p.minDphTotal ?? 0, lte: p.maxDphTotal },
+  };
+  if (p.maxVramGB !== undefined) body.gpu_ram.lte = Math.round(p.maxVramGB * 1024);
+  if (p.maxRamGB !== undefined) body.cpu_ram.lte = Math.round(p.maxRamGB * 1024);
+  if (p.minReliability !== undefined) body.reliability = { gte: p.minReliability };
+  if (p.minDurationSeconds !== undefined) body.duration = { gte: p.minDurationSeconds };
+  if (p.minInetDownMBs !== undefined) body.inet_down = { gte: p.minInetDownMBs };
+  if (p.minInetUpMBs !== undefined) body.inet_up = { gte: p.minInetUpMBs };
+  if (p.geolocations && p.geolocations.length > 0) body.geolocation = { in: p.geolocations };
+  if (p.minCpuCores !== undefined) body.cpu_cores = { gte: p.minCpuCores };
+  if (p.minCpuMhz !== undefined) body.cpu_ghz = { gte: p.minCpuMhz };
+  if (p.verification === "verified") body.verification = { eq: "verified" };
+  else if (p.verification === "unverified") body.verification = { eq: "unverified" };
+  if (p.datacenterOnly) body.datacenter = { eq: true };
+  if (p.staticIpOnly) body.static_ip = { eq: true };
+  if (p.maxStorageCostPerGBMonth !== undefined) body.storage_cost = { lte: p.maxStorageCostPerGBMonth };
+  if (p.minDirectPorts !== undefined) body.direct_port_count = { gte: p.minDirectPorts };
+
   const res = await spindle.cors(
     "https://console.vast.ai/api/v0/bundles",
     {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        limit: 20,
-        type: "ondemand",
-        verified: { eq: true },
-        rentable: { eq: true },
-        rented: { eq: false },
-        gpu_name: { in: ["RTX_3090", "RTX_4090", "RTX_5090", "RTX_A5000"] },
-        reliability: { gte: 0.99 },
-        cpu_ram: { gte: 32000 },
-        disk_space: { gte: 80 },
-        gpu_ram: { gte: 24000 },
-        dph_total: { lte: 0.2 },
-        // Sort client-side; ordering server-side can make this query very expensive on Vast.
-      }),
+      body: JSON.stringify(body),
     },
   );
-  const body: any = (() => {
+  const parsed: any = (() => {
     try { return JSON.parse(res.body); } catch { return {}; }
   })();
-  if (!body?.offers?.length) return [];
-  return body.offers
+  if (!parsed?.offers?.length) return [];
+  return parsed.offers
     .slice()
     .sort((a: any, b: any) => (Number(a?.dph_total ?? Infinity) - Number(b?.dph_total ?? Infinity)))
     .slice(0, 10)

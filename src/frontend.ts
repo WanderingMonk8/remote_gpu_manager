@@ -25,6 +25,12 @@ export function setup(ctx: SpindleFrontendContext) {
     .rgm-offer b { font-size: 12px; }
     .rgm-offer span { font-size: 11px; color: var(--lumiverse-text-muted); }
     .rgm-offer .rgm-price { font-weight: 700; color: var(--lumiverse-text); }
+    .rgm-field { display: grid; gap: 4px; font-size: 11px; color: var(--lumiverse-text-muted); }
+    .rgm-field span { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
+    .rgm-field input, .rgm-field select { width: 100%; box-sizing: border-box; padding: 5px 7px; border: 1px solid var(--lumiverse-border); border-radius: 6px; background: var(--lumiverse-fill); color: var(--lumiverse-text); font: inherit; font-size: 12px; }
+    .rgm-filter-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 10px; padding: 8px 0 2px; }
+    .rgm-check { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--lumiverse-text); padding-top: 12px; }
+    .rgm-check input { width: auto; }
   `;
   const removeStyle = ctx.dom.addStyle(STYLES);
 
@@ -63,9 +69,40 @@ export function setup(ctx: SpindleFrontendContext) {
           <button class="rgm-test-key" type="button">Test credentials</button>
           <button class="rgm-save-key rgm-primary" type="button">Save securely</button>
           <button class="rgm-clear-key rgm-danger" type="button">Clear</button>
-          <button class="rgm-find-offers" type="button">Find offers</button>
         </div>
         <div class="rgm-status" data-tone="unknown" id="rgm-vast-status">Checking configuration…</div>
+        <hr class="rgm-section-divider" />
+        <h4>Find offers</h4>
+        <label class="rgm-field"><span>Price cap ($/hr)</span><input class="rgm-price-max" type="number" value="0.50" min="0" max="10" step="0.01" /></label>
+        <div class="rgm-actions">
+          <button class="rgm-find-offers rgm-primary" type="button">Find offers</button>
+          <button class="rgm-toggle-filters" type="button">Advanced filters ▾</button>
+        </div>
+        <div class="rgm-filters" hidden>
+          <div class="rgm-filter-grid">
+            <label class="rgm-field"><span>GPU names (CSV)</span><input class="f-gpu" type="text" value="RTX_3090,RTX_4090,RTX_5090,RTX_A5000" /></label>
+            <label class="rgm-field"><span>VRAM min (GB)</span><input class="f-vram-min" type="number" value="24" min="0" step="1" /></label>
+            <label class="rgm-field"><span>VRAM max (GB)</span><input class="f-vram-max" type="number" placeholder="any" min="0" step="1" /></label>
+            <label class="rgm-field"><span>RAM min (GB)</span><input class="f-ram-min" type="number" value="32" min="0" step="1" /></label>
+            <label class="rgm-field"><span>RAM max (GB)</span><input class="f-ram-max" type="number" placeholder="any" min="0" step="1" /></label>
+            <label class="rgm-field"><span>Disk min (GB)</span><input class="f-disk" type="number" value="80" min="0" step="1" /></label>
+            <label class="rgm-field"><span>Reliability min</span><input class="f-rel" type="number" value="0.99" min="0" max="1" step="0.001" /></label>
+            <label class="rgm-field"><span>Geolocation (CSV)</span><input class="f-geo" type="text" placeholder="US,DE,JP …" /></label>
+            <label class="rgm-field"><span>Max storage $/GB/mo</span><input class="f-storage" type="number" placeholder="any" min="0" step="0.01" /></label>
+            <label class="rgm-field"><span>Duration min (s)</span><input class="f-duration" type="number" placeholder="any" min="0" step="1" /></label>
+            <label class="rgm-field"><span>Net down min (MB/s)</span><input class="f-inetdown" type="number" placeholder="any" min="0" step="1" /></label>
+            <label class="rgm-field"><span>Net up min (MB/s)</span><input class="f-inetup" type="number" placeholder="any" min="0" step="1" /></label>
+            <label class="rgm-field"><span>CPU cores min</span><input class="f-cpucores" type="number" placeholder="any" min="0" step="1" /></label>
+            <label class="rgm-field"><span>CPU GHz min</span><input class="f-cpumhz" type="number" placeholder="any" min="0" step="0.1" /></label>
+            <label class="rgm-field"><span>Direct ports min</span><input class="f-ports" type="number" placeholder="any" min="0" step="1" /></label>
+            <label class="rgm-field"><span>Verification</span>
+              <select class="f-ver"><option value="any">any</option><option value="verified" selected>verified</option><option value="unverified">unverified</option></select>
+            </label>
+            <label class="rgm-check"><input class="f-dc" type="checkbox" /><span>Datacenter only</span></label>
+            <label class="rgm-check"><input class="f-static" type="checkbox" /><span>Static IP only</span></label>
+            <label class="rgm-check"><input class="f-rented" type="checkbox" checked /><span>Exclude rented</span></label>
+          </div>
+        </div>
         <div class="rgm-offers"></div>
       </section>
     </div>`;
@@ -103,8 +140,61 @@ export function setup(ctx: SpindleFrontendContext) {
   drawer.root.querySelector(".rgm-find-offers")?.addEventListener("click", () => {
     const box = drawer.root.querySelector(".rgm-offers");
     if (box) box.innerHTML = '<div class="rgm-status" data-tone="unknown">Searching offers on Vast.ai…</div>';
-    ctx.sendToBackend({ type: "vast_search_offers" });
+    ctx.sendToBackend({ type: "vast_search_offers", policy: readPolicy() });
   });
+  drawer.root.querySelector(".rgm-toggle-filters")?.addEventListener("click", () => {
+    const box = drawer.root.querySelector(".rgm-filters");
+    const btn = drawer.root.querySelector(".rgm-toggle-filters") as HTMLButtonElement | null;
+    if (!box || !btn) return;
+    const hidden = !box.hasAttribute("hidden");
+    if (hidden) box.setAttribute("hidden", ""); else box.removeAttribute("hidden");
+    btn.textContent = hidden ? "Advanced filters ▾" : "Advanced filters ▴";
+  });
+  function num(sel: string): number | undefined {
+    const v = (drawer.root.querySelector(sel) as HTMLInputElement | null)?.value?.trim();
+    if (!v) return undefined;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : undefined;
+  }
+  function str(sel: string): string | undefined {
+    const v = (drawer.root.querySelector(sel) as HTMLInputElement | null)?.value?.trim();
+    return v || undefined;
+  }
+  function csv(sel: string): string[] | undefined {
+    const v = str(sel);
+    if (!v) return undefined;
+    return v.split(",").map((s) => s.trim()).filter(Boolean);
+  }
+  function chk(sel: string): boolean | undefined {
+    const el = drawer.root.querySelector(sel) as HTMLInputElement | null;
+    return el?.checked ? true : undefined;
+  }
+  function readPolicy() {
+    const pol: any = {};
+    const maxP = num(".rgm-price-max");
+    if (maxP !== undefined) pol.maxDphTotal = maxP;
+    if (csv(".f-gpu")?.length) pol.gpuNames = csv(".f-gpu");
+    if (num(".f-vram-min") !== undefined) pol.minVramGB = num(".f-vram-min");
+    if (num(".f-vram-max") !== undefined) pol.maxVramGB = num(".f-vram-max");
+    if (num(".f-ram-min") !== undefined) pol.minRamGB = num(".f-ram-min");
+    if (num(".f-ram-max") !== undefined) pol.maxRamGB = num(".f-ram-max");
+    if (num(".f-disk") !== undefined) pol.minDiskGB = num(".f-disk");
+    if (num(".f-rel") !== undefined) pol.minReliability = num(".f-rel");
+    if (csv(".f-geo")?.length) pol.geolocations = csv(".f-geo");
+    if (num(".f-storage") !== undefined) pol.maxStorageCostPerGBMonth = num(".f-storage");
+    if (num(".f-duration") !== undefined) pol.minDurationSeconds = num(".f-duration");
+    if (num(".f-inetdown") !== undefined) pol.minInetDownMBs = num(".f-inetdown");
+    if (num(".f-inetup") !== undefined) pol.minInetUpMBs = num(".f-inetup");
+    if (num(".f-cpucores") !== undefined) pol.minCpuCores = num(".f-cpucores");
+    if (num(".f-cpumhz") !== undefined) pol.minCpuMhz = num(".f-cpumhz");
+    if (num(".f-ports") !== undefined) pol.minDirectPorts = num(".f-ports");
+    const ver = (drawer.root.querySelector(".f-ver") as HTMLSelectElement | null)?.value;
+    if (ver === "verified" || ver === "unverified" || ver === "any") pol.verification = ver === "any" ? null : ver;
+    if (chk(".f-dc")) pol.datacenterOnly = true;
+    if (chk(".f-static")) pol.staticIpOnly = true;
+    if (!chk(".f-rented")) pol.excludeRented = false;
+    return pol;
+  }
 
   const unsub = ctx.onBackendMessage((payload: any) => {
     if (!payload || typeof payload !== "object") return;
