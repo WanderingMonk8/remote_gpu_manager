@@ -1,8 +1,19 @@
-# Hugging Face Space deployment — walkthrough (draft, pending Dockerfile review)
+# Hugging Face Space deployment — walkthrough (proposed edits staged)
 
-> Deployment target: private HF Space, persistent `/app/data`, custom Dockerfile, Lumiverse pinned to the **staging** build (user-reported v1.3.0 @ `5361e4fa`).
+> Deployment target: private HF Space, persistent `/app/data`, custom Dockerfile (`oven/bun:1-slim`, Lumiverse `staging` clone), user-reported v1.3.0.
 > Gateway runs **inside the same container, loopback-only** — HF only publishes the app port (7860); the gateway port (8189) is not reachable from the internet.
+> **Concrete proposed Dockerfile:** `docs/space-proposal/Dockerfile.proposed` — based on the user's uploaded Dockerfile, bash-syntax-verified. It adds exactly the blocks in the diff below. Nothing else is modified (no changes to Lumiverse, SearXNG, CLIProxyAPI, SQLite backup logic, or the shutdown ordering).
 > No changes to upstream Lumiverse are made. Everything here is additive and reviewable.
+
+## Build blocks to add (see the full proposal file for exact placement)
+
+1. After the frontend `bun run build` stage, before the SearXNG block: `ARG RGM_BRANCH=main`, `ADD` the GitHub commit JSON (cache-bust), `git clone --depth 1` the extension repo into `/opt/remote-gpu-manager`, `test -f /opt/remote-gpu-manager/dist-host/gateway.mjs`, `ENV GATEWAY_PORT=8189`.
+2. In `start-lumiverse.sh`, after `start_cliproxy() { … }`: `start_rgm_gateway()` — starts `bun run /opt/remote-gpu-manager/dist-host/gateway.mjs &`, waits up to 30 s for **any** non-`000` HTTP response from the loopback gateway (even `502`, which means "worker down", not "gateway broken"), logs status, and degrades gracefully if unset (`GATEWAY_UPSTREAM` absent → gateway stays down, Lumiverse starts anyway).
+3. After `start_searxng || true` / `start_cliproxy || true`: `start_rgm_gateway || true`.
+4. In `shutdown_handler()`: kill `RGM_GATEWAY_PID` and `wait` for it (same pattern as SearXNG/CLIProxyAPI).
+5. In the trailing `grep -Fq` build guards: `grep -Fq 'start_rgm_gateway' …`.
+
+Diff size: ~110 added lines, zero removed lines, zero behavior change when `GATEWAY_UPSTREAM` is unset.
 
 ## What gets installed
 
