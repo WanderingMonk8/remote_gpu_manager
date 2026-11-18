@@ -98,7 +98,8 @@ Not done yet: single-flight `ensureReady` on native request path (needs native a
 
 - **Native Lumiverse image generation succeeded at 512×512 / 25 steps (MOSS, user-reported and verified) and the image persisted to the gallery.**
 - 768×768 and 1024×1024 attempts fail **on the HF Space side**, not inside Colab: ComfyUI returned `/history` → `/view -> 200` every time; the toast fires *after* bytes land in Lumiverse (in the base64 → `saveImageFromDataUrl` → sharp/persistence path). The `[runtime] critical memory pressure` line repeats every second and bottomed near ~2.3 GB available.
-- **Re-tested 2026-11-18 after a Space factory reboot: 768×768 / 25 steps MOSS generated and landed in the gallery.** The original failures were HF Space memory headroom, not a hard ceiling of the tunnel or the worker — per-request success is sensitive to available margin at generation time.
+- Re-tested 2026-11-18 after a Space factory reboot: **768×768 / 25 steps MOSS generated and landed in the gallery.**
+- Re-tested 2026-11-18 after disabling embeddings/memory-cortex: **1024×1024 / 25 steps generated successfully.** The embeddings pipeline (LanceDB maintenance + retrieval + vector cache in every startup path) was the dominant consumer; with it off, the Space holds a 1024×1024 inference chain. Trade-off: memory/cortex/embeddings semantics revert to keyword behavior; anything relying on vector memory (world-book retrieval, long-term recall) won't function until re-enabled.
 - The image in the gallery proves the full native path end-to-end on the current stack (Space → gateway → Cloudflare quick tunnel → Caddy Basic Auth → Colab ComfyUI → native gallery).
 - This localizes the earlier failures to resource/wall-clock pressure, not to auth or transport; it does not change any Vast.ai decision (the Vast worker targets a ≥24 GB GPU, where 768–1024+ is comfortable).
 "
