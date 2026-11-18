@@ -174,6 +174,9 @@ export interface OfferPolicyPayload {
   minCpuCores?: number;
   minCpuMhz?: number;
   verification?: "verified" | "unverified" | null;
+  exclusiveExternalOnly?: boolean;
+  rentableOnly?: boolean;
+  verifiedOnly?: boolean;
   datacenterOnly?: boolean;
   staticIpOnly?: boolean;
   excludeRented?: boolean;
@@ -212,6 +215,9 @@ export function normalizeOfferPolicy(raw: unknown): OfferPolicyPayload {
   if (bool("staticIpOnly")) out.staticIpOnly = true;
   if ((raw as any).excludeRented === true) out.excludeRented = true;
   else if ((raw as any).excludeRented === false) out.excludeRented = false;
+  if (bool("exclusiveExternalOnly")) out.exclusiveExternalOnly = true;
+  if (bool("verifiedOnly")) out.verifiedOnly = true;
+  if (bool("rentableOnly")) out.rentableOnly = true;
   if (num("maxStorageCostPerGBMonth") !== undefined) out.maxStorageCostPerGBMonth = num("maxStorageCostPerGBMonth");
   if (num("minDirectPorts") !== undefined) out.minDirectPorts = num("minDirectPorts");
   if (num("limit") !== undefined) out.limit = num("limit");
@@ -225,23 +231,24 @@ const DEFAULT_POLICY: OfferPolicyPayload = {
 };
 
 async function searchVastOffers(apiKey: string, policy: OfferPolicyPayload = DEFAULT_POLICY) {
-  const p = { ...DEFAULT_POLICY, ...(policy ?? { maxDphTotal: 0.5, gpuNames: ["RTX_3090", "RTX_4090", "RTX_5090", "RTX_A5000"], minVramGB: 24, minRamGB: 32 } as Partial<OfferPolicyPayload>) };
+  const p: OfferPolicyPayload = { ...DEFAULT_POLICY, ...(policy ?? {}) };
   const body: Record<string, any> = {
     limit: p.limit ?? 20,
     type: "on-demand",
-    rented: { eq: p.excludeRented ?? true },
-    external: { eq: false },
-    verified: { eq: true },
-    rentable: { eq: true },
-    gpu_name: { in: p.gpuNames ?? ["RTX_3090", "RTX_4090", "RTX_5090", "RTX_A5000"] },
-    gpu_ram: { gte: Math.round((p.minVramGB ?? 24) * 1024) },
-    cpu_ram: { gte: Math.round((p.minRamGB ?? 32) * 1024) },
-    dph_total: { gte: p.minDphTotal ?? 0, lte: p.maxDphTotal ?? 0.5 },
     allocated_storage: 5,
   };
+  if (p.excludeRented === true) body.rented = { eq: true };
+  else if (p.excludeRented === false) body.rented = { eq: false };
+  if (p.exclusiveExternalOnly === true) body.external = { eq: false };
+  if (p.verifiedOnly === true) body.verified = { eq: true };
+  if (p.rentableOnly === true) body.rentable = { eq: true };
+  if (p.gpuNames && p.gpuNames.length > 0) body.gpu_name = { in: p.gpuNames };
+  if (p.minVramGB !== undefined) body.gpu_ram = { gte: Math.round(p.minVramGB * 1024) };
+  if (p.maxVramGB !== undefined) body.gpu_ram = { ...(body.gpu_ram ?? {}), lte: Math.round(p.maxVramGB * 1024) };
+  if (p.minRamGB !== undefined) body.cpu_ram = { gte: Math.round(p.minRamGB * 1024) };
+  if (p.maxRamGB !== undefined) body.cpu_ram = { ...(body.cpu_ram ?? {}), lte: Math.round(p.maxRamGB * 1024) };
   if (p.minDiskGB !== undefined) body.disk_space = { gte: p.minDiskGB };
-  if (p.maxVramGB !== undefined) body.gpu_ram.lte = Math.round(p.maxVramGB * 1024);
-  if (p.maxRamGB !== undefined) body.cpu_ram.lte = Math.round(p.maxRamGB * 1024);
+  if (p.minDphTotal !== undefined || p.maxDphTotal !== undefined) body.dph_total = { gte: p.minDphTotal ?? 0, lte: p.maxDphTotal ?? 0.5 };
   if (p.minReliability !== undefined) body.reliability = { gte: p.minReliability };
   if (p.minDurationSeconds !== undefined) body.duration = { gte: p.minDurationSeconds };
   if (p.minInetDownMBs !== undefined) body.inet_down = { gte: p.minInetDownMBs };
@@ -251,7 +258,6 @@ async function searchVastOffers(apiKey: string, policy: OfferPolicyPayload = DEF
   if (p.minCpuMhz !== undefined) body.cpu_ghz = { gte: p.minCpuMhz };
   if (p.verification === "verified") body.verification = { eq: "verified" };
   else if (p.verification === "unverified") body.verification = { eq: "unverified" };
-  if (p.datacenterOnly) body.datacenter = { eq: true };
   if (p.staticIpOnly) body.static_ip = { eq: true };
   if (p.maxStorageCostPerGBMonth !== undefined) body.storage_cost = { lte: p.maxStorageCostPerGBMonth };
   if (p.minDirectPorts !== undefined) body.direct_port_count = { gte: p.minDirectPorts };

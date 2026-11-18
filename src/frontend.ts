@@ -106,12 +106,11 @@ export function setup(ctx: SpindleFrontendContext) {
             <label class="rgm-field"><span>CPU cores min</span><input class="f-cpucores" type="number" placeholder="any" min="0" step="1" /></label>
             <label class="rgm-field"><span>CPU GHz min</span><input class="f-cpumhz" type="number" placeholder="any" min="0" step="0.1" /></label>
             <label class="rgm-field"><span>Direct ports min</span><input class="f-ports" type="number" placeholder="any" min="0" step="1" /></label>
-            <label class="rgm-field"><span>Verification</span>
-              <select class="f-ver"><option value="any" selected>any</option><option value="verified">verified</option><option value="unverified">unverified</option></select>
-            </label>
-            <label class="rgm-check"><input class="f-dc" type="checkbox" /><span>Datacenter only</span></label>
+            <label class="rgm-check"><input class="f-dc" type="checkbox" /><span>Datacenter only (internal hosts)</span></label>
             <label class="rgm-check"><input class="f-static" type="checkbox" /><span>Static IP only</span></label>
             <label class="rgm-check"><input class="f-rented" type="checkbox" checked /><span>Exclude rented</span></label>
+            <label class="rgm-check"><input class="f-vff" type="checkbox" /><span>Rentable machines only</span></label>
+            <label class="rgm-check"><input class="f-ext" type="checkbox" /><span>Verified hosts only</span></label>
           </div>
         </div>
         <div class="rgm-offers"></div>
@@ -207,11 +206,11 @@ export function setup(ctx: SpindleFrontendContext) {
     if (num(".f-cpucores") !== undefined) pol.minCpuCores = num(".f-cpucores");
     if (num(".f-cpumhz") !== undefined) pol.minCpuMhz = num(".f-cpumhz");
     if (num(".f-ports") !== undefined) pol.minDirectPorts = num(".f-ports");
-    const ver = (drawer.root.querySelector(".f-ver") as HTMLSelectElement | null)?.value;
-    if (ver === "verified" || ver === "unverified" || ver === "any") pol.verification = ver === "any" ? null : ver;
-    if (chk(".f-dc")) pol.datacenterOnly = true;
+    if (chk(".f-dc")) pol.exclusiveExternalOnly = true;
     if (chk(".f-static")) pol.staticIpOnly = true;
-    if (!chk(".f-rented")) pol.excludeRented = false;
+    pol.excludeRented = !!chk(".f-rented");
+    if (chk(".f-vff")) pol.rentableOnly = true;
+    if (chk(".f-ext")) pol.verifiedOnly = true;
     return pol;
   }
 
