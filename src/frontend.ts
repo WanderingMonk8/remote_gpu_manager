@@ -38,6 +38,19 @@ export function setup(ctx: SpindleFrontendContext) {
     .rgm-key-banner[data-tone="ok"] { color: var(--lumiverse-success, #4caf50); background: color-mix(in srgb, var(--lumiverse-success, #4caf50) 10%, transparent); }
     .rgm-key-banner[data-tone="bad"] { color: var(--lumiverse-text-muted); }
     .rgm-key-banner[data-tone="unknown"] { color: var(--lumiverse-text-muted); }
+    .rgm-note { margin: 0; font-size: 11px; color: var(--lumiverse-text-muted); }
+    .rgm-offer-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+    .rgm-offer button, .rgm-inst button { font-size: 11px; padding: 4px 10px; border-radius: 6px; border: 1px solid var(--lumiverse-border); background: transparent; color: var(--lumiverse-text); cursor: pointer; }
+    .rgm-offer button.rgm-deploy-offer { border-color: var(--lumiverse-primary); color: var(--lumiverse-primary); font-weight: 700; }
+    .rgm-deploy { border: 1px solid var(--lumiverse-error); border-radius: 10px; padding: 10px 12px; display: grid; gap: 8px; background: color-mix(in srgb, var(--lumiverse-error) 6%, transparent); }
+    .rgm-deploy h5 { margin: 0; font-size: 12px; }
+    .rgm-deploy-terms { font-size: 12px; color: var(--lumiverse-text); padding: 6px 8px; border: 1px dashed var(--lumiverse-border); border-radius: 6px; }
+    .rgm-deploy-go[disabled] { opacity: 0.4; cursor: not-allowed; }
+    .rgm-inst-list { display: grid; gap: 8px; }
+    .rgm-inst { border: 1px solid var(--lumiverse-border); border-radius: 10px; padding: 9px 11px; display: grid; gap: 6px; }
+    .rgm-inst b { font-size: 12px; }
+    .rgm-inst span { font-size: 11px; color: var(--lumiverse-text-muted); }
+    .rgm-inst button.rgm-destroy-armed { border-color: var(--lumiverse-error); background: var(--lumiverse-error); color: #fff; font-weight: 700; }
   `;
   const removeStyle = ctx.dom.addStyle(STYLES);
 
@@ -114,6 +127,34 @@ export function setup(ctx: SpindleFrontendContext) {
           </div>
         </div>
         <div class="rgm-offers"></div>
+        <div class="rgm-deploy" hidden>
+          <h5>Deploy offer <span class="rgm-deploy-id"></span></h5>
+          <p class="rgm-note">Rents a real machine, billed by the hour until you stop or destroy it. No model is downloaded — this first deploy only proves the create → inspect → stop → destroy lifecycle and billing.</p>
+          <label class="rgm-field"><span>Image</span><input class="rgm-deploy-image" type="text" spellcheck="false" value="yanwk/comfyui-boot:cu130-slim" /></label>
+          <div class="rgm-filter-grid">
+            <label class="rgm-field"><span>Disk (GB)</span><input class="rgm-deploy-disk" type="number" value="100" min="8" max="200" step="1" /></label>
+            <label class="rgm-field"><span>Max price ($/hr)</span><input class="rgm-deploy-cap" type="number" value="0.25" min="0.01" max="2" step="0.01" /></label>
+          </div>
+          <div class="rgm-deploy-terms">Offer <b class="rgm-deploy-summary"></b> · your cap: <b class="rgm-deploy-cap-echo"></b></div>
+          <label class="rgm-check"><input class="rgm-deploy-approve" type="checkbox" /><span>I approve renting this machine at the displayed price. Billing starts immediately and continues until I stop or destroy it.</span></label>
+          <div class="rgm-actions">
+            <button class="rgm-deploy-go rgm-danger" type="button" disabled>Deploy — start billing</button>
+            <button class="rgm-deploy-cancel" type="button">Cancel</button>
+          </div>
+          <div class="rgm-status" data-tone="unknown" id="rgm-deploy-status">Review the terms, tick the approval, then Deploy.</div>
+        </div>
+      </section>
+
+      <hr class="rgm-section-divider" />
+
+      <section>
+        <h4>My instances</h4>
+        <p class="rgm-note">Machines you have rented from this Vast.ai account. <b>Stop</b> pauses GPU billing (disk storage continues to accrue). <b>Destroy</b> permanently deletes the instance and its disk — this cannot be undone.</p>
+        <div class="rgm-actions">
+          <button class="rgm-refresh-inst rgm-primary" type="button">Refresh</button>
+        </div>
+        <div class="rgm-status" data-tone="unknown" id="rgm-inst-status">Loading…</div>
+        <div class="rgm-inst-list"></div>
       </section>
     </div>`;
 
@@ -166,6 +207,131 @@ export function setup(ctx: SpindleFrontendContext) {
     if (hidden) box.setAttribute("hidden", ""); else box.removeAttribute("hidden");
     btn.textContent = hidden ? "Advanced filters ▾" : "Advanced filters ▴";
   });
+  // ---------- Deploy flow (paid action — explicit user approval required) ----------
+  let deployTarget: { id: number; dph: number; gpu: string; vramGB: string } | null = null;
+  const deployPanel = drawer.root.querySelector(".rgm-deploy") as HTMLDivElement | null;
+  const deployImage = drawer.root.querySelector(".rgm-deploy-image") as HTMLInputElement | null;
+  const deployDisk = drawer.root.querySelector(".rgm-deploy-disk") as HTMLInputElement | null;
+  const deployCap = drawer.root.querySelector(".rgm-deploy-cap") as HTMLInputElement | null;
+  const deployApprove = drawer.root.querySelector(".rgm-deploy-approve") as HTMLInputElement | null;
+  const deployGo = drawer.root.querySelector(".rgm-deploy-go") as HTMLButtonElement | null;
+  const deployId = drawer.root.querySelector(".rgm-deploy-id") as HTMLSpanElement | null;
+  const deploySummary = drawer.root.querySelector(".rgm-deploy-summary") as HTMLElement | null;
+  const deployCapEcho = drawer.root.querySelector(".rgm-deploy-cap-echo") as HTMLElement | null;
+  const deployStatus = drawer.root.querySelector("#rgm-deploy-status") as HTMLDivElement | null;
+
+  const imagePattern = /^[a-z0-9]+([._-][a-z0-9]+)*(\/[a-z0-9]+([._-][a-z0-9]+)*)*(:[A-Za-z0-9][A-Za-z0-9._-]{0,127})?$/;
+  const paintDeploy = () => {
+    if (!deployPanel) return;
+    const cap = Number(deployCap?.value ?? 0);
+    if (deploySummary && deployTarget) {
+      deploySummary.textContent = `#${deployTarget.id} · ${deployTarget.gpu} · $${deployTarget.dph.toFixed(3)}/hr · ${deployTarget.vramGB} GiB`;
+    }
+    if (deployCapEcho) deployCapEcho.textContent = Number.isFinite(cap) ? `$${cap.toFixed(2)}/hr` : "-";
+    const diskGB = Number(deployDisk?.value ?? 0);
+    const overCap = !!deployTarget && Number.isFinite(cap) && deployTarget.dph > cap;
+    const imageOk = imagePattern.test((deployImage?.value ?? "").trim());
+    const ready = !!deployTarget && deployApprove?.checked === true && imageOk
+      && Number.isFinite(diskGB) && diskGB >= 8 && diskGB <= 200 && !overCap;
+    if (deployGo) deployGo.disabled = !ready;
+    if (deployStatus) {
+      if (overCap) { deployStatus.dataset.tone = "bad"; deployStatus.textContent = `Offer price $${deployTarget?.dph.toFixed(3)}/hr exceeds your $${cap.toFixed(2)}/hr cap.`; }
+      else if (deployGo && !deployGo.disabled) { deployStatus.dataset.tone = "unknown"; deployStatus.textContent = "Approved to deploy. Clicking starts billing immediately."; }
+    }
+  };
+  const openDeploy = (target: { id: number; dph: number; gpu: string; vramGB: string }) => {
+    deployTarget = target;
+    if (deployApprove) deployApprove.checked = false;
+    if (deployId) deployId.textContent = `#${target.id}`;
+    if (deployStatus) { deployStatus.dataset.tone = "unknown"; deployStatus.textContent = "Review the terms, tick the approval, then Deploy."; }
+    paintDeploy();
+    if (deployPanel) { deployPanel.removeAttribute("hidden"); deployPanel.scrollIntoView({ behavior: "smooth", block: "nearest" }); }
+  };
+  const closeDeploy = () => { deployTarget = null; deployPanel?.setAttribute("hidden", ""); };
+
+  drawer.root.querySelector(".rgm-offers")?.addEventListener("click", (ev) => {
+    const btn = (ev.target as HTMLElement)?.closest?.(".rgm-deploy-offer") as HTMLButtonElement | null;
+    if (!btn) return;
+    openDeploy({
+      id: Number(btn.dataset.id ?? 0),
+      dph: Number(btn.dataset.dph ?? 0),
+      gpu: btn.dataset.gpu ?? "?",
+      vramGB: btn.dataset.vram ?? "?",
+    });
+  });
+  for (const el of [deployImage, deployDisk, deployCap]) el?.addEventListener("input", paintDeploy);
+  deployApprove?.addEventListener("change", paintDeploy);
+  drawer.root.querySelector(".rgm-deploy-cancel")?.addEventListener("click", closeDeploy);
+  deployGo?.addEventListener("click", () => {
+    if (!deployTarget || deployApprove?.checked !== true) return;
+    if (deployStatus) { deployStatus.dataset.tone = "unknown"; deployStatus.textContent = "Deploying — waiting for Vast.ai…"; }
+    if (deployGo) deployGo.disabled = true;
+    ctx.sendToBackend({
+      type: "vast_deploy_offer",
+      offerId: deployTarget.id,
+      image: (deployImage?.value ?? "").trim(),
+      diskGB: Number(deployDisk?.value ?? 100),
+      maxPricePerHour: Number(deployCap?.value ?? 0.25),
+      label: "lumiverse-remote-gpu",
+      approved: true,
+    });
+  });
+
+  // ---------- My instances (list / start / stop / destroy) ----------
+  let armedDestroyId: number | null = null;
+  const instStatus = drawer.root.querySelector("#rgm-inst-status") as HTMLDivElement | null;
+  const instList = drawer.root.querySelector(".rgm-inst-list") as HTMLDivElement | null;
+  const askInstances = () => ctx.sendToBackend({ type: "vast_list_instances" });
+  const fmtUptime = (mins: number | null) => {
+    if (mins == null) return "—";
+    const d = Math.floor(mins / 1440), h = Math.floor((mins % 1440) / 60), m = Math.floor(mins % 60);
+    return d > 0 ? `${d}d ${h}h` : h > 0 ? `${h}h ${m}m` : `${m}m`;
+  };
+  const renderInstances = (instances: any[]) => {
+    if (!instList) return;
+    if (!instances.length) { instList.innerHTML = '<div class="rgm-status" data-tone="unknown">No instances in this Vast.ai account.</div>'; return; }
+    instList.innerHTML = instances.map((i: any) => {
+      const st = String(i.status ?? "unknown");
+      const canStop = /^(running|loading|starting|created)$/i.test(st);
+      const canStart = /^(stopped|exited|unknown)$/i.test(st);
+      const armed = armedDestroyId === i.id;
+      return `<div class="rgm-inst" data-id="${i.id}">
+        <div class="rgm-offer-row">
+          <div><b>#${i.id}</b> · ${escapeHtml(String(i.gpuName ?? "GPU ?"))} × ${i.gpuCount ?? 1} · <span class="rgm-inst-state">${escapeHtml(st)}</span></div>
+          <div class="rgm-actions">
+            ${canStart ? '<button class="rgm-inst-start" type="button">Start</button>' : ""}
+            ${canStop ? '<button class="rgm-inst-stop" type="button">Stop</button>' : ""}
+            <button class="rgm-inst-destroy${armed ? " rgm-destroy-armed" : ""}" type="button">${armed ? "Confirm destroy" : "Destroy"}</button>
+          </div>
+        </div>
+        <span>${i.dphTotal != null ? `$${Number(i.dphTotal).toFixed(3)}/hr · ` : ""}up ${fmtUptime(i.uptimeMins ?? null)}${i.label ? ` · ${escapeHtml(String(i.label))}` : ""}${i.geolocation ? ` · ${escapeHtml(String(i.geolocation))}` : ""}</span>
+      </div>`;
+    }).join("");
+  };
+
+  drawer.root.querySelector(".rgm-refresh-inst")?.addEventListener("click", () => {
+    if (instStatus) { instStatus.dataset.tone = "unknown"; instStatus.textContent = "Refreshing…"; }
+    askInstances();
+  });
+  instList?.addEventListener("click", (ev) => {
+    const el = ev.target as HTMLElement;
+    const row = el.closest?.(".rgm-inst") as HTMLElement | null;
+    const id = Number(row?.dataset.id ?? 0);
+    if (!id) return;
+    if (el.closest?.(".rgm-inst-start")) { armedDestroyId = null; ctx.sendToBackend({ type: "vast_instance_action", id, action: "start" }); return; }
+    if (el.closest?.(".rgm-inst-stop")) { armedDestroyId = null; ctx.sendToBackend({ type: "vast_instance_action", id, action: "stop" }); return; }
+    if (el.closest?.(".rgm-inst-destroy")) {
+      if (armedDestroyId === id) {
+        armedDestroyId = null;
+        if (instStatus) { instStatus.dataset.tone = "unknown"; instStatus.textContent = `Destroying #${id}…`; }
+        ctx.sendToBackend({ type: "vast_destroy_instance", id, approved: true });
+      } else {
+        armedDestroyId = id;
+        askInstances(); // re-render with the armed state
+      }
+    }
+  });
+
   function num(sel: string): number | undefined {
     const v = (drawer.root.querySelector(sel) as HTMLInputElement | null)?.value?.trim();
     if (!v) return undefined;
@@ -269,6 +435,45 @@ export function setup(ctx: SpindleFrontendContext) {
         if (sStatus) { sStatus.dataset.tone = "bad"; sStatus.textContent = "Key cleared."; }
         paintBanner("bad", "○ No Vast.ai key saved");
         return;
+      case "vast_list_instances_result": {
+        if (payload.ok) {
+          renderInstances(payload.instances ?? []);
+          if (instStatus) { instStatus.dataset.tone = "ok"; instStatus.textContent = `${(payload.instances ?? []).length} instance(s) — last refresh just now.`; }
+        } else {
+          if (instStatus) { instStatus.dataset.tone = "bad"; instStatus.textContent = `Could not list instances: ${payload.error ?? "unknown error"}`; }
+        }
+        return;
+      }
+      case "vast_instance_action_result":
+        if (instStatus) {
+          instStatus.dataset.tone = payload.ok ? "ok" : "bad";
+          instStatus.textContent = payload.ok
+            ? `#${payload.id} — ${payload.action === "start" ? "start" : "stop"} request accepted by Vast.ai (state change is not instant; hit Refresh in a moment).`
+            : `#${payload.id} ${payload.action} failed: ${payload.error ?? "unknown error"}`;
+        }
+        askInstances();
+        return;
+      case "vast_destroy_instance_result":
+        if (instStatus) {
+          instStatus.dataset.tone = payload.ok ? "ok" : "bad";
+          instStatus.textContent = payload.ok
+            ? `#${payload.id} destroyed. Billing for compute stops; the disk is deleted too.`
+            : `#${payload.id} destroy failed: ${payload.error ?? "unknown error"}`;
+        }
+        askInstances();
+        return;
+      case "vast_deploy_offer_result": {
+        if (payload.ok) {
+          if (deployStatus) { deployStatus.dataset.tone = "ok"; deployStatus.textContent = `Deployed! Instance #${payload.instanceId ?? "?"} is booting. Refresh My instances to see it (status transitions take ~30–60s).`; }
+          closeDeploy();
+          askInstances();
+        } else {
+          if (deployStatus) { deployStatus.dataset.tone = "bad"; deployStatus.textContent = `Deploy failed: ${payload.error ?? "unknown error"}`; }
+          if (deployGo) deployGo.disabled = false;
+          paintDeploy();
+        }
+        return;
+      }
       case "vast_search_offers_result": {
         const box = drawer.root.querySelector(".rgm-offers");
         if (!box) return;
@@ -279,7 +484,10 @@ export function setup(ctx: SpindleFrontendContext) {
           } else if (payload.offers?.length) {
             box.innerHTML = payload.offers.map((o: any) => `
               <div class="rgm-offer">
-                <div><b>Offer #${o.id}</b> · ${String(o.gpuName ?? "")} × ${o.gpuCount ?? 1} · ${((o.vramMB ?? 0) / 1024).toFixed(1)} GiB</div>
+                <div class="rgm-offer-row">
+                  <div><b>Offer #${o.id}</b> · ${String(o.gpuName ?? "")} × ${o.gpuCount ?? 1} · ${((o.vramMB ?? 0) / 1024).toFixed(1)} GiB</div>
+                  <button class="rgm-deploy-offer" type="button" data-id="${o.id}" data-dph="${Number(o.dphTotal ?? 0)}" data-gpu="${escapeHtml(String(o.gpuName ?? ""))}" data-vram="${((o.vramMB ?? 0) / 1024).toFixed(1)}">Deploy</button>
+                </div>
                 <span>${((o.ramMB ?? 0) / 1024).toFixed(0)} GB RAM · ${o.diskGB} GB disk · ${String(o.geolocation ?? "-")} · reliability ${(o.reliability ?? 0).toFixed(3)}</span>
                 <div class="rgm-price">$${Number(o.dphTotal ?? 0).toFixed(3)}/hr</div>
               </div>`).join("");
@@ -295,6 +503,7 @@ export function setup(ctx: SpindleFrontendContext) {
   });
 
   askVastStatus();
+  askInstances();
 
   return () => {
     unsub();
