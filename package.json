@@ -9,6 +9,7 @@
   },
   "scripts": {
     "build": "bun build src/backend.ts src/frontend.ts --outdir dist --target bun",
+    "build:gateway": "bun build host-gateway/gateway.ts --target bun --outfile dist-host/gateway.mjs",
     "test": "bun test",
     "mock:comfy": "bun tests/mock-comfyui/server.ts",
     "gateway": "bun host-gateway/gateway.ts",
