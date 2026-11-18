@@ -1,6 +1,6 @@
 # M1 — Warm connectivity: status and verification record
 
-**Milestone:** M1 · **Date:** 2026-11-17 · **Branch:** `m1-warm-connectivity`
+**Milestone:** M1 · **Date:** 2026-11-17 → live health verified 2026-11-18 · **Branch:** merged to `main`
 **Exit condition (PRD §10):** warm start of a permitted already-running ComfyUI or mock; stable gateway/native connection; authenticated health/catalog/WS; native workflow import; image generated from actual Lumiverse server and saved natively; current connections preserved.
 
 ## What is complete and verified locally
@@ -23,6 +23,19 @@
 - **Native LoRA stack test** (off/0.6/1.0/two-LoRA, fixed seed) — M3 scope; requires live ComfyUI.
 - **Live ngrok Basic Auth round-trip from outside the notebook** — the prior user test was Colab→Colab; a Space→ngrok test has never been run.
 - **`/system_stats` retry/backoff on startup (ngrok 404/502 warmup), epoch registration, single-flight provisioning** — M4 scope; the gateway currently fails fast with `upstream_unreachable/timeout` by design (no hidden reprovisioning).
+
+## Live verification (2026-11-18, Space-side, user-executed)
+
+| Check | Result |
+|---|---|
+| Space rebuilt with the patched Dockerfile | Gateway clone + loopback start confirmed in Space logs (`[rgm-gateway]`) |
+| `GATEWAY_UPSTREAM` required scheme | Initially `ERR_INVALID_URL` (host-only secret) — fixed by owner-supplied `https://` prefix; gateway hardened (87c71ef) to default missing scheme to `https://` |
+| Extension status probe via Space | First run: 502 — gateway reported wrong/unreachable status; panel showed `ECONNREFUSED` when gateway was down, then 401/502 (token-guarded control endpoint removed from the probe path) |
+| **Space → gateway → ngrok → Colab: `/system_stats`** | **HTTP 200 — real stats returned (system RAM total ≈ 13.6 GB, free ≈ 2.3 GB; Linux) — chain confirmed live** |
+| Extension drawer tab | Registered via `ctx.ui.registerDrawerTab` (9af8f77); panel visible in Lumiverse |
+| Status hints | 401/404/502/504 hints + `[rgm-gateway] upstream fetch failed: <cause>` log for diagnosis |
+
+Verified by the user via the panel screenshot (2026-11-18, ~02:50 local). Full native generation (workflow import → native panel → gallery) is the remaining M1 exit step — see next actions.
 
 ## Local verification commands
 
