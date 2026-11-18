@@ -81,35 +81,46 @@ class HttpError extends Error {
 }
 var errJson = (status, code) => Response.json({ error: code }, { status, headers: { "Content-Type": "application/json" } });
 async function fetchUpstream(path, init, rule) {
-  const controller = new AbortController;
-  const timer = setTimeout(() => controller.abort(), rule.timeoutMs);
-  try {
-    const res = await fetch(GATEWAY_UPSTREAM + path, {
-      ...init,
-      signal: controller.signal,
-      redirect: "manual"
-    });
-    const buf = new Uint8Array(await res.arrayBuffer());
-    if (buf.byteLength > rule.maxBytes) {
-      throw new HttpError(502, "upstream_response_too_large");
+  const maxAttempts = init.method === "GET" ? 3 : 1;
+  for (let attempt = 1;attempt <= maxAttempts; attempt++) {
+    const controller = new AbortController;
+    const timer = setTimeout(() => controller.abort(), rule.timeoutMs);
+    try {
+      const res = await fetch(GATEWAY_UPSTREAM + path, {
+        ...init,
+        signal: controller.signal,
+        redirect: "manual"
+      });
+      const buf = new Uint8Array(await res.arrayBuffer());
+      if (buf.byteLength > rule.maxBytes) {
+        throw new HttpError(502, "upstream_response_too_large");
+      }
+      return {
+        status: res.status,
+        contentType: res.headers.get("content-type") ?? "application/octet-stream",
+        body: buf
+      };
+    } catch (err) {
+      if (err instanceof HttpError)
+        throw err;
+      const e = err;
+      const detail = e?.cause?.code ?? e?.cause?.message ?? e?.cause ?? e?.message ?? e?.name ?? "error";
+      const detailStr = String(detail).slice(0, 200);
+      const retriable = e?.name !== "AbortError" && !/too large|invalid/i.test(detailStr);
+      if (attempt < maxAttempts && retriable) {
+        console.warn(`[rgm-gateway] upstream fetch failed (${detailStr}); retrying idempotent GET (${attempt}/${maxAttempts})`);
+        await new Promise((r) => setTimeout(r, 250 * attempt));
+        continue;
+      }
+      console.warn(`[rgm-gateway] upstream fetch failed: ${e?.name ?? "Error"} (${detailStr})`);
+      if (e?.name === "AbortError")
+        throw new HttpError(504, "upstream_timeout");
+      throw new HttpError(502, "upstream_unreachable");
+    } finally {
+      clearTimeout(timer);
     }
-    return {
-      status: res.status,
-      contentType: res.headers.get("content-type") ?? "application/octet-stream",
-      body: buf
-    };
-  } catch (err) {
-    if (err instanceof HttpError)
-      throw err;
-    const e = err;
-    const detail = e?.cause?.code ?? e?.cause?.message ?? e?.cause ?? e?.message ?? e?.name ?? "error";
-    console.warn(`[rgm-gateway] upstream fetch failed: ${e?.name ?? "Error"} (${String(detail).slice(0, 300)})`);
-    if (e?.name === "AbortError")
-      throw new HttpError(504, "upstream_timeout");
-    throw new HttpError(502, "upstream_unreachable");
-  } finally {
-    clearTimeout(timer);
   }
+  throw new HttpError(502, "upstream_unreachable");
 }
 async function handleControl(req, path) {
   if (!CONTROL_TOKEN)
