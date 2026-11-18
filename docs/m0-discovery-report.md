@@ -123,16 +123,16 @@ All `@param` widgets and hardcoded bootstrap choices are covered; native prompt 
 |---|---|
 | Record installed Lumiverse version/commit and notebook versions | **Partial** — upstream main v1.2.5 @ 45f8db56 recorded; Space install unknown (B8) |
 | Inspect provider auth HTTP/WS, LoRA insertion, request ordering | **Done** (§2, ADR-001) |
-| Verify Colab eligibility and permitted operations separately | **Done (policy + API review)** (ADR-002); live OAuth eligibility test **not yet run** — needs user authorization (no allocation involved) |
+| Verify Colab eligibility and permitted operations separately | **Done** — policy + API review (ADR-002) and the read-only live probe ran 2026-11-17 (`tools/colab-eligibility-check.py`): tier `SUBSCRIPTION_TIER_FREE`; eligible: CPU/STANDARD, GPU **T4**/STANDARD, TPU V5E1/STANDARD; rest ineligible. No runtime created. |
 | Inventory notebook settings and classify apply modes | **Done** (§3) |
 | Verify remote config delivery before bootstrap and while running | **Not verified** — requires an authorized running worker; M2/M4 work; documented, not claimed |
 | Produce ADRs for gateway and provider feasibility | **Done** — `docs/adr-001-native-integration.md`, `docs/adr-002-provider-feasibility.md` |
 | No production changes | **Held** — no changes to the Space or upstream Lumiverse |
 
-**M0 verdict:** Source-level M0 is complete. Two gates remain open and are user/deployment dependent: (1) live authenticated connectivity from the actual Space, (2) the Colab OAuth eligibility test. Neither blocks M1 work against mocks and permitted warm hosts, per the PRD's own rule ("M0 must not block M1–M4 against mocks or permitted warm hosts").
+**M0 verdict:** Source-level M0 is complete, and the Colab eligibility probe has been run (tier FREE; T4 STANDARD eligible). Remaining deployment-dependent gates: (1) live authenticated connectivity from the actual Space to a warm worker, (2) Space gateway-deployment approval. Neither blocked M1 work against mocks and permitted warm hosts, per the PRD's own rule ("M0 must not block M1–M4 against mocks or permitted warm hosts").
 
 ## 6. Immediate next actions (after user sign-off)
 
-1. User confirms: deployed Space version + persistent path; OAuth eligibility test go/no-go; unattended-host decision (or manual-only); gateway sidecar approval for the Space (or fork-route variant).
+1. User confirms: deployed Space version + persistent path; **Colab eligibility probe complete (2026-11-17)** — no further action; manual-only decision recorded; gateway sidecar approval for the Space (or fork-route variant) still pending.
 2. M1 (warm connectivity): stand up mock ComfyUI + loopback gateway; authenticated `/system_stats` → `/object_info` → WS → `/prompt` → `/history` → `/view` path; native workflow import of a MOSS API template with manual field mappings; live Space test if approved.
 3. Keep PRD §2.2/§2.3/§6.1/§12 in sync with this report (done in `PRD` working copy).
