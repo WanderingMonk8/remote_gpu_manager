@@ -96,8 +96,8 @@ export function setup(ctx: SpindleFrontendContext) {
             <label class="rgm-field"><span>VRAM max (GB)</span><input class="f-vram-max" type="number" placeholder="any" min="0" step="1" /></label>
             <label class="rgm-field"><span>RAM min (GB)</span><input class="f-ram-min" type="number" value="32" min="0" step="1" /></label>
             <label class="rgm-field"><span>RAM max (GB)</span><input class="f-ram-max" type="number" placeholder="any" min="0" step="1" /></label>
-            <label class="rgm-field"><span>Disk min (GB)</span><input class="f-disk" type="number" value="80" min="0" step="1" /></label>
-            <label class="rgm-field"><span>Reliability min</span><input class="f-rel" type="number" value="0.99" min="0" max="1" step="0.001" /></label>
+            <label class="rgm-field"><span>Disk min (GB)</span><input class="f-disk" type="number" placeholder="any" min="0" step="1" /></label>
+            <label class="rgm-field"><span>Reliability min</span><input class="f-rel" type="number" placeholder="any" min="0" max="1" step="0.001" /></label>
             <label class="rgm-field"><span>Geolocation (CSV)</span><input class="f-geo" type="text" placeholder="US,DE,JP …" /></label>
             <label class="rgm-field"><span>Max storage $/GB/mo</span><input class="f-storage" type="number" placeholder="any" min="0" step="0.01" /></label>
             <label class="rgm-field"><span>Duration min (s)</span><input class="f-duration" type="number" placeholder="any" min="0" step="1" /></label>
@@ -107,7 +107,7 @@ export function setup(ctx: SpindleFrontendContext) {
             <label class="rgm-field"><span>CPU GHz min</span><input class="f-cpumhz" type="number" placeholder="any" min="0" step="0.1" /></label>
             <label class="rgm-field"><span>Direct ports min</span><input class="f-ports" type="number" placeholder="any" min="0" step="1" /></label>
             <label class="rgm-field"><span>Verification</span>
-              <select class="f-ver"><option value="any">any</option><option value="verified" selected>verified</option><option value="unverified">unverified</option></select>
+              <select class="f-ver"><option value="any" selected>any</option><option value="verified">verified</option><option value="unverified">unverified</option></select>
             </label>
             <label class="rgm-check"><input class="f-dc" type="checkbox" /><span>Datacenter only</span></label>
             <label class="rgm-check"><input class="f-static" type="checkbox" /><span>Static IP only</span></label>

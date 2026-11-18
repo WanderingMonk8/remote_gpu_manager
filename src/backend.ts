@@ -218,34 +218,28 @@ export function normalizeOfferPolicy(raw: unknown): OfferPolicyPayload {
   return out;
 }
 
-const DEFAULT_POLICY: Required<Omit<OfferPolicyPayload, "verification" | "datacenterOnly" | "staticIpOnly" | "minDphTotal" | "maxRamGB" | "maxVramGB" | "minInetUpMBs" | "minInetDownMBs" | "minDurationSeconds" | "minCpuCores" | "minCpuMhz" | "maxStorageCostPerGBMonth" | "minDirectPorts">> = {
-  maxDphTotal: 0.5,
-  gpuNames: ["RTX_3090", "RTX_4090", "RTX_5090", "RTX_A5000"],
-  minVramGB: 24,
-  minRamGB: 32,
-  minDiskGB: 80,
-  minReliability: 0.99,
+const DEFAULT_POLICY: Required<Omit<OfferPolicyPayload, "maxVramGB" | "maxRamGB" | "minInetDownMBs" | "minInetUpMBs" | "minDurationSeconds" | "minCpuCores" | "minCpuMhz" | "maxStorageCostPerGBMonth" | "minDirectPorts" | "minReliability" | "minVramGB" | "minRamGB" | "minDiskGB" | "gpuNames" | "maxDphTotal">>> = {
   geolocations: [],
   excludeRented: true,
   limit: 20,
 };
 
 async function searchVastOffers(apiKey: string, policy: OfferPolicyPayload = DEFAULT_POLICY) {
-  const p = { ...DEFAULT_POLICY, ...policy };
+  const p = { ...DEFAULT_POLICY, ...(policy ?? { maxDphTotal: 0.5, gpuNames: ["RTX_3090", "RTX_4090", "RTX_5090", "RTX_A5000"], minVramGB: 24, minRamGB: 32 } as Partial<OfferPolicyPayload>) };
   const body: Record<string, any> = {
-    limit: p.limit,
+    limit: p.limit ?? 20,
     type: "on-demand",
-    rented: { eq: p.excludeRented },
+    rented: { eq: p.excludeRented ?? true },
     external: { eq: false },
     verified: { eq: true },
     rentable: { eq: true },
-    gpu_name: { in: p.gpuNames },
-    disk_space: { gte: p.minDiskGB },
-    gpu_ram: { gte: Math.round(p.minVramGB * 1024) },
-    cpu_ram: { gte: Math.round(p.minRamGB * 1024) },
-    dph_total: { gte: p.minDphTotal ?? 0, lte: p.maxDphTotal },
-    allocated_storage: Math.max(8, p.minDiskGB ?? 8),
+    gpu_name: { in: p.gpuNames ?? ["RTX_3090", "RTX_4090", "RTX_5090", "RTX_A5000"] },
+    gpu_ram: { gte: Math.round((p.minVramGB ?? 24) * 1024) },
+    cpu_ram: { gte: Math.round((p.minRamGB ?? 32) * 1024) },
+    dph_total: { gte: p.minDphTotal ?? 0, lte: p.maxDphTotal ?? 0.5 },
+    allocated_storage: 5,
   };
+  if (p.minDiskGB !== undefined) body.disk_space = { gte: p.minDiskGB };
   if (p.maxVramGB !== undefined) body.gpu_ram.lte = Math.round(p.maxVramGB * 1024);
   if (p.maxRamGB !== undefined) body.cpu_ram.lte = Math.round(p.maxRamGB * 1024);
   if (p.minReliability !== undefined) body.reliability = { gte: p.minReliability };
