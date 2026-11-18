@@ -3,6 +3,11 @@
 Space.Dockerfile
 **/Space.Dockerfile
 
+# Vast.ai / any local env secrets — never commit
+.env
+.env.*
+!.env.example
+
 sdk-inspect/
 notebook_dump.txt
 node_modules/
