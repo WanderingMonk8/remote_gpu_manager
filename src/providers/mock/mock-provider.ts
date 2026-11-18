@@ -40,13 +40,13 @@ export class MockVastProvider implements GpuProvider {
 
   private readonly offersFixture: VastOffer[] = [
     {
-      id: 1001, machine_id: 11, gpu_name: "RTX_3090", gpu_ram: 24576, cpu_ram: 65536,
+      id: 1001, machine_id: 11, gpu_name: "RTX 3090", gpu_ram: 24576, cpu_ram: 65536,
       disk_space: 512, reliability: 0.999, dph_total: 0.18, inet_down: 4000, inet_up: 1500,
       geolocation: "US", public_ipaddr: "203.0.113.10", rentable: true, rented: false,
       verified: "verified", duration: 86_400 * 30,
     },
     {
-      id: 1002, machine_id: 12, gpu_name: "RTX_4090", gpu_ram: 24576, cpu_ram: 131072,
+      id: 1002, machine_id: 12, gpu_name: "RTX 4090", gpu_ram: 24576, cpu_ram: 131072,
       disk_space: 1024, reliability: 0.998, dph_total: 0.28, inet_down: 6000, inet_up: 3000,
       geolocation: "DE", public_ipaddr: "198.51.100.7", rentable: true, rented: false,
       verified: "verified", duration: 86_400 * 30,
@@ -85,7 +85,7 @@ export class MockVastProvider implements GpuProvider {
       end_date: null,
       uptime_mins: 0,
       dph_total: 0.18,
-      gpu_name: "RTX_3090",
+      gpu_name: "RTX 3090",
       gpu_ram: 24576,
       cpu_ram: 65536,
       ssh_host: `ssh${id}.vast.mock`,

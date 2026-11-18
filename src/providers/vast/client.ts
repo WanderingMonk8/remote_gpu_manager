@@ -121,19 +121,22 @@ export class VastClient {
 
   async searchOffers(policy: OfferSearchPolicy = {}): Promise<VastOffer[]> {
     const p = { ...DEFAULT_OFFER_POLICY, ...policy };
+    // vast-cli converts '_' -> ' ' in gpu_name values before querying; Vast stores names with spaces.
+    const gpuNames = (p.gpuNames ?? [])
+      .map((n) => n.trim().replace(/^["']+|["']+$/g, "").replace(/_+/g, " ").replace(/\s+/g, " "))
+      .filter((n) => n.length > 0);
     const body: Record<string, unknown> = {
       limit: p.limit,
-      type: "ondemand",
-      verified: { eq: true },
-      rentable: { eq: true },
+      type: "on-demand",
       rented: { eq: false },
-      gpu_name: { in: p.gpuNames },
-      reliability: { gte: p.minReliability },
-      cpu_ram: { gte: p.minRamMB },
-      disk_space: { gte: p.minDiskGB },
-      gpu_ram: { gte: p.minVramMB },
-      dph_total: { lte: p.maxDphHourly },
+      allocated_storage: 5,
     };
+    if (gpuNames.length) body["gpu_name"] = { in: gpuNames };
+    if (p.minReliability > 0) body["reliability"] = { gte: p.minReliability };
+    if (p.minRamMB > 0) body["cpu_ram"] = { gte: p.minRamMB };
+    if (p.minDiskGB > 0) body["disk_space"] = { gte: p.minDiskGB };
+    if (p.minVramMB > 0) body["gpu_ram"] = { gte: p.minVramMB };
+    if (p.maxDphHourly > 0) body["dph_total"] = { lte: p.maxDphHourly };
     if (p.geolocation?.length) body["geolocation"] = { in: p.geolocation };
     if (p.minDurationSeconds > 0) body["duration"] = { gte: p.minDurationSeconds };
     const res = await this.req<{ offers: VastOffer[] }>("POST", "/api/v0/bundles", body);

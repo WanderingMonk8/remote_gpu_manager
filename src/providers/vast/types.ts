@@ -56,25 +56,25 @@ export interface VastInstanceInfo {
 }
 
 export interface OfferSearchPolicy {
-  gpuNames?: string[]; // default RTX_3090, RTX_4090, RTX_5090, RTX_A5000
+  gpuNames?: string[]; // default "RTX 3090", "RTX 4090", "RTX 5090" — space-separated, as Vast stores them
   minVramMB?: number; // default 24000
   minRamMB?: number; // default 32000
   minDiskGB?: number; // default 80
-  minReliability?: number; // default 0.99
-  maxDphHourly?: number; // default 0.20
-  minDurationSeconds?: number; // minimum offer duration
+  minReliability?: number; // default 0 = unfiltered (Vast applies no default reliability floor)
+  maxDphHourly?: number; // default 0.50 (PRD default visible price filter)
+  minDurationSeconds?: number; // default 0 = unfiltered
   geolocation?: string[];
   limit?: number; // default 64
 }
 
 export const DEFAULT_OFFER_POLICY: Required<OfferSearchPolicy> = {
-  gpuNames: ["RTX_3090", "RTX_4090", "RTX_5090", "RTX_A5000"],
+  gpuNames: ["RTX 3090", "RTX 4090", "RTX 5090"],
   minVramMB: 24_000,
   minRamMB: 32_000,
   minDiskGB: 80,
-  minReliability: 0.99,
-  maxDphHourly: 0.2,
-  minDurationSeconds: 900,
+  minReliability: 0, // unfiltered — vast-cli applies no reliability floor either
+  maxDphHourly: 0.5,
+  minDurationSeconds: 0, // unfiltered
   geolocation: [],
   limit: 64,
 };

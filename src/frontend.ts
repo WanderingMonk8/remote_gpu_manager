@@ -91,7 +91,7 @@ export function setup(ctx: SpindleFrontendContext) {
         </div>
         <div class="rgm-filters" hidden>
           <div class="rgm-filter-grid">
-            <label class="rgm-field"><span>GPU names (CSV)</span><input class="f-gpu" type="text" value="RTX_3090,RTX_4090,RTX_5090,RTX_A5000" /></label>
+            <label class="rgm-field"><span>GPU names (CSV — e.g. RTX 3090, RTX 4090)</span><input class="f-gpu" type="text" value="RTX 3090, RTX 4090" placeholder="RTX 3090, RTX 4090" /></label>
             <label class="rgm-field"><span>VRAM min (GB)</span><input class="f-vram-min" type="number" value="24" min="0" step="1" /></label>
             <label class="rgm-field"><span>VRAM max (GB)</span><input class="f-vram-max" type="number" placeholder="any" min="0" step="1" /></label>
             <label class="rgm-field"><span>RAM min (GB)</span><input class="f-ram-min" type="number" value="32" min="0" step="1" /></label>

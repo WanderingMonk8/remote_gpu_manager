@@ -9,7 +9,7 @@ import { VastClient, VastApiError, VastClientOptions } from "../../src/providers
 const OFFER_FIXTURE = {
   id: 424242,
   machine_id: 9001,
-  gpu_name: "RTX_3090",
+  gpu_name: "RTX 3090",
   gpu_ram: 24576,
   cpu_ram: 65536,
   disk_space: 512,
@@ -41,7 +41,7 @@ const INSTANCE_FIXTURE = {
   end_date: null,
   uptime_mins: 12,
   dph_total: 0.17,
-  gpu_name: "RTX_3090",
+  gpu_name: "RTX 3090",
   gpu_ram: 24576,
   cpu_ram: 65536,
   ssh_host: "ssh1234.vast.ai",
@@ -73,7 +73,7 @@ function makeFetch(responses: Array<{ status: number; body: unknown; check?: (ur
 const KEY = "test-vast-key-000000";
 
 describe("VastClient.searchOffers", () => {
-  test("POSTs ondemand filter to /api/v0/bundles and returns offers", async () => {
+  test("POSTs on-demand filter to /api/v0/bundles and returns offers", async () => {
     const fetchImpl = makeFetch([
       {
         status: 200,
@@ -83,11 +83,14 @@ describe("VastClient.searchOffers", () => {
           expect(init.method).toBe("POST");
           expect(init.headers.Authorization).toBe(`Bearer ${KEY}`);
           const body = JSON.parse(init.body ?? "{}");
-          expect(body.type).toBe("ondemand");
-          expect(body.gpu_name.in).toContain("RTX_3090");
+          expect(body.type).toBe("on-demand");
+          expect(body.gpu_name.in).toContain("RTX 3090");
           expect(body.gpu_ram.gte).toBe(24000);
-          expect(body.dph_total.lte).toBe(0.2);
-          expect(body.verified.eq).toBe(true);
+          expect(body.dph_total.lte).toBe(0.5);
+          expect(body.rented.eq).toBe(false);
+          expect(body.verified).toBeUndefined();
+          expect(body.reliability).toBeUndefined(); // no hidden reliability floor
+          expect(body.allocated_storage).toBe(5);
         },
       },
     ]);

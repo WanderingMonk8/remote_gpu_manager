@@ -52,12 +52,8 @@ async function vastProbe(key: string): Promise<{ ok: boolean; status: number; bo
         headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
         body: JSON.stringify({
           limit: 1,
-          type: "ondemand",
-          verified: { eq: true },
-          rentable: { eq: true },
-          rented: { eq: false },
-          gpu_name: { in: ["RTX_3090", "RTX_4090"] },
-          dph_total: { lte: 1.0 },
+          type: "on-demand",
+          allocated_storage: 5,
         }),
       },
     );
@@ -194,9 +190,13 @@ export function normalizeOfferPolicy(raw: unknown): OfferPolicyPayload {
     const v = (raw as any)[k];
     return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && x.trim().length > 0) : undefined;
   };
+  // Vast stores/queries gpu_name with spaces ("RTX 3090"); the CLI converts '_' -> ' ' for you. Do the same here.
+  const gpuNames = arr("gpuNames")
+    ?.map((n) => n.trim().replace(/^["']+|["']+$/g, "").replace(/_+/g, " ").replace(/\s+/g, " "))
+    .filter((n) => n.length > 0);
   if (num("maxDphTotal") !== undefined) out.maxDphTotal = num("maxDphTotal");
   if (num("minDphTotal") !== undefined) out.minDphTotal = num("minDphTotal");
-  if (arr("gpuNames")?.length) out.gpuNames = arr("gpuNames");
+  if (gpuNames && gpuNames.length > 0) out.gpuNames = gpuNames;
   if (num("minVramGB") !== undefined) out.minVramGB = num("minVramGB");
   if (num("maxVramGB") !== undefined) out.maxVramGB = num("maxVramGB");
   if (num("minRamGB") !== undefined) out.minRamGB = num("minRamGB");
