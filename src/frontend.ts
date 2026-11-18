@@ -1,5 +1,8 @@
 import type { SpindleFrontendContext } from "lumiverse-spindle-types";
 
+const escapeHtml = (s: string) =>
+  s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
 const ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.5"/><rect x="2.5" y="9" width="2" height="6"/><rect x="19.5" y="9" width="2" height="6"/><path d="M9.5 2.5v2M12 2.5v2M14.5 2.5v2M9.5 19.5v2M12 19.5v2M14.5 19.5v2"/></svg>`;
 
 export function setup(ctx: SpindleFrontendContext) {
@@ -271,7 +274,10 @@ export function setup(ctx: SpindleFrontendContext) {
         const box = drawer.root.querySelector(".rgm-offers");
         if (!box) return;
         if (payload.ok) {
-          if (payload.offers?.length) {
+          if (payload.offers?.__empty && payload.offers.debug) {
+            const d = payload.offers.debug;
+            box.innerHTML = `<div class="rgm-status" data-tone="bad">Vast.ai returned no offers (HTTP ${escapeHtml(String(d.status))}, body ${escapeHtml(String(d.bodyLength))} bytes)</div><pre class="rgm-out">${escapeHtml(String(d.bodyPreview))}</pre>`;
+          } else if (payload.offers?.length) {
             box.innerHTML = payload.offers.map((o: any) => `
               <div class="rgm-offer">
                 <div><b>Offer #${o.id}</b> · ${String(o.gpuName ?? "")} × ${o.gpuCount ?? 1} · ${((o.vramMB ?? 0) / 1024).toFixed(1)} GiB</div>

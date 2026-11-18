@@ -278,8 +278,15 @@ async function searchVastOffers(apiKey: string, policy: OfferPolicyPayload = DEF
     throw new Error(`Vast.ai rejected the search query: ${detail}`);
   }
   if (!parsed?.offers?.length) {
-    spindle.log.info(`vast offers search returned 0 matches (status 200); policy=${JSON.stringify(policy)}`);
-    return [];
+    const debug = {
+      status: res.status,
+      bodyType: typeof res.body,
+      bodyLength: typeof res.body === "string" ? res.body.length : -1,
+      bodyPreview: typeof res.body === "string" ? res.body.slice(0, 2000) : String(res.body).slice(0, 2000),
+      requestBody: body,
+    };
+    spindle.log.info(`vast offers search returned 0 matches; raw=${JSON.stringify(debug).slice(0, 3000)}`);
+    return { __empty: true, debug } as any;
   }
   return parsed.offers
     .slice()
