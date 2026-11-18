@@ -1,34 +1,75 @@
 /**
- * Remote GPU Manager — Spindle backend (M1).
+ * Remote GPU Manager — Spindle backend.
  *
- * Responsibilities in M1 are deliberately thin: report the status of the
- * loopback host gateway and the upstream worker to the frontend panel.
- * The status probe performs exactly one allowlisted GET (/system_stats)
- * through the gateway — which itself forwards it upstream with injected
- * credentials. No provisioning calls, no token-guarded endpoints.
+ * Responsibilities (current scope: M1/Vast-setup):
+ *  - Report the status of the loopback host gateway and the upstream worker to the
+ *    frontend panel.
+ *  - Store the user's Vast.ai API key in the Spindle Secure Enclave (AES-256-GCM,
+ *    per-user). The key is NEVER logged, NEVER persisted to regular storage, and
+ *    NEVER returned to the frontend; only `configured: boolean` leaks back.
+ *
+ * This module makes NO paid calls. Credential test performs only the read-only
+ * searchOffers with limit=1 against the public Vast API.
  */
 
 declare const spindle: import("lumiverse-spindle-types").SpindleAPI;
 
 const DEFAULT_GATEWAY_URL = "http://127.0.0.1:8189";
+const ENCLAVE_KEY = "vast.api_key";
 
 async function getGatewayUrl(): Promise<string> {
   const saved = await spindle.storage.getJson<{ url?: string }>("gateway-url.json", { fallback: {} });
   return saved.url ?? DEFAULT_GATEWAY_URL;
 }
 
-function hintForStatus(status: number): string | undefined {
-  switch (status) {
-    case 401:
-      return "Worker is reachable but rejected the upstream credentials — check GATEWAY_BASIC_AUTH matches the notebook tunnel Basic Auth.";
-    case 404:
-      return "HTTP 404 from the upstream host for the probe path — the host may not serve /system_stats (check the URL host & path), or the tunnel is an ngrok edge returning ERR_NGROK_3200 (tunnel offline). Not a token problem.";
-    case 502:
-      return "Gateway is up but its upstream fetch failed (network/DNS/TLS from inside the Space). See Space logs for '[rgm-gateway] upstream fetch failed'.";
-    case 504:
-      return "Upstream timed out — worker may be overloaded or the tunnel path is slow.";
-    default:
-      return undefined;
+async function probe(path: string, headers: Record<string, string> = {}): Promise<{
+  ok: boolean;
+  status: number;
+  body?: unknown;
+}> {
+  const base = await getGatewayUrl();
+  try {
+    const res = await spindle.cors(base + path, { method: "GET", headers });
+    let body: unknown;
+    try {
+      body = JSON.parse(res.body);
+    } catch {
+      body = undefined;
+    }
+    return { ok: res.status >= 200 && res.status < 300, status: res.status, body };
+  } catch (err) {
+    return { ok: false, status: 0, body: { error: String(err) } };
+  }
+}
+
+async function vastProbe(key: string): Promise<{ ok: boolean; status: number; body?: unknown }> {
+  // Read-only search with a tiny offer limit. No creation, no billing action.
+  try {
+    const res = await spindle.cors(
+      "https://console.vast.ai/api/v0/bundles",
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          limit: 1,
+          type: "ondemand",
+          verified: { eq: true },
+          rentable: { eq: true },
+          rented: { eq: false },
+          gpu_name: { in: ["RTX_3090", "RTX_4090"] },
+          dph_total: { lte: 1.0 },
+        }),
+      },
+    );
+    let body: unknown;
+    try {
+      body = JSON.parse(res.body);
+    } catch {
+      body = undefined;
+    }
+    return { ok: res.status >= 200 && res.status < 300, status: res.status, body };
+  } catch (err) {
+    return { ok: false, status: 0, body: { error: String(err) } };
   }
 }
 
@@ -45,31 +86,55 @@ spindle.onFrontendMessage(async (payload: any, userId?: string) => {
   }
 
   if (payload?.type === "status") {
-    const base = await getGatewayUrl();
-    let gateway: { ok: boolean; status: number; hint?: string } = { ok: false, status: 0, hint: "No response from the gateway — check Space logs for '[rgm-gateway]' and the extension's saved Gateway URL." };
-    let upstream: { ok: boolean; status: number; hint?: string; body?: unknown } = { ok: false, status: 0 };
-    try {
-      // Single allowlisted probe; any HTTP status means the gateway is up.
-      const res = await spindle.cors(`${base}/system_stats`, {
-        method: "GET",
-        headers: { "ngrok-skip-browser-warning": "1" },
-      });
-      gateway = { ok: true, status: res.status };
-      let body: unknown;
-      try {
-        body = JSON.parse(res.body);
-      } catch {
-        body = undefined;
-      }
-      const hint = hintForStatus(res.status);
-      upstream = { ok: res.status >= 200 && res.status < 300, status: res.status, hint, body };
-      if (!upstream.ok) gateway.hint = hint;
-    } catch {
-      // Host-side failure to reach the gateway address (status 0).
+    const gateway = await probe("/gateway/v1/status");
+    const upstream = await probe("/system_stats");
+    spindle.sendToFrontend({ type: "status", gateway: { ...gateway }, upstream: { ...upstream } }, userId);
+    return;
+  }
+
+  if (payload?.type === "vast_get_status") {
+    const configured = await spindle.enclave.has(ENCLAVE_KEY, userId);
+    spindle.sendToFrontend({ type: "vast_get_status_result", configured }, userId);
+    return;
+  }
+
+  if (payload?.type === "vast_test_key" && typeof payload.key === "string") {
+    const key = payload.key.trim();
+    if (!key) {
+      spindle.sendToFrontend({ type: "vast_test_key_result", ok: false, status: 0, body: { error: "empty key" } }, userId);
+      return;
     }
-    spindle.sendToFrontend({ type: "status", gateway, upstream }, userId);
+    const probeResult = await vastProbe(key);
+    // Explicitly never return the key or anything derived from it; only the probe verdict.
+    spindle.sendToFrontend(
+      { type: "vast_test_key_result", ok: probeResult.ok, status: probeResult.status, body: { verdict: probeResult.ok ? "credentials accepted" : "credentials rejected" } },
+      userId,
+    );
+    return;
+  }
+
+  if (payload?.type === "vast_save_key" && typeof payload.key === "string") {
+    const key = payload.key.trim();
+    if (!key) {
+      spindle.sendToFrontend({ type: "vast_save_key_result", ok: false, error: "empty key" }, userId);
+      return;
+    }
+    // Read-only verification before persisting — we never save a key we haven't validated.
+    const probeResult = await vastProbe(key);
+    if (!probeResult.ok) {
+      spindle.sendToFrontend({ type: "vast_save_key_result", ok: false, error: "Credentials rejected by Vast.ai (read-only test failed — check the key and try again)." }, userId);
+      return;
+    }
+    await spindle.enclave.put(ENCLAVE_KEY, key, userId);
+    spindle.sendToFrontend({ type: "vast_save_key_result", ok: true }, userId);
+    return;
+  }
+
+  if (payload?.type === "vast_clear_key") {
+    await spindle.enclave.delete(ENCLAVE_KEY, userId);
+    spindle.sendToFrontend({ type: "vast_clear_key_result", ok: true }, userId);
     return;
   }
 });
 
-spindle.log.info("remote-gpu-manager backend loaded (M1: status probe only; no provisioning)");
+spindle.log.info("remote-gpu-manager backend loaded (M1/vast: status probe + enclave API-key storage)");
