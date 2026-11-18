@@ -22,7 +22,7 @@ function hintForStatus(status: number): string | undefined {
     case 401:
       return "Worker is reachable but rejected the upstream credentials — check GATEWAY_BASIC_AUTH matches the notebook tunnel Basic Auth.";
     case 404:
-      return "ngrok answered 404 (tunnel offline) — start the Colab notebook through section 12, then re-check.";
+      return "HTTP 404 from the upstream host for the probe path — the host may not serve /system_stats (check the URL host & path), or the tunnel is an ngrok edge returning ERR_NGROK_3200 (tunnel offline). Not a token problem.";
     case 502:
       return "Gateway is up but its upstream fetch failed (network/DNS/TLS from inside the Space). See Space logs for '[rgm-gateway] upstream fetch failed'.";
     case 504:
