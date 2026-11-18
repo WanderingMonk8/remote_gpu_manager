@@ -3,8 +3,9 @@
  *
  * Responsibilities in M1 are deliberately thin: report the status of the
  * loopback host gateway and the upstream worker to the frontend panel.
- * Lifecycle management, dashboard, profiles and asset operations land in
- * M2–M4. This module makes NO runtime provisioning calls.
+ * The status probe performs exactly one allowlisted GET (/system_stats)
+ * through the gateway — which itself forwards it upstream with injected
+ * credentials. No provisioning calls, no token-guarded endpoints.
  */
 
 declare const spindle: import("lumiverse-spindle-types").SpindleAPI;
@@ -16,23 +17,18 @@ async function getGatewayUrl(): Promise<string> {
   return saved.url ?? DEFAULT_GATEWAY_URL;
 }
 
-async function probe(path: string, headers: Record<string, string> = {}): Promise<{
-  ok: boolean;
-  status: number;
-  body?: unknown;
-}> {
-  const base = await getGatewayUrl();
-  try {
-    const res = await spindle.cors(base + path, { method: "GET", headers });
-    let body: unknown;
-    try {
-      body = JSON.parse(res.body);
-    } catch {
-      body = undefined;
-    }
-    return { ok: res.status >= 200 && res.status < 300, status: res.status, body };
-  } catch (err) {
-    return { ok: false, status: 0, body: { error: String(err) } };
+function hintForStatus(status: number): string | undefined {
+  switch (status) {
+    case 401:
+      return "Worker is reachable but rejected the upstream credentials — check GATEWAY_BASIC_AUTH matches the notebook tunnel Basic Auth.";
+    case 404:
+      return "ngrok answered 404 (tunnel offline) — start the Colab notebook through section 12, then re-check.";
+    case 502:
+      return "Gateway is up but its upstream fetch failed (network/DNS/TLS from inside the Space). See Space logs for '[rgm-gateway] upstream fetch failed'.";
+    case 504:
+      return "Upstream timed out — worker may be overloaded or the tunnel path is slow.";
+    default:
+      return undefined;
   }
 }
 
@@ -49,18 +45,29 @@ spindle.onFrontendMessage(async (payload: any, userId?: string) => {
   }
 
   if (payload?.type === "status") {
-    const gateway = await probe("/gateway/v1/status");
-    // Upstream health via the gateway's allowlisted proxy route. Discovery
-    // semantics: this performs NO provisioning; it is a single health read.
-    const upstream = await probe("/system_stats");
-    spindle.sendToFrontend(
-      {
-        type: "status",
-        gateway: { ...gateway },
-        upstream: { ...upstream },
-      },
-      userId,
-    );
+    const base = await getGatewayUrl();
+    let gateway: { ok: boolean; status: number; hint?: string } = { ok: false, status: 0, hint: "No response from the gateway — check Space logs for '[rgm-gateway]' and the extension's saved Gateway URL." };
+    let upstream: { ok: boolean; status: number; hint?: string; body?: unknown } = { ok: false, status: 0 };
+    try {
+      // Single allowlisted probe; any HTTP status means the gateway is up.
+      const res = await spindle.cors(`${base}/system_stats`, {
+        method: "GET",
+        headers: { "ngrok-skip-browser-warning": "1" },
+      });
+      gateway = { ok: true, status: res.status };
+      let body: unknown;
+      try {
+        body = JSON.parse(res.body);
+      } catch {
+        body = undefined;
+      }
+      const hint = hintForStatus(res.status);
+      upstream = { ok: res.status >= 200 && res.status < 300, status: res.status, hint, body };
+      if (!upstream.ok) gateway.hint = hint;
+    } catch {
+      // Host-side failure to reach the gateway address (status 0).
+    }
+    spindle.sendToFrontend({ type: "status", gateway, upstream }, userId);
     return;
   }
 });

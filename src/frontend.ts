@@ -62,7 +62,11 @@ export function setup(ctx: SpindleFrontendContext) {
       const gwOk = payload.gateway?.ok;
       const upOk = payload.upstream?.ok;
       statusBox.dataset.tone = gwOk && upOk ? "ok" : "bad";
-      statusBox.textContent = `${gwOk ? "Gateway OK" : "Gateway unreachable"} · ${upOk ? "Worker OK" : "Worker unreachable/degraded"}`;
+      const hint = payload.gateway?.hint ?? payload.upstream?.hint;
+      statusBox.textContent =
+        `${gwOk ? (payload.gateway?.status ? `Gateway OK (${payload.gateway.status})` : "Gateway OK") : "Gateway unreachable"} · ` +
+        `${upOk ? "Worker OK" : `Worker unreachable/degraded (${payload.upstream?.status ?? 0})`}` +
+        (hint ? `\n${hint}` : "");
       out.textContent = JSON.stringify({ gateway: payload.gateway, upstream: payload.upstream }, null, 2);
     } else if (payload?.type === "gateway_url_saved") {
       statusBox.dataset.tone = "unknown";

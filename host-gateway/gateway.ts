@@ -153,7 +153,13 @@ async function fetchUpstream(
     };
   } catch (err) {
     if (err instanceof HttpError) throw err;
-    if ((err as Error)?.name === "AbortError") throw new HttpError(504, "upstream_timeout");
+    const e = err as Error & { cause?: { code?: string; message?: string } };
+    // Sanitized diagnostic for operators: no URLs, no headers, no credentials.
+    // `cause.code` is the underlying transport reason (ENOTFOUND, ECONNRESET,
+    // CERT_*, UND_ERR_* etc.) when undici/Node provides one.
+    const detail = e?.cause?.code ?? e?.cause?.message ?? e?.name ?? "error";
+    console.warn(`[rgm-gateway] upstream fetch failed: ${e?.name ?? "Error"} (${detail})`);
+    if (e?.name === "AbortError") throw new HttpError(504, "upstream_timeout");
     throw new HttpError(502, "upstream_unreachable");
   } finally {
     clearTimeout(timer);
