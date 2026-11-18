@@ -93,3 +93,10 @@ Done on `feat/vast-first` (2026-11-18):
 - All 29 tests pass; extension builds.
 
 Not done yet: single-flight `ensureReady` on native request path (needs native admission hook investigation, ADR-001), budget ledger with enforcement, watchdog for unattended mode, worker bootstrap (V2), Vast transport TLS verification from Space (V2), live offer search/create (needs owner authorization of a capped test), deployment.
+"
+## Live evidence (2026-11-18)
+
+- User-reported image generation from the unified Colab worker succeeded at **512 X 512** through Lumiverse (after the earlier 768x768/1024x1024 attempts failed with the provider connection-closed toast).
+- Not verified here as of this update: exact profile (MOSS vs Anima), steps config, and gallery persistence outcome. Reported by the owner on 2026-11-18.
+- This localizes the earlier failure to resource/wall-clock pressure on the T4 and the memory-starved Lumiverse Space, not to authentication or transport; it does not change any Vast.ai decision.
+"
