@@ -149,7 +149,7 @@ export function setup(ctx: SpindleFrontendContext) {
 
       <section>
         <h4>My instances</h4>
-        <p class="rgm-note">Machines you have rented from this Vast.ai account. <b>Stop</b> pauses GPU billing (disk storage continues to accrue). <b>Destroy</b> permanently deletes the instance and its disk — this cannot be undone.</p>
+        <p class="rgm-note">Machines you have rented from this Vast.ai account. State shows raw Vast tokens (<code>actual → intended</code>); Vast's console renders <code>created</code>/<code>loading</code> as <b>Inactive</b>. <b>Stop</b> pauses GPU billing (disk storage continues to accrue). <b>Destroy</b> permanently deletes the instance and its disk — this cannot be undone.</p>
         <div class="rgm-actions">
           <button class="rgm-refresh-inst rgm-primary" type="button">Refresh</button>
         </div>
@@ -292,12 +292,16 @@ export function setup(ctx: SpindleFrontendContext) {
     if (!instances.length) { instList.innerHTML = '<div class="rgm-status" data-tone="unknown">No instances in this Vast.ai account.</div>'; return; }
     instList.innerHTML = instances.map((i: any) => {
       const st = String(i.status ?? "unknown");
-      const canStop = /^(running|loading|starting|created)$/i.test(st);
-      const canStart = /^(stopped|exited|unknown)$/i.test(st);
+      const intended = String(i.intendedStatus ?? "");
+      // Vast's console shows this phase as "Inactive" — show the raw tokens, don't pretend a mapping exists.
+      const stateText = intended && intended !== st ? `${st} → ${intended}` : st;
+      const title = `actual_status=${st}${intended ? `, intended_status=${intended}` : ""}`;
+      const canStop = /^(running|loading|starting|created|queued|provisioning)$/i.test(st);
+      const canStart = /^(created|stopped|exited|unknown|offline)$/i.test(st); // both buttons during transitional states
       const armed = armedDestroyId === i.id;
       return `<div class="rgm-inst" data-id="${i.id}">
         <div class="rgm-offer-row">
-          <div><b>#${i.id}</b> · ${escapeHtml(String(i.gpuName ?? "GPU ?"))} × ${i.gpuCount ?? 1} · <span class="rgm-inst-state">${escapeHtml(st)}</span></div>
+          <div><b>#${i.id}</b> · ${escapeHtml(String(i.gpuName ?? "GPU ?"))} × ${i.gpuCount ?? 1} · <span class="rgm-inst-state" title="${escapeHtml(title)}">${escapeHtml(stateText)}</span></div>
           <div class="rgm-actions">
             ${canStart ? '<button class="rgm-inst-start" type="button">Start</button>' : ""}
             ${canStop ? '<button class="rgm-inst-stop" type="button">Stop</button>' : ""}
