@@ -97,7 +97,7 @@ Not done yet: single-flight `ensureReady` on native request path (needs native a
 ## Live evidence (2026-11-18)
 
 - **Native Lumiverse image generation succeeded at 512×512 / 25 steps (MOSS, user-reported and verified) and the image persisted to the gallery.**
-- 768×768 and 1024×1024 attempts fail on this T4 path (memory pressure); 512×512 fits. Dosis: geometry is the knob, not the transport.
+- 768×768 and 1024×1024 attempts fail **on the HF Space side**, not inside Colab: ComfyUI returned `/history` → `/view -> 200` every time; the toast fires *after* bytes land in Lumiverse (in the base64 → `saveImageFromDataUrl` → sharp/persistence path). The `[runtime] critical memory pressure` line repeats every second and bottomed near ~2.3 GB available; 512×512 succeeds because the payload is small enough to survive that window.
 - The image in the gallery proves the full native path end-to-end on the current stack (Space → gateway → Cloudflare quick tunnel → Caddy Basic Auth → Colab ComfyUI → native gallery).
 - This localizes the earlier failures to resource/wall-clock pressure, not to auth or transport; it does not change any Vast.ai decision (the Vast worker targets a ≥24 GB GPU, where 768–1024+ is comfortable).
 "
