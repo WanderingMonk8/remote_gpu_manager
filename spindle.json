@@ -1,0 +1,16 @@
+{
+  "version": "0.1.0",
+  "name": "Remote GPU Manager",
+  "identifier": "remote_gpu_manager",
+  "author": "WanderingMonk8",
+  "github": "https://github.com/WanderingMonk8/remote_gpu_manager",
+  "homepage": "https://github.com/WanderingMonk8/remote_gpu_manager",
+  "description": "Runtime lifecycle, secure connectivity and remote asset management for authenticated remote ComfyUI GPU workers (MOSS / Anima families).",
+  "permissions": [
+    "cors_proxy",
+    "ui_panels"
+  ],
+  "entry_backend": "dist/backend.js",
+  "entry_frontend": "dist/frontend.js",
+  "minimum_lumiverse_version": "1.3.0"
+}

@@ -1,0 +1,22 @@
+{
+  "name": "lumiverse-remote-gpu-manager",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/WanderingMonk8/remote_gpu_manager.git"
+  },
+  "scripts": {
+    "build": "bun build src/backend.ts src/frontend.ts --outdir dist --target bun",
+    "test": "bun test",
+    "mock:comfy": "bun tests/mock-comfyui/server.ts",
+    "gateway": "bun host-gateway/gateway.ts",
+    "generate:workflows": "bun tools/generate-moss-workflow.mjs",
+    "check:workflows": "bun tools/validate-moss-workflow.mjs"
+  },
+  "devDependencies": {
+    "lumiverse-spindle-types": "^0.6.80",
+    "typescript": "^5.6.0"
+  }
+}
