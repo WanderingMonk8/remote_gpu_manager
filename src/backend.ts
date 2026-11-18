@@ -273,7 +273,7 @@ async function searchVastOffers(apiKey: string, policy: OfferPolicyPayload = DEF
   const parsed: any = (() => {
     try { return JSON.parse(res.body); } catch { return {}; }
   })();
-  if (!res.ok || res.status !== 200) {
+  if (res.status < 200 || res.status >= 300) {
     const detail = parsed?.msg ?? parsed?.detail ?? parsed?.error ?? `HTTP ${res.status}`;
     throw new Error(`Vast.ai rejected the search query: ${detail}`);
   }
