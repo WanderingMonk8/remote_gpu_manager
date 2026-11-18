@@ -32,7 +32,13 @@ const env = (name: string, fallback?: string): string => {
 };
 
 const GATEWAY_PORT = Number(env("GATEWAY_PORT", "8189"));
-const GATEWAY_UPSTREAM = env("GATEWAY_UPSTREAM").replace(/\/+$/, "");
+let GATEWAY_UPSTREAM = env("GATEWAY_UPSTREAM").replace(/\/+$/, "");
+
+// Default to https:// when the owner omits the scheme (common with ngrok hosts).
+if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(GATEWAY_UPSTREAM)) {
+  GATEWAY_UPSTREAM = `https://${GATEWAY_UPSTREAM}`;
+  console.warn(`[rgm-gateway] GATEWAY_UPSTREAM had no scheme; defaulting to ${GATEWAY_UPSTREAM}`);
+}
 const BASIC_AUTH = process.env.GATEWAY_BASIC_AUTH ?? ""; // "user:password"
 const SKIP_BROWSER_WARNING = (process.env.GATEWAY_SKIP_BROWSER_WARNING ?? "1") === "1";
 const CONTROL_TOKEN = process.env.GATEWAY_CONTROL_TOKEN ?? "";

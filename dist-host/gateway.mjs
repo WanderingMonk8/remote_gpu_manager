@@ -12,6 +12,10 @@ var env = (name, fallback) => {
 };
 var GATEWAY_PORT = Number(env("GATEWAY_PORT", "8189"));
 var GATEWAY_UPSTREAM = env("GATEWAY_UPSTREAM").replace(/\/+$/, "");
+if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(GATEWAY_UPSTREAM)) {
+  GATEWAY_UPSTREAM = `https://${GATEWAY_UPSTREAM}`;
+  console.warn(`[rgm-gateway] GATEWAY_UPSTREAM had no scheme; defaulting to ${GATEWAY_UPSTREAM}`);
+}
 var BASIC_AUTH = process.env.GATEWAY_BASIC_AUTH ?? "";
 var SKIP_BROWSER_WARNING = (process.env.GATEWAY_SKIP_BROWSER_WARNING ?? "1") === "1";
 var CONTROL_TOKEN = process.env.GATEWAY_CONTROL_TOKEN ?? "";
