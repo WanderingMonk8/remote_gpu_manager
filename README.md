@@ -1,42 +1,48 @@
-# Remote GPU Manager — Lumiverse Spindle extension (M1 workspace)
+# Remote GPU Manager — Lumiverse Spindle extension (V2, Vast.ai-first)
 
-> **Status:** M1 (warm connectivity) — local gateway + mock verified; live Lumiverse/Colab wiring pending owner approval.
-> **Source of truth:** `Lumiverse_Remote_GPU_Manager_PRD_v1.1.md` (start with §1, §10, §15).
+> **Status:** Vast.ai-first migration. V0 audit done; V1 (mock-first controller/provider) in progress; V2 (worker + Vast) blocked on owner authorization.
+> **Source of truth:** `PRD.md` (v2.0). Migrations: `docs/migration-vast.md`, `docs/adr/`.
+
+A Lumiverse Spindle extension that makes **Vast.ai on-demand GPU instances** feel like native image generation inside Lumiverse: a user picks a model + LoRA preset in Lumiverse's native UI and presses the normal generate button — the manager resumes or rents exactly one authorized instance, stages the model, connects securely, lets native generation run, persists natively, and idles down after real inactivity.
+
+Lumiverse remains the authoritative image frontend (Prompt Studio, LoRA Studio, character bindings, gallery, scene pipeline). This extension is an **infrastructure manager**, not an image generator.
 
 ## Layout
 
 ```
-spindle.json, package.json, tsconfig.json   # extension manifest & build (Spindle)
-src/backend.ts                              # status RPC via host CORS proxy (M1: no provisioning)
-src/frontend.ts                             # status panel
-host-gateway/gateway.ts                     # loopback authenticated ComfyUI reverse proxy
-tests/mock-comfyui/server.ts                # mock ComfyUI worker (upstream Basic Auth)
-tests/integration.test.ts                   # gateway + mock integration tests (bun test)
-tools/generate-moss-workflow.mjs            # emits workflows/*.json from the reference notebook graph
-tools/validate-moss-workflow.mjs            # structural validation of workflow templates
-tools/colab-eligibility-check.py            # read-only Colab eligibility probe (owner-run)
-workflows/                                  # verified-structure baseline API workflows
-docs/                                       # ADRs, M0 report, M1 record
-Unified_MOSS_Anima_Colab_Studio.ipynb       # reference worker notebook (user artifact)
+PRD.md                         # v2.0 (authoritative) — v1.1 archived in docs/archive/
+reference/                     # old Colab notebook, eligibility probe, fixtures (experimental)
+docs/migration-vast.md         # reuse map, unknowns, test status
+docs/adr/                      # 001 native gateway, 002 (superseded), 003 Vast lifecycle/transport, 004 LoRA resolution
+docs/legacy/colab/             # historical M0/M1 records (not "current direction")
+host-gateway/                  # loopback proxy used for the Space↔worker seam (retry, allowlist, WS)
+src/backend.ts, src/frontend.ts  # Spindle extension shell (status drawer)
+src/providers/vast/            # typed Vast API client + mock fixtures (V1)
+src/controller/                # state machine, leases, single-flight, reconcile (V1)
+tests/                         # mock ComfyUI worker + integration tests
+workflows/                     # baseline MOSS + Anima API workflow templates
+worker/                        # pinned worker bootstrap (V4)
 ```
 
-## Develop
+## Develop (no credentials required)
 
 ```bash
 bun install
-bun test                  # integration tests (mock + gateway)
-bun run build             # extension -> dist/
-bun run mock:comfy        # mock worker on :8188 (upstream Basic Auth)
-bun run gateway           # gateway on 127.0.0.1:8189 (needs GATEWAY_UPSTREAM, GATEWAY_BASIC_AUTH)
+bun test
+bun run build                # extension → dist/
+bun run gateway              # Space-side relay (loopback 127.0.0.1:8189)
+bun run mock:comfy           # mock ComfyUI worker on :8188 (upstream Basic Auth)
 ```
 
-## Deploy / wire into Lumiverse
+Everything above runs against mocks. **No Vast API key is needed for tests.**
 
-See `docs/m1-warm-connectivity.md`. Do **not** point a production Lumiverse profile at an unauthenticated worker; the native ComfyUI provider cannot send auth headers — the gateway adds them server-side. Deployment to the live HF Space requires explicit owner approval.
+## Deploy / verify (blocked until owner authorizes)
+
+The next milestone (V2) requires an explicit, capped authorization to rent a GPU (price cap, instance class, disk, duration) before any paid call — per `docs/adr/adr-003-vast-lifecycle-transport.md`. Nothing is deployed or rented without that approval.
 
 ## Security
 
-- No credentials in this repo, URLs, logs, prompts or workflow JSON.
-- Gateway binds `127.0.0.1` only; upstream credentials live in the process environment.
-- The extension never handles the upstream secret; it reads a token-guarded loopback status endpoint.
-- Colab Free is **manual interactive mode only** (ADR-002). No provisioning automation exists in this codebase yet; nothing here allocates cloud compute.
+- No credentials in the repo, URLs, workflow JSON, logs or frontend state.
+- Gateway binds loopback-only; upstream auth is injected server-side.
+- Secrets (Vast key, per-instance credential, Civitai/HF) live in documented host stores only, never in profile exports or logs.
+- No unattended mode without an independently verified instance-side watchdog.

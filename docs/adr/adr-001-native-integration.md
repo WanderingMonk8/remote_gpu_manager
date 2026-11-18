@@ -1,8 +1,10 @@
 # ADR-001 — Native integration (gateway) for the Remote GPU Manager
 
-**Status:** Accepted for M1–M2 direction; live validation pending (M1)
-**Date:** 2026-11-17
-**Evidence sources:** Lumiverse upstream `main` @ `45f8db563e1c314ed2aab227613b28eb5ea1084e` (package `lumiverse-backend` **v1.2.5**), `lumiverse-spindle-types` 0.6.49 (host-pinned) and 0.6.80 (latest npm), `docs.lumiverse.chat` (2026-11-17), `lumiverse.chat/guides/image-generation/setup/`
+**Status:** Accepted structurally; transport retargeted by v2.0 (Vast.ai). See `docs/adr/adr-003-vast-lifecycle-transport.md` for the current transport decision.
+**Date (original):** 2026-11-17 · **Updated (v2.0 retarget):** 2026-11-18
+**Evidence sources:** Lumiverse upstream `main` @ `45f8db56` (v1.2.5) and `staging` @ `5361e4fa` (v1.3.0), `lumiverse-spindle-types` 0.6.49/0.6.80, `docs.lumiverse.chat` (2026-11-17), `lumiverse.chat/guides/image-generation/setup/`, Vast.ai OpenAPI + vast-cli (2026-11-18)
+
+> **v2.0 retarget note:** The decision (loopback gateway pattern, route allowlist, auth injection, WS support) stands. What changes: the upstream is no longer an ngrok/quick-tunnel URL entered manually. It is a **Vast instance endpoint discovered via the Vast API** (`ssh_host`/`public_ipaddr`/ports) or a Space-side relay pointed at it. TLS with per-instance credentials is the default; the trigger for upstream auth headers is the dedicated managed connection. The gateway is now optional for the direct case (if Vast endpoint TLS+creds verify from the Space), mandatory for the relay case. Ngrok/Basic-Auth-over-quick-tunnel is no longer the reference implementation.
 
 ## Context
 

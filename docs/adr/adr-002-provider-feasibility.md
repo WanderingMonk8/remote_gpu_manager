@@ -1,6 +1,8 @@
-# ADR-002 — Provider feasibility: Google Colab (and the unattended-automation gate)
+# ADR-002 — Provider feasibility: Google Colab (SUPERSEDED 2026-11-18)
 
-**Status:** Accepted — **owner decision 2026-11-17: manual-only indefinitely; no unattended automation on any provider, including Colab Enterprise/paid hosts.**
+> **Superseded by `PRD.md` v2.0 and `docs/adr/adr-003-vast-lifecycle-transport.md`.** v2.0 pivots the primary backend from Google Colab to **Vast.ai**. This document is kept for history only. Colab remains a standalone/manual experimental reference — no unattended Colab automation, no OAuth work, no Drive mounts, no required Ngrok/Quick Tunnel in the Vast path. The manual-only decision recorded below is replaced by the Vast automation plan.
+
+**Status (historical):** Accepted — **owner decision 2026-11-17: manual-only indefinitely; no unattended automation on any provider, including Colab Enterprise/paid hosts.**
 **Date:** 2026-11-17
 **Evidence sources:** Google Colab API (`developers.google.com/colab/api/reference/rest`, `/rest/v1beta/runtimes`, `/rest/v1beta/runtimespecs/list`, `/reference/mcp`), Colab FAQ & usage limitations (`research.google.com/colaboratory/faq.html`, reviewed 2026-11-17), user-confirmed Colab Free usage, prior ngrok connectivity test (from Colab, HTTP 200 + one generated image).
 
