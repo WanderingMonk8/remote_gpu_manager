@@ -73,7 +73,10 @@ export function setup(ctx: SpindleFrontendContext) {
         <div class="rgm-status" data-tone="unknown" id="rgm-vast-status">Checking configuration…</div>
         <hr class="rgm-section-divider" />
         <h4>Find offers</h4>
-        <label class="rgm-field"><span>Price cap ($/hr)</span><input class="rgm-price-max" type="number" value="0.50" min="0" max="10" step="0.01" /></label>
+        <div class="rgm-filter-grid">
+          <label class="rgm-field"><span>Price min ($/hr)</span><input class="rgm-price-min" type="number" placeholder="0.00" min="0" max="10" step="0.01" /></label>
+          <label class="rgm-field"><span>Price max ($/hr)</span><input class="rgm-price-max" type="number" value="0.50" min="0" max="10" step="0.01" /></label>
+        </div>
         <div class="rgm-actions">
           <button class="rgm-find-offers rgm-primary" type="button">Find offers</button>
           <button class="rgm-toggle-filters" type="button">Advanced filters ▾</button>
@@ -171,6 +174,8 @@ export function setup(ctx: SpindleFrontendContext) {
   }
   function readPolicy() {
     const pol: any = {};
+    const minP = num(".rgm-price-min");
+    if (minP !== undefined) pol.minDphTotal = minP;
     const maxP = num(".rgm-price-max");
     if (maxP !== undefined) pol.maxDphTotal = maxP;
     if (csv(".f-gpu")?.length) pol.gpuNames = csv(".f-gpu");
