@@ -8,9 +8,10 @@
  *    per-user).
  *
  *  - Authorized Vast.ai actions: offer search (read-only), instance list (read-only),
- *    start/stop (PUT state), destroy (DELETE, requires approved:true), and one paid
- *    action — deploying an offer (PUT asks/{offer_id}/, requires approved:true and a
- *    price cap from the user-facing confirm panel).
+ *    start/stop (PUT state), destroy (DELETE, requires approved:true), instance logs
+ *    (PUT request_logs + result_url poll), and one paid action — deploying an offer
+ *    (PUT asks/{offer_id}/, requires approved:true and a price cap from the
+ *    user-facing confirm panel).
  *  - The API key is NEVER logged, NEVER persisted to regular storage, and NEVER
  *    returned to the frontend; only whitelisted verdicts/display fields leak back.
  */
@@ -213,6 +214,40 @@ spindle.onFrontendMessage(async (payload: any, userId?: string) => {
     return;
   }
 
+  // Fetch an instance's log text (read-only). vast requires a two-step request_logs -> result_url -> GET flow.
+  if (payload?.type === "vast_logs_instance" && typeof payload.id === "number") {
+    const id = Math.floor(payload.id);
+    const apiKey = await spindle.enclave.get(ENCLAVE_KEY, userId);
+    if (!apiKey) {
+      spindle.sendToFrontend({ type: "vast_logs_instance_result", ok: false, error: "no Vast.ai key saved yet" }, userId);
+      return;
+    }
+    const res = await vastApi(apiKey, "PUT", `/api/v0/instances/request_logs/${id}/`, {});
+    const b: any = res.body;
+    const url = b?.result_url as string | undefined;
+    if (!url) {
+      spindle.sendToFrontend({ type: "vast_logs_instance_result", ok: false, error: res.ok ? "vast returned no result_url yet — try again in a minute" : res.error ?? "logs request failed" }, userId);
+      return;
+    }
+    let text = "";
+    for (let attempt = 0; attempt < 6 && !text; attempt++) {
+      await new Promise((r) => setTimeout(r, 3000));
+      try {
+        const r2 = await spindle.cors(url, { method: "GET" });
+        if (r2.status === 200 && typeof r2.body === "string" && r2.body.trim().length > 0) text = r2.body;
+      } catch (err) {
+        spindle.log.info(`vast_logs_instance poll ${attempt} failed: ${String(err)}`);
+      }
+    }
+    if (!text) {
+      spindle.sendToFrontend({ type: "vast_logs_instance_result", ok: false, error: "logs not ready yet (vast returned 404/empty repeatedly) — hit Logs again in a minute; the bootstrap may still be preparing" }, userId);
+      return;
+    }
+    const tail = text.length > 32000 ? text.slice(-32000) : text;
+    spindle.sendToFrontend({ type: "vast_logs_instance_result", ok: true, id, text: tail }, userId);
+    return;
+  }
+
   // List the user's own instances (read-only). Display-safe whitelist only.
   if (payload?.type === "vast_list_instances") {
     const apiKey = await spindle.enclave.get(ENCLAVE_KEY, userId);
@@ -278,6 +313,11 @@ spindle.onFrontendMessage(async (payload: any, userId?: string) => {
     const diskGB = Number(payload.diskGB);
     const maxPricePerHour = Number(payload.maxPricePerHour);
     const label = typeof payload.label === "string" && payload.label.trim() ? payload.label.trim().slice(0, 64) : "lumiverse-remote-gpu";
+    const onstart = typeof payload.onstart === "string" && payload.onstart.trim() ? payload.onstart.trim() : undefined;
+    if (onstart && onstart.length > 4048) {
+      spindle.sendToFrontend({ type: "vast_deploy_offer_result", ok: false, error: "onstart must be ≤ 4048 characters" }, userId);
+      return;
+    }
     if (!Number.isInteger(offerId) || offerId <= 0) {
       spindle.sendToFrontend({ type: "vast_deploy_offer_result", ok: false, error: "offerId must be a positive integer" }, userId);
       return;
@@ -305,6 +345,7 @@ spindle.onFrontendMessage(async (payload: any, userId?: string) => {
       disk: diskGB,
       label,
       target_state: "running",
+      ...(onstart ? { onstart } : {}),
     });
     const b: any = res.body;
     const success = res.ok && b?.success !== false;

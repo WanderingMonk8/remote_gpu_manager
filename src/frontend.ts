@@ -131,6 +131,12 @@ export function setup(ctx: SpindleFrontendContext) {
           <h5>Deploy offer <span class="rgm-deploy-id"></span></h5>
           <p class="rgm-note">Rents a real machine, billed by the hour until you stop or destroy it. No model is downloaded — this first deploy only proves the create → inspect → stop → destroy lifecycle and billing.</p>
           <label class="rgm-field"><span>Image</span><input class="rgm-deploy-image" type="text" spellcheck="false" value="yanwk/comfyui-boot:cu130-slim" /></label>
+          <label class="rgm-field"><span>Boot profile</span>
+            <select class="rgm-deploy-profile">
+              <option value="lifecycle" selected>Lifecycle proof only (no downloads)</option>
+              <option value="full">Full worker — Anima + MOSS (≈45 GB)</option>
+            </select>
+          </label>
           <div class="rgm-filter-grid">
             <label class="rgm-field"><span>Disk (GB)</span><input class="rgm-deploy-disk" type="number" value="100" min="8" max="200" step="1" /></label>
             <label class="rgm-field"><span>Max price ($/hr)</span><input class="rgm-deploy-cap" type="number" value="0.25" min="0.01" max="2" step="0.01" /></label>
@@ -155,6 +161,7 @@ export function setup(ctx: SpindleFrontendContext) {
         </div>
         <div class="rgm-status" data-tone="unknown" id="rgm-inst-status">Loading…</div>
         <div class="rgm-inst-list"></div>
+        <pre class="rgm-out rgm-logs" hidden></pre>
       </section>
     </div>`;
 
@@ -208,7 +215,12 @@ export function setup(ctx: SpindleFrontendContext) {
     btn.textContent = hidden ? "Advanced filters ▾" : "Advanced filters ▴";
   });
   // ---------- Deploy flow (paid action — explicit user approval required) ----------
+  const DEPLOY_ONSTART_FULL = `python3 -c "import urllib.request;exec(urllib.request.urlopen('https://raw.githubusercontent.com/WanderingMonk8/remote_gpu_manager/feat/vast-first/worker/bootstrap.py').read())"`;
   let deployTarget: { id: number; dph: number; gpu: string; vramGB: string } | null = null;
+  const deployProfile = drawer.root.querySelector(".rgm-deploy-profile") as HTMLSelectElement | null;
+  const deployNote = drawer.root.querySelector(".rgm-deploy > .rgm-note") as HTMLParagraphElement | null;
+  const NOTE_LIFECYCLE = "Rents a real machine, billed by the hour until you stop or destroy it. No model is downloaded — this first deploy only proves the create → inspect → stop → destroy lifecycle and billing.";
+  const NOTE_FULL = "Rents a real machine, billed by the hour. On first boot the bootstrap downloads ≈45 GB (Anima + MOSS INT8 + encoders + Anima ref-adapter). ComfyUI stays up; generate only after the Logs show BOOTSTRAP_COMPLETE. The disk keeps all weights across stop/start (storage cost continues while stopped).";
   const deployPanel = drawer.root.querySelector(".rgm-deploy") as HTMLDivElement | null;
   const deployImage = drawer.root.querySelector(".rgm-deploy-image") as HTMLInputElement | null;
   const deployDisk = drawer.root.querySelector(".rgm-deploy-disk") as HTMLInputElement | null;
@@ -223,6 +235,7 @@ export function setup(ctx: SpindleFrontendContext) {
   const imagePattern = /^[a-z0-9]+([._-][a-z0-9]+)*(\/[a-z0-9]+([._-][a-z0-9]+)*)*(:[A-Za-z0-9][A-Za-z0-9._-]{0,127})?$/;
   const paintDeploy = () => {
     if (!deployPanel) return;
+    if (deployNote) deployNote.textContent = deployProfile?.value === "full" ? NOTE_FULL : NOTE_LIFECYCLE;
     const cap = Number(deployCap?.value ?? 0);
     if (deploySummary && deployTarget) {
       deploySummary.textContent = `#${deployTarget.id} · ${deployTarget.gpu} · $${deployTarget.dph.toFixed(3)}/hr · ${deployTarget.vramGB} GiB`;
@@ -261,6 +274,7 @@ export function setup(ctx: SpindleFrontendContext) {
   });
   for (const el of [deployImage, deployDisk, deployCap]) el?.addEventListener("input", paintDeploy);
   deployApprove?.addEventListener("change", paintDeploy);
+  deployProfile?.addEventListener("change", paintDeploy);
   drawer.root.querySelector(".rgm-deploy-cancel")?.addEventListener("click", closeDeploy);
   deployGo?.addEventListener("click", () => {
     if (!deployTarget || deployApprove?.checked !== true) return;
@@ -274,6 +288,7 @@ export function setup(ctx: SpindleFrontendContext) {
       maxPricePerHour: Number(deployCap?.value ?? 0.25),
       label: "lumiverse-remote-gpu",
       approved: true,
+      onstart: deployProfile?.value === "full" ? DEPLOY_ONSTART_FULL : undefined,
     });
   });
 
@@ -281,6 +296,7 @@ export function setup(ctx: SpindleFrontendContext) {
   let armedDestroyId: number | null = null;
   const instStatus = drawer.root.querySelector("#rgm-inst-status") as HTMLDivElement | null;
   const instList = drawer.root.querySelector(".rgm-inst-list") as HTMLDivElement | null;
+  const logsOut = drawer.root.querySelector(".rgm-logs") as HTMLPreElement | null;
   const askInstances = () => ctx.sendToBackend({ type: "vast_list_instances" });
   const fmtUptime = (mins: number | null) => {
     if (mins == null) return "—";
@@ -305,6 +321,7 @@ export function setup(ctx: SpindleFrontendContext) {
           <div class="rgm-actions">
             ${canStart ? '<button class="rgm-inst-start" type="button">Start</button>' : ""}
             ${canStop ? '<button class="rgm-inst-stop" type="button">Stop</button>' : ""}
+            <button class="rgm-inst-logs" type="button">Logs</button>
             <button class="rgm-inst-destroy${armed ? " rgm-destroy-armed" : ""}" type="button">${armed ? "Confirm destroy" : "Destroy"}</button>
           </div>
         </div>
@@ -324,6 +341,12 @@ export function setup(ctx: SpindleFrontendContext) {
     if (!id) return;
     if (el.closest?.(".rgm-inst-start")) { armedDestroyId = null; ctx.sendToBackend({ type: "vast_instance_action", id, action: "start" }); return; }
     if (el.closest?.(".rgm-inst-stop")) { armedDestroyId = null; ctx.sendToBackend({ type: "vast_instance_action", id, action: "stop" }); return; }
+    if (el.closest?.(".rgm-inst-logs")) {
+      armedDestroyId = null;
+      if (instStatus) { instStatus.dataset.tone = "unknown"; instStatus.textContent = `Requesting logs for #${id}… (can take ~20–30s)`; }
+      ctx.sendToBackend({ type: "vast_logs_instance", id });
+      return;
+    }
     if (el.closest?.(".rgm-inst-destroy")) {
       if (armedDestroyId === id) {
         armedDestroyId = null;
@@ -466,6 +489,15 @@ export function setup(ctx: SpindleFrontendContext) {
         }
         askInstances();
         return;
+      case "vast_logs_instance_result": {
+        if (payload.ok) {
+          if (logsOut) { logsOut.removeAttribute("hidden"); logsOut.textContent = String(payload.text ?? ""); logsOut.scrollIntoView({ behavior: "smooth", block: "nearest" }); }
+          if (instStatus) { instStatus.dataset.tone = "ok"; instStatus.textContent = `Logs for #${payload.id} — look for BOOTSTRAP_COMPLETE / BOOTSTRAP_FAILED near the end.`; }
+        } else {
+          if (instStatus) { instStatus.dataset.tone = "bad"; instStatus.textContent = `Logs for #${payload.id}: ${payload.error ?? "failed"}`; }
+        }
+        return;
+      }
       case "vast_deploy_offer_result": {
         if (payload.ok) {
           if (deployStatus) { deployStatus.dataset.tone = "ok"; deployStatus.textContent = `Deployed! Instance #${payload.instanceId ?? "?"} is booting. Refresh My instances to see it (status transitions take ~30–60s).`; }
