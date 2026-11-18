@@ -248,8 +248,11 @@ export function setup(ctx: SpindleFrontendContext) {
       && Number.isFinite(diskGB) && diskGB >= 8 && diskGB <= 200 && !overCap;
     if (deployGo) deployGo.disabled = !ready;
     if (deployStatus) {
+      // Never overwrite a terminal message (Deploying… / result / error) with the benign hint.
+      const cur = deployStatus.textContent ?? "";
+      const benign = cur === "" || cur.startsWith("Review the terms") || cur.startsWith("Approved") || overCap;
       if (overCap) { deployStatus.dataset.tone = "bad"; deployStatus.textContent = `Offer price $${deployTarget?.dph.toFixed(3)}/hr exceeds your $${cap.toFixed(2)}/hr cap.`; }
-      else if (deployGo && !deployGo.disabled) { deployStatus.dataset.tone = "unknown"; deployStatus.textContent = "Approved to deploy. Clicking starts billing immediately."; }
+      else if (ready && benign) { deployStatus.dataset.tone = "unknown"; deployStatus.textContent = "Approved to deploy. Clicking starts billing immediately."; }
     }
   };
   const openDeploy = (target: { id: number; dph: number; gpu: string; vramGB: string }) => {
@@ -481,6 +484,7 @@ export function setup(ctx: SpindleFrontendContext) {
         askInstances();
         return;
       case "vast_destroy_instance_result":
+        if (payload.ok) { if (logsOut) { logsOut.setAttribute("hidden", ""); logsOut.textContent = ""; } armedDestroyId = null; }
         if (instStatus) {
           instStatus.dataset.tone = payload.ok ? "ok" : "bad";
           instStatus.textContent = payload.ok
