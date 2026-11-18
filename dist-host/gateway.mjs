@@ -102,8 +102,8 @@ async function fetchUpstream(path, init, rule) {
     if (err instanceof HttpError)
       throw err;
     const e = err;
-    const detail = e?.cause?.code ?? e?.cause?.message ?? e?.name ?? "error";
-    console.warn(`[rgm-gateway] upstream fetch failed: ${e?.name ?? "Error"} (${detail})`);
+    const detail = e?.cause?.code ?? e?.cause?.message ?? e?.cause ?? e?.message ?? e?.name ?? "error";
+    console.warn(`[rgm-gateway] upstream fetch failed: ${e?.name ?? "Error"} (${String(detail).slice(0, 300)})`);
     if (e?.name === "AbortError")
       throw new HttpError(504, "upstream_timeout");
     throw new HttpError(502, "upstream_unreachable");

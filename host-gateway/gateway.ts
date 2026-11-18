@@ -154,11 +154,16 @@ async function fetchUpstream(
   } catch (err) {
     if (err instanceof HttpError) throw err;
     const e = err as Error & { cause?: { code?: string; message?: string } };
-    // Sanitized diagnostic for operators: no URLs, no headers, no credentials.
-    // `cause.code` is the underlying transport reason (ENOTFOUND, ECONNRESET,
-    // CERT_*, UND_ERR_* etc.) when undici/Node provides one.
-    const detail = e?.cause?.code ?? e?.cause?.message ?? e?.name ?? "error";
-    console.warn(`[rgm-gateway] upstream fetch failed: ${e?.name ?? "Error"} (${detail})`);
+    // Sanitized diagnostic for operators: includes the host (never user
+    // secrets) — e.g. "getaddrinfo ENOTFOUND <host>" vs "connect ECONNRESET"
+    // vs TLS/cert wording. URLs/headers are never logged here.
+    const detail = e?.cause?.code
+      ?? e?.cause?.message
+      ?? e?.cause /* if the cause is a string */
+      ?? e?.message
+      ?? e?.name
+      ?? "error";
+    console.warn(`[rgm-gateway] upstream fetch failed: ${e?.name ?? "Error"} (${String(detail).slice(0, 300)})`);
     if (e?.name === "AbortError") throw new HttpError(504, "upstream_timeout");
     throw new HttpError(502, "upstream_unreachable");
   } finally {
