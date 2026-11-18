@@ -218,7 +218,7 @@ export function normalizeOfferPolicy(raw: unknown): OfferPolicyPayload {
   return out;
 }
 
-const DEFAULT_POLICY: Required<Omit<OfferPolicyPayload, "maxVramGB" | "maxRamGB" | "minInetDownMBs" | "minInetUpMBs" | "minDurationSeconds" | "minCpuCores" | "minCpuMhz" | "maxStorageCostPerGBMonth" | "minDirectPorts" | "minReliability" | "minVramGB" | "minRamGB" | "minDiskGB" | "gpuNames" | "maxDphTotal">>> = {
+const DEFAULT_POLICY: OfferPolicyPayload = {
   geolocations: [],
   excludeRented: true,
   limit: 20,
