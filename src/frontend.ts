@@ -127,6 +127,7 @@ export function setup(ctx: SpindleFrontendContext) {
           </div>
         </div>
         <div class="rgm-offers"></div>
+        <div class="rgm-note rgm-search-age" hidden></div>
         <div class="rgm-deploy" hidden>
           <h5>Deploy offer <span class="rgm-deploy-id"></span></h5>
           <p class="rgm-note">Rents a real machine, billed by the hour until you stop or destroy it. No model is downloaded — this first deploy only proves the create → inspect → stop → destroy lifecycle and billing.</p>
@@ -215,6 +216,9 @@ export function setup(ctx: SpindleFrontendContext) {
     btn.textContent = hidden ? "Advanced filters ▾" : "Advanced filters ▴";
   });
   // ---------- Deploy flow (paid action — explicit user approval required) ----------
+  let lastSearchAt: number | null = null;
+  const searchAge = drawer.root.querySelector(".rgm-search-age") as HTMLDivElement | null;
+  const offerAgeMinutes = () => (lastSearchAt == null ? null : Math.floor((Date.now() - lastSearchAt) / 60000));
   const DEPLOY_ONSTART_FULL = `python3 -c "import urllib.request;exec(urllib.request.urlopen('https://raw.githubusercontent.com/WanderingMonk8/remote_gpu_manager/feat/vast-first/worker/bootstrap.py').read())"`;
   let deployTarget: { id: number; dph: number; gpu: string; vramGB: string } | null = null;
   const deployProfile = drawer.root.querySelector(".rgm-deploy-profile") as HTMLSelectElement | null;
@@ -257,9 +261,11 @@ export function setup(ctx: SpindleFrontendContext) {
   };
   const openDeploy = (target: { id: number; dph: number; gpu: string; vramGB: string }) => {
     deployTarget = target;
+    const age = offerAgeMinutes();
+    const stale = age != null && age >= 3;
     if (deployApprove) deployApprove.checked = false;
     if (deployId) deployId.textContent = `#${target.id}`;
-    if (deployStatus) { deployStatus.dataset.tone = "unknown"; deployStatus.textContent = "Review the terms, tick the approval, then Deploy."; }
+    if (deployStatus) { deployStatus.dataset.tone = stale ? "bad" : "unknown"; deployStatus.textContent = stale ? `These offers are ~${age} min old — this one may already be gone. Re-search and deploy instantly.` : "Review the terms, tick the approval, then Deploy."; }
     paintDeploy();
     if (deployPanel) { deployPanel.removeAttribute("hidden"); deployPanel.scrollIntoView({ behavior: "smooth", block: "nearest" }); }
   };
@@ -508,7 +514,12 @@ export function setup(ctx: SpindleFrontendContext) {
           closeDeploy();
           askInstances();
         } else {
-          if (deployStatus) { deployStatus.dataset.tone = "bad"; deployStatus.textContent = `Deploy failed: ${payload.error ?? "unknown error"}`; }
+          const errText = String(payload.error ?? "unknown error");
+          const gone = /no_such_ask|3603|instance type by id|not available|no longer available/i.test(errText);
+          if (deployStatus) {
+            deployStatus.dataset.tone = "bad";
+            deployStatus.textContent = `Deploy failed: ${errText}${gone ? " — the offer was taken (they vanish in seconds). Hit Find offers and deploy immediately from the fresh list." : ""}`;
+          }
           if (deployGo) deployGo.disabled = false;
           paintDeploy();
         }
@@ -518,6 +529,8 @@ export function setup(ctx: SpindleFrontendContext) {
         const box = drawer.root.querySelector(".rgm-offers");
         if (!box) return;
         if (payload.ok) {
+          lastSearchAt = Date.now();
+          if (searchAge) { searchAge.removeAttribute("hidden"); searchAge.textContent = "List rendered just now — cheap verified offers vanish fast; deploy within seconds or re-search."; }
           if (payload.offers?.__empty && payload.offers.debug) {
             const d = payload.offers.debug;
             box.innerHTML = `<div class="rgm-status" data-tone="bad">Vast.ai returned no offers (HTTP ${escapeHtml(String(d.status))}, body ${escapeHtml(String(d.bodyLength))} bytes)</div><pre class="rgm-out">${escapeHtml(JSON.stringify(d.requestBody, null, 2))}</pre>`;
