@@ -237,8 +237,8 @@ async function searchVastOffers(apiKey: string, policy: OfferPolicyPayload = DEF
     type: "on-demand",
     allocated_storage: 5,
   };
-  if (p.excludeRented === true) body.rented = { eq: false };      // don't return rented boxes
-  else if (p.excludeRented === false) body.rented = { eq: true };  // include them
+  if (p.excludeRented === true) body.rented = { eq: false };      // exclude rented boxes
+  // unchecked = show all offers; don't constrain `rented` at all
   if (p.exclusiveExternalOnly === true) body.external = { eq: false };
   if (p.verifiedOnly === true) body.verified = { eq: true };
   if (p.rentableOnly === true) body.rentable = { eq: true };
