@@ -23,3 +23,4 @@ dist/
 **/client_secret.json
 docs/colab-eligibility-result.json
 .venv/
+__pycache__/
