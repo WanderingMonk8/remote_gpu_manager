@@ -29,11 +29,16 @@
 | Check | Result |
 |---|---|
 | Space rebuilt with the patched Dockerfile | Gateway clone + loopback start confirmed in Space logs (`[rgm-gateway]`) |
-| `GATEWAY_UPSTREAM` required scheme | Initially `ERR_INVALID_URL` (host-only secret) — fixed by owner-supplied `https://` prefix; gateway hardened (87c71ef) to default missing scheme to `https://` |
-| Extension status probe via Space | First run: 502 — gateway reported wrong/unreachable status; panel showed `ECONNREFUSED` when gateway was down, then 401/502 (token-guarded control endpoint removed from the probe path) |
-| **Space → gateway → ngrok → Colab: `/system_stats`** | **HTTP 200 — real stats returned (system RAM total ≈ 13.6 GB, free ≈ 2.3 GB; Linux) — chain confirmed live** |
-| Extension drawer tab | Registered via `ctx.ui.registerDrawerTab` (9af8f77); panel visible in Lumiverse |
-| Status hints | 401/404/502/504 hints + `[rgm-gateway] upstream fetch failed: <cause>` log for diagnosis |
+| `GATEWAY_UPSTREAM` scheme required | Initially `ERR_INVALID_URL`; gateway hardened to default `https://` |
+| Initial connectivity Space → ngrok | Worked briefly (`401 21ms`), then persistent `ECONNRESET` bursts from ngrok's edge against the Space's egress — blocked at the rate-limit layer after ~13 parallel `/object_info/*` probe requests (Capabilities button). Retries + Space restart did not clear it |
+| HF Space egress to arbitrary internet | Proven **working**: github.com answered real 404; huggingface.co answered real (large) HTML; only ngrok's edge refused the Space |
+| Switch to Cloudflare quick tunnel (`trycloudflare.com`) | `*.trycloudflare.com` ephemeral URL printed; Caddy Basic Auth proxy on `:8189` → ComfyUI on `:8188`; verified from outside (401 without creds, 200 with) and from inside the runtime (last attempt HTTP 200) |
+| **Space → gateway → tunnel → Colab: `/system_stats`** | **HTTP 200 — comfyui_version 0.45.0, pytorch 2.14.1+cu130, Tesla T4, ~4.2 GB VRAM free** |
+| Extension drawer tab | Registered via `ctx.ui.registerDrawerTab` (`GPU` shortName); probes show real status + hints |
+
+The tunnel is **ephemeral per notebook session** (`trycloudflare.com` URL changes each run) — the HF secrets must be updated and the Space factory-rebooted per session.
+
+Remaining for M1 exit: native workflow import from the actual Space + a native generation saving to the gallery with preserved seed.
 
 Verified by the user via the panel screenshot (2026-11-18, ~02:50 local). Full native generation (workflow import → native panel → gallery) is the remaining M1 exit step — see next actions.
 
