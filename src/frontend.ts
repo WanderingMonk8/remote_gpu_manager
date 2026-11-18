@@ -31,6 +31,10 @@ export function setup(ctx: SpindleFrontendContext) {
     .rgm-filter-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 10px; padding: 8px 0 2px; }
     .rgm-check { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--lumiverse-text); padding-top: 12px; }
     .rgm-check input { width: auto; }
+    .rgm-key-banner { padding: 8px 10px; border-radius: 8px; border: 1px solid var(--lumiverse-border); font-size: 12px; font-weight: 700; text-align: center; }
+    .rgm-key-banner[data-tone="ok"] { color: var(--lumiverse-success, #4caf50); background: color-mix(in srgb, var(--lumiverse-success, #4caf50) 10%, transparent); }
+    .rgm-key-banner[data-tone="bad"] { color: var(--lumiverse-text-muted); }
+    .rgm-key-banner[data-tone="unknown"] { color: var(--lumiverse-text-muted); }
   `;
   const removeStyle = ctx.dom.addStyle(STYLES);
 
@@ -63,6 +67,7 @@ export function setup(ctx: SpindleFrontendContext) {
 
       <section>
         <h4>Vast.ai account</h4>
+        <div class="rgm-key-banner" id="rgm-key-banner" data-tone="unknown">Checking configuration…</div>
         <p>API key stored in the Spindle Secure Enclave (AES-256-GCM, per-user). Never displayed or logged.</p>
         <input class="rgm-vast-key" type="password" spellcheck="false" autocomplete="off" placeholder="Paste your Vast.ai API key" />
         <div class="rgm-actions">
@@ -70,7 +75,7 @@ export function setup(ctx: SpindleFrontendContext) {
           <button class="rgm-save-key rgm-primary" type="button">Save securely</button>
           <button class="rgm-clear-key rgm-danger" type="button">Clear</button>
         </div>
-        <div class="rgm-status" data-tone="unknown" id="rgm-vast-status">Checking configuration…</div>
+        <div class="rgm-status" data-tone="unknown" id="rgm-vast-status">Paste a key, or Find offers.</div>
         <hr class="rgm-section-divider" />
         <h4>Find offers</h4>
         <div class="rgm-filter-grid">
@@ -116,6 +121,12 @@ export function setup(ctx: SpindleFrontendContext) {
   const sStatus = drawer.root.querySelector("#rgm-vast-status") as HTMLDivElement | null;
   const sKey = drawer.root.querySelector(".rgm-vast-key") as HTMLInputElement | null;
   const askVastStatus = () => ctx.sendToBackend({ type: "vast_get_status" });
+  const banner = drawer.root.querySelector("#rgm-key-banner") as HTMLDivElement | null;
+  const paintBanner = (tone: "ok" | "bad" | "unknown", text: string) => {
+    if (!banner) return;
+    banner.dataset.tone = tone;
+    banner.textContent = text;
+  };
 
   drawer.root.querySelector(".rgm-save-url")?.addEventListener("click", () => {
     if (urlInput?.value.trim()) ctx.sendToBackend({ type: "set_gateway_url", url: urlInput.value.trim() });
@@ -224,9 +235,10 @@ export function setup(ctx: SpindleFrontendContext) {
         return;
       case "vast_get_status_result":
         if (sStatus) {
-          sStatus.dataset.tone = payload.configured ? "ok" : "bad";
+          sStatus.dataset.tone = payload.configured ? "ok" : "unknown";
           sStatus.textContent = payload.configured ? "Vast.ai key configured (enclave)." : "No Vast.ai key saved yet.";
         }
+        paintBanner(payload.configured ? "ok" : "bad", payload.configured ? "✓ Vast.ai key saved (enclave)" : "○ No Vast.ai key saved");
         return;
       case "vast_test_key_result":
         if (sStatus) {
@@ -242,15 +254,18 @@ export function setup(ctx: SpindleFrontendContext) {
             if (sKey) sKey.value = "";
             sStatus.dataset.tone = "ok";
             sStatus.textContent = "Key saved to the Secure Enclave.";
+            paintBanner("ok", "✓ Vast.ai key saved (enclave)");
           } else {
             sStatus.dataset.tone = "bad";
             sStatus.textContent = `Save failed: ${payload.error ?? "unknown error"}`;
+            paintBanner("bad", "○ No Vast.ai key saved");
           }
         }
         return;
       case "vast_clear_key_result":
         if (sKey) sKey.value = "";
         if (sStatus) { sStatus.dataset.tone = "bad"; sStatus.textContent = "Key cleared."; }
+        paintBanner("bad", "○ No Vast.ai key saved");
         return;
       case "vast_search_offers_result": {
         const box = drawer.root.querySelector(".rgm-offers");

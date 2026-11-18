@@ -234,13 +234,17 @@ async function searchVastOffers(apiKey: string, policy: OfferPolicyPayload = DEF
   const p = { ...DEFAULT_POLICY, ...policy };
   const body: Record<string, any> = {
     limit: p.limit,
-    type: "ondemand",
+    type: "on-demand",
     rented: { eq: p.excludeRented },
+    external: { eq: false },
+    verified: { eq: true },
+    rentable: { eq: true },
     gpu_name: { in: p.gpuNames },
     disk_space: { gte: p.minDiskGB },
     gpu_ram: { gte: Math.round(p.minVramGB * 1024) },
     cpu_ram: { gte: Math.round(p.minRamGB * 1024) },
     dph_total: { gte: p.minDphTotal ?? 0, lte: p.maxDphTotal },
+    allocated_storage: Math.max(8, p.minDiskGB ?? 8),
   };
   if (p.maxVramGB !== undefined) body.gpu_ram.lte = Math.round(p.maxVramGB * 1024);
   if (p.maxRamGB !== undefined) body.cpu_ram.lte = Math.round(p.maxRamGB * 1024);
@@ -269,7 +273,14 @@ async function searchVastOffers(apiKey: string, policy: OfferPolicyPayload = DEF
   const parsed: any = (() => {
     try { return JSON.parse(res.body); } catch { return {}; }
   })();
-  if (!parsed?.offers?.length) return [];
+  if (!res.ok || res.status !== 200) {
+    const detail = parsed?.msg ?? parsed?.detail ?? parsed?.error ?? `HTTP ${res.status}`;
+    throw new Error(`Vast.ai rejected the search query: ${detail}`);
+  }
+  if (!parsed?.offers?.length) {
+    spindle.log.info(`vast offers search returned 0 matches (status 200); policy=${JSON.stringify(policy)}`);
+    return [];
+  }
   return parsed.offers
     .slice()
     .sort((a: any, b: any) => (Number(a?.dph_total ?? Infinity) - Number(b?.dph_total ?? Infinity)))
