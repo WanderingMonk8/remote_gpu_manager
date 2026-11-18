@@ -143,12 +143,10 @@ export function validateWorkerProfile(raw: unknown): WorkerProfile {
   const lifecycle = p.lifecycle as Record<string, unknown> | undefined;
   if (!lifecycle) throw new Error("lifecycle must be an object");
   if (typeof lifecycle.autoStart !== "boolean") throw new Error("lifecycle.autoStart must be boolean");
-  if (lifecycle.idleMinutes !== null && ![5, 10, 15, 30].includes(lifecycle.idleMinutes as number)) {
-    if (lifecycle.idleMinutes === 0) {
-      throw new Error("lifecycle.idleMinutes cannot be 0; use null to disable");
-    } else if (typeof lifecycle.idleMinutes !== "number") {
-      throw new Error("lifecycle.idleMinutes must be one of 5, 10, 15, 30, or null");
-    }
+  const im = lifecycle.idleMinutes;
+  if (im !== null && ![5, 10, 15, 30].includes(im as number)) {
+    if (im === 0) throw new Error("lifecycle.idleMinutes cannot be 0; use null to disable");
+    throw new Error("lifecycle.idleMinutes must be one of 5, 10, 15, 30, or null");
   }
   if (typeof lifecycle.jobTimeoutSeconds !== "number" || lifecycle.jobTimeoutSeconds <= 0) {
     throw new Error("lifecycle.jobTimeoutSeconds must be a positive number");
