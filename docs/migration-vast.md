@@ -97,6 +97,6 @@ Not done yet: single-flight `ensureReady` on native request path (needs native a
 ## Live evidence (2026-11-18)
 
 - User-reported image generation from the unified Colab worker succeeded at **512 X 512** through Lumiverse (after the earlier 768x768/1024x1024 attempts failed with the provider connection-closed toast).
-- Not verified here as of this update: exact profile (MOSS vs Anima), steps config, and gallery persistence outcome. Reported by the owner on 2026-11-18.
+- Not verified here as of this update: profile MOSS SFT, 25 steps, 512x512; native gallery persistence confirmed by owner on 2026-11-18.
 - This localizes the earlier failure to resource/wall-clock pressure on the T4 and the memory-starved Lumiverse Space, not to authentication or transport; it does not change any Vast.ai decision.
 "
