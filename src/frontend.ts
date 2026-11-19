@@ -140,6 +140,7 @@ export function setup(ctx: SpindleFrontendContext) {
           <h5>Deploy offer <span class="rgm-deploy-id"></span></h5>
           <p class="rgm-note">Rents a real machine, billed by the hour until you stop or destroy it. No model is downloaded — this first deploy only proves the create → inspect → stop → destroy lifecycle and billing.</p>
           <label class="rgm-field"><span>Image</span><input class="rgm-deploy-image" type="text" spellcheck="false" value="yanwk/comfyui-boot:cu126-slim" /></label>
+          <label class="rgm-check"><input class="rgm-publish-port" type="checkbox" checked /><span>Publish ComfyUI (8188) as a direct port</span></label>
           <label class="rgm-field"><span>Boot profile</span>
             <select class="rgm-deploy-profile">
               <option value="lifecycle" selected>Lifecycle proof only (no downloads)</option>
@@ -249,6 +250,7 @@ export function setup(ctx: SpindleFrontendContext) {
   const NOTE_LIFECYCLE = "Rents a real machine, billed by the hour until you stop or destroy it. No model is downloaded — this first deploy only proves the create → inspect → stop → destroy lifecycle and billing.";
   const NOTE_FULL = "Rents a real machine, billed by the hour. On first boot the bootstrap downloads ≈28 GB (Anima Turbo/Aesthetic v1.1, MOSS INT8 ×2, encoders, Anima ref-adapter). ComfyUI stays up; generate only after the Logs show BOOTSTRAP_COMPLETE. The disk keeps all weights across stop/start (storage cost continues while stopped).";
   const deployFallback = drawer.root.querySelector(".rgm-deploy-fallback") as HTMLInputElement | null;
+  const deployPublishPort = drawer.root.querySelector(".rgm-publish-port") as HTMLInputElement | null;
   const deployFallbackPct = drawer.root.querySelector(".rgm-deploy-fallback-pct") as HTMLInputElement | null;
   const deployExisting = drawer.root.querySelector(".rgm-deploy-existing") as HTMLDivElement | null;
   const deployExistingCount = drawer.root.querySelector(".rgm-existing-count") as HTMLSpanElement | null;
@@ -385,6 +387,7 @@ export function setup(ctx: SpindleFrontendContext) {
       approved: true,
       allowMultiple: deployOverride?.checked === true,
       onstart: deployProfile?.value === "full" ? DEPLOY_ONSTART_FULL : undefined,
+      env: deployPublishPort?.checked === true ? "-p 8188" : undefined,
       target: {
         gpuName: deployTarget.gpu,
         numGpus: deployTarget.gpus,

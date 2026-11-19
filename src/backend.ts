@@ -455,6 +455,11 @@ spindle.onFrontendMessage(async (payload: any, userId?: string) => {
     const maxPricePerHour = Number(payload.maxPricePerHour);
     const label = typeof payload.label === "string" && payload.label.trim() ? payload.label.trim().slice(0, 64) : "lumiverse-remote-gpu";
     const onstart = typeof payload.onstart === "string" && payload.onstart.trim() ? payload.onstart.trim() : undefined;
+    const env = typeof payload.env === "string" && payload.env.trim() ? payload.env.trim() : undefined;
+    if (env && (env.length > 256 || !/^-/.test(env) || !/^-[a-zA-Z0-9_=.: -]*$/.test(env))) {
+      spindle.sendToFrontend({ type: "vast_deploy_offer_result", ok: false, error: "env must start with '-' and be ≤ 256 chars (e.g. -e KEY=VAL -p 8188)" }, userId);
+      return;
+    }
     if (onstart && onstart.length > 4048) {
       spindle.sendToFrontend({ type: "vast_deploy_offer_result", ok: false, error: "onstart must be ≤ 4048 characters" }, userId);
       return;
@@ -514,6 +519,7 @@ spindle.onFrontendMessage(async (payload: any, userId?: string) => {
       label,
       target_state: "running",
       ...(onstart ? { onstart } : {}),
+      ...(env ? { env } : {}),
     });
 
     // Ambiguous creates may have rented the machine — reconcile against the pre-flight
