@@ -326,11 +326,16 @@ spindle.onFrontendMessage(async (payload: any, userId?: string) => {
       spindle.sendToFrontend({ type: "vast_logs_instance_result", ok: false, error: "no Vast.ai key saved yet" }, userId);
       return;
     }
-    const res = await vastApi(apiKey, "PUT", `/api/v0/instances/request_logs/${id}/`, {});
-    const b: any = res.body;
-    const url = b?.result_url as string | undefined;
+    // vast returns the event/build log by default; the container's runtime stdout is under daemon_logs.
+    // Fetch daemon logs first — fall back to the plain build/event log if they're unavailable.
+    const requestLogs = async (body: Record<string, unknown>): Promise<string | undefined> => {
+      const r = await vastApi(apiKey, "PUT", `/api/v0/instances/request_logs/${id}/`, body);
+      const bb: any = r.body;
+      return bb?.result_url as string | undefined;
+    };
+    const url = (await requestLogs({ daemon_logs: "true" })) ?? (await requestLogs({}));
     if (!url) {
-      spindle.sendToFrontend({ type: "vast_logs_instance_result", ok: false, error: res.ok ? "vast returned no result_url yet — try again in a minute" : res.error ?? "logs request failed" }, userId);
+      spindle.sendToFrontend({ type: "vast_logs_instance_result", ok: false, error: "vast returned no result_url yet — try again in a minute" }, userId);
       return;
     }
     let text = "";
