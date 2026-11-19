@@ -320,9 +320,23 @@ export function setup(ctx: SpindleFrontendContext) {
   const deployExistingLimit = drawer.root.querySelector(".rgm-existing-limit") as HTMLSpanElement | null;
   const deployExistingList = drawer.root.querySelector(".rgm-existing-list") as HTMLSpanElement | null;
   const deployOverride = drawer.root.querySelector(".rgm-deploy-override") as HTMLInputElement | null;
+  const loadBlockedHostsLocal = (): number[] => {
+    try {
+      const raw = (typeof localStorage !== "undefined" ? localStorage.getItem("lumiverse-blocked-hosts") : null) || "[]";
+      const arr = JSON.parse(raw);
+      return Array.isArray(arr) ? arr.map(Number).filter((n) => Number.isInteger(n) && n > 0) : [];
+    } catch { return []; }
+  };
+  const saveBlockedHostsLocal = (hosts: number[]) => {
+    try {
+      if (typeof localStorage === "undefined") return;
+      localStorage.setItem("lumiverse-blocked-hosts", JSON.stringify([...new Set(hosts)]));
+    } catch { /* ignore */ }
+  };
+
   let lastInstances: any[] = [];
   let maxInstances = 1;
-  let blockedMachineIds = new Set<number>();
+  let blockedMachineIds = new Set<number>(loadBlockedHostsLocal());
   const askLimits = () => ctx.sendToBackend({ type: "vast_get_limits" });
   const askFailedHosts = () => ctx.sendToBackend({ type: "vast_list_failed_hosts" });
   const limitInput = drawer.root.querySelector(".rgm-limit-input") as HTMLInputElement | null;
@@ -697,7 +711,8 @@ export function setup(ctx: SpindleFrontendContext) {
         if (payload.ok) {
           const mid = Number(payload.machineId) || 0;
           if (mid > 0) blockedMachineIds.add(mid);
-          if (blacklistCount) blacklistCount.textContent = String(payload.count ?? blockedMachineIds.size);
+          saveBlockedHostsLocal([...blockedMachineIds]);
+          if (blacklistCount) blacklistCount.textContent = String(blockedMachineIds.size);
           if (instStatus) { instStatus.dataset.tone = "ok"; instStatus.textContent = `Host m${mid} blocked — the deploy race will never land there again.`; }
         } else if (instStatus) {
           instStatus.dataset.tone = "bad";
@@ -705,11 +720,13 @@ export function setup(ctx: SpindleFrontendContext) {
         }
         return;
       case "vast_list_failed_hosts_result":
-        blockedMachineIds = new Set((payload.hosts ?? []).map(Number).filter((n: number) => n > 0));
+        blockedMachineIds = new Set<number>([...(payload.hosts ?? []).map((n: any) => Number(n)).filter((n: number) => n > 0), ...loadBlockedHostsLocal()]);
+        saveBlockedHostsLocal([...blockedMachineIds]);
         if (blacklistCount) blacklistCount.textContent = String(blockedMachineIds.size);
         return;
       case "vast_clear_failed_hosts_result":
         blockedMachineIds = new Set();
+        saveBlockedHostsLocal([]);
         if (blacklistCount) blacklistCount.textContent = "0";
         if (instStatus) { instStatus.dataset.tone = "ok"; instStatus.textContent = "Host blocklist cleared."; }
         return;
@@ -833,6 +850,8 @@ export function setup(ctx: SpindleFrontendContext) {
   askLimits();
   askFailedHosts();
   askModelSelection();
+  // Merge frontend localStorage blocklist into backend durable storage (runs after vast_list_failed_hosts resolves or not).
+  ctx.sendToBackend({ type: "vast_sync_blocked_hosts", machines: loadBlockedHostsLocal() });
 
   return () => {
     unsub();

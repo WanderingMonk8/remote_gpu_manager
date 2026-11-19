@@ -292,6 +292,16 @@ async function handleFrontendMessage(payload: any, userId?: string): Promise<voi
     spindle.sendToFrontend({ type: "vast_blacklist_host_result", ok: true, machineId: Math.floor(payload.machineId), count: hosts.length }, userId);
     return;
   }
+  // Push the frontend's localStorage blocklist into backend durable storage so both tiers agree across reinstalls.
+  if (payload?.type === "vast_sync_blocked_hosts" && Array.isArray(payload.machines)) {
+    const incoming = payload.machines.map(Number).filter((n) => Number.isInteger(n) && n > 0);
+    const current = await getFailedHosts();
+    const merged = [...new Set([...current, ...incoming])].slice(0, ABSOLUTE_MAX_FAILED_HOSTS);
+    await durableWriteJson(FAILED_HOSTS_KEY, { hosts: merged });
+    spindle.sendToFrontend({ type: "vast_sync_blocked_hosts_result", ok: true, count: merged.length }, userId);
+    return;
+  }
+
   if (payload?.type === "vast_list_failed_hosts") {
     const hosts = await getFailedHosts();
     spindle.sendToFrontend({ type: "vast_list_failed_hosts_result", ok: true, hosts }, userId);
