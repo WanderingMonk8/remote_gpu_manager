@@ -560,7 +560,7 @@ spindle.onFrontendMessage(async (payload: any, userId?: string) => {
     }
     // image: dockerhub-style or registry path with optional :tag — no URLs, credentials or ports
     if (!/^[a-z0-9]+([._-][a-z0-9]+)*(\/[a-z0-9]+([._-][a-z0-9]+)*)*(:[A-Za-z0-9][A-Za-z0-9._-]{0,127})?$/.test(image) || image.length < 3 || image.length > 400) {
-      spindle.sendToFrontend({ type: "vast_deploy_offer_result", ok: false, error: "image must be a plain image reference like yanwk/comfyui-boot:cu126-slim" }, userId);
+      spindle.sendToFrontend({ type: "vast_deploy_offer_result", ok: false, error: "image must be a plain image reference like vastai/pytorch:cuda-13.0.3-auto" }, userId);
       return;
     }
     if (!Number.isFinite(diskGB) || diskGB < 8 || diskGB > 200) {
@@ -598,7 +598,7 @@ spindle.onFrontendMessage(async (payload: any, userId?: string) => {
       disk: diskGB,
       label,
       target_state: "running",
-      // vast's enum exposes ssh_direct for raw-TCP direct port access; yanwk's sshd-less image needs it
+      // vast's enum exposes ssh_direct for raw-TCP direct port access; this image has no sshd by default
       runtype: "ssh_direct",
       ...(onstart ? { onstart } : {}),
       ...(parsedEnv ? { env: parsedEnv } : {}),

@@ -167,7 +167,7 @@ export function setup(ctx: SpindleFrontendContext) {
         <div class="rgm-deploy" hidden>
           <h5>Deploy offer <span class="rgm-deploy-id"></span></h5>
           <p class="rgm-note">Rents a real machine, billed by the hour until you stop or destroy it. No model is downloaded — this first deploy only proves the create → inspect → stop → destroy lifecycle and billing.</p>
-          <label class="rgm-field"><span>Image</span><input class="rgm-deploy-image" type="text" spellcheck="false" value="yanwk/comfyui-boot:cu126-slim" /></label>
+          <label class="rgm-field"><span>Image</span><input class="rgm-deploy-image" type="text" spellcheck="false" value="vastai/pytorch:cuda-13.0.3-auto" /></label>
           <label class="rgm-check"><input class="rgm-publish-port" type="checkbox" checked /><span>Publish ComfyUI (8188) as a direct port</span></label>
           <label class="rgm-check"><input class="rgm-lifecycle-only" type="checkbox" /><span>Lifecycle proof only — no model downloads (empty ComfyUI, still publishes 8188)</span></label>
           <label class="rgm-check"><input class="rgm-probe-conn" type="checkbox" /><span>Connectivity probe — no models, no ComfyUI, just a bare HTTP server on 8188</span></label>
@@ -307,7 +307,7 @@ export function setup(ctx: SpindleFrontendContext) {
   let lastSearchAt: number | null = null;
   const searchAge = drawer.root.querySelector(".rgm-search-age") as HTMLDivElement | null;
   const offerAgeMinutes = () => (lastSearchAt == null ? null : Math.floor((Date.now() - lastSearchAt) / 60000));
-  const DEPLOY_ONSTART_FULL = `python3 -c "import urllib.request;exec(urllib.request.urlopen('https://raw.githubusercontent.com/WanderingMonk8/remote_gpu_manager/feat/vast-first/worker/bootstrap.py').read())"`;
+  const DEPLOY_ONSTART_FULL = `python3 -c "import urllib.request;exec(urllib.request.urlopen('https://raw.githubusercontent.com/WanderingMonk8/remote_gpu_manager/feat/vast-first/worker/bootstrap_vastai.py').read())"`;
   let deployTarget: { id: number; dph: number; gpu: string; vramGB: string; gpus: number; machineId: number } | null = null;
   const deployFallback = drawer.root.querySelector(".rgm-deploy-fallback") as HTMLInputElement | null;
   const deployNote = drawer.root.querySelector(".rgm-deploy > .rgm-note") as HTMLParagraphElement | null;
