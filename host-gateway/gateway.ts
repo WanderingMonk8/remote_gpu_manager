@@ -331,7 +331,11 @@ const server = Bun.serve<WsData>({
       });
       upstream.addEventListener("message", (event) => {
         try {
-          ws.send(event.data as string | Uint8Array);
+          const data = event.data as string | Uint8Array;
+          const bytes = typeof data === "string" ? new TextEncoder().encode(data).length : (data?.byteLength ?? 0);
+          const preview = typeof data === "string" ? data.slice(0, 80) : `binary ${bytes}B`;
+          console.log(`[rgm-gateway] upstream ws message clientId=${clientId} bytes=${bytes} preview=${preview}`);
+          ws.send(data);
         } catch {
           /* client gone */
         }
