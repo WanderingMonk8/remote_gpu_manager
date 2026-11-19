@@ -301,8 +301,19 @@ spindle.onFrontendMessage(async (payload: any, userId?: string) => {
     return;
   }
 
+  // Shared ask→instance creation step (single offer). Returns structured verdict.
+  const vastCreateOnOffer = async (apiKey: string, offerId: number, body: Record<string, unknown>) => {
+    const res = await vastApi(apiKey, "PUT", `/api/v0/asks/${offerId}/`, body);
+    const b: any = res.body;
+    const success = res.ok && b?.success !== false;
+    const newId = Number(b?.new_contract ?? b?.instance_id ?? b?.id ?? 0) || null;
+    const msg = String(res.error ?? b?.msg ?? b?.error ?? "Vast.ai refused to create the instance");
+    return { success, newId, msg };
+  };
+
   // Deploy an offer as a new PAID instance. Frontend confirm panel must pass approved:true and a price cap.
-  // Validates hard limits here too; the user's explicit approval is what authorizes spend.
+  // If payload.fallback.enabled, a failed create races onto freshly searched similar offers
+  // (same GPU, >= target VRAM/count, price <= target x (1 + pct/100)), cheapest first.
   if (payload?.type === "vast_deploy_offer") {
     if (payload.approved !== true) {
       spindle.sendToFrontend({ type: "vast_deploy_offer_result", ok: false, error: "deploy requires approved:true (frontend must get explicit user approval first)" }, userId);
@@ -318,6 +329,16 @@ spindle.onFrontendMessage(async (payload: any, userId?: string) => {
       spindle.sendToFrontend({ type: "vast_deploy_offer_result", ok: false, error: "onstart must be ≤ 4048 characters" }, userId);
       return;
     }
+    const fbRaw = (payload.fallback ?? {}) as any;
+    const fbEnabled = fbRaw.enabled === true;
+    const fbPctNum = Number(fbRaw.fluctuationPct);
+    const fbPct = Number.isFinite(fbPctNum) ? Math.min(50, Math.max(1, fbPctNum)) : 15;
+    const tgt = (payload.target ?? {}) as any;
+    const targetGpuName = typeof tgt.gpuName === "string" ? tgt.gpuName.trim().replace(/_+/g, " ").replace(/\s+/g, " ") : "";
+    const targetNumGpus = Math.max(1, Math.floor(Number(tgt.numGpus) || 1));
+    const targetVramGB = Math.max(0, Number(tgt.vramGB) || 0);
+    const targetDph = Number(tgt.dphTotal);
+    const targetKnown = !!targetGpuName && Number.isFinite(targetDph) && targetDph > 0;
     if (!Number.isInteger(offerId) || offerId <= 0) {
       spindle.sendToFrontend({ type: "vast_deploy_offer_result", ok: false, error: "offerId must be a positive integer" }, userId);
       return;
@@ -340,24 +361,74 @@ spindle.onFrontendMessage(async (payload: any, userId?: string) => {
       spindle.sendToFrontend({ type: "vast_deploy_offer_result", ok: false, error: "no Vast.ai key saved yet" }, userId);
       return;
     }
-    const res = await vastApi(apiKey, "PUT", `/api/v0/asks/${offerId}/`, {
+    const makeBody = (): Record<string, unknown> => ({
       image,
       disk: diskGB,
       label,
       target_state: "running",
       ...(onstart ? { onstart } : {}),
     });
-    const b: any = res.body;
-    const success = res.ok && b?.success !== false;
-    const newId = Number(b?.new_contract ?? b?.instance_id ?? b?.id ?? 0) || null;
-    spindle.log.info(`vast_deploy_offer offer=${offerId} image=${image} diskGB=${diskGB} maxPricePerHour=${maxPricePerHour} success=${success} new_contract=${newId ?? "-"}`);
-    spindle.sendToFrontend({
-      type: "vast_deploy_offer_result",
-      ok: success,
-      offerId,
-      instanceId: newId,
-      error: success ? undefined : res.error ?? b?.msg ?? b?.error ?? "Vast.ai refused to create the instance",
-    }, userId);
+
+    const emitOk = (instanceId: number | null, deployedOfferId: number, dphTotal: number | undefined, attempts: number, fallbackUsed: boolean) => {
+      spindle.log.info(`vast_deploy_offer offer=${offerId} deployed=${deployedOfferId} image=${image} diskGB=${diskGB} maxPricePerHour=${maxPricePerHour} attempts=${attempts} fallback=${fallbackUsed} new_contract=${instanceId ?? "-"}`);
+      spindle.sendToFrontend({
+        type: "vast_deploy_offer_result",
+        ok: true,
+        offerId,
+        instanceId,
+        deployedOfferId,
+        dphTotal,
+        attempts,
+        fallbackUsed,
+      }, userId);
+    };
+    const emitFail = (error: string, attempts: number) => {
+      spindle.sendToFrontend({ type: "vast_deploy_offer_result", ok: false, offerId, error, attempts }, userId);
+    };
+
+    // 1) Requested offer first.
+    const first = await vastCreateOnOffer(apiKey, offerId, makeBody());
+    if (first.success) {
+      emitOk(first.newId, offerId, targetKnown ? targetDph : undefined, 1, false);
+      return;
+    }
+    spindle.log.info(`vast_deploy_offer offer=${offerId} failed (${first.msg}) fallbackEnabled=${fbEnabled} targetKnown=${targetKnown}`);
+    if (!fbEnabled || !targetKnown) {
+      emitFail(first.msg, 1);
+      return;
+    }
+
+    // 2) Fallback race: fresh similar offers, cheapest first, strictly within +fbPct% of the TARGET offer's price.
+    const ceiling = Math.min(2.0, targetDph * (1 + fbPct / 100));
+    let attempts = 1;
+    let lastMsg = first.msg;
+    try {
+      const candidates = (
+        await searchVastOffers(apiKey, {
+          gpuNames: [targetGpuName],
+          minVramGB: Math.floor(targetVramGB),
+          maxDphTotal: Math.round(ceiling * 1000) / 1000,
+          minDphTotal: 0,
+          limit: 8,
+          excludeRented: true,
+        } as any) as any[]
+      )
+        .filter((o: any) => Number(o?.id) > 0 && Number(o?.id) !== offerId)
+        .map((o: any) => ({ id: Number(o.id), dphTotal: Number(o.dphTotal) || 0, gpuCount: Number(o.gpuCount ?? 1) || 1 }))
+        .filter((o) => o.gpuCount === targetNumGpus) // keep the same GPU count as the target offer
+        .sort((a, b) => a.dphTotal - b.dphTotal);
+      for (const cand of candidates) {
+        const a = await vastCreateOnOffer(apiKey, cand.id, makeBody());
+        attempts++;
+        lastMsg = a.msg;
+        spindle.log.info(`vast_deploy_offer fallback attempt=${attempts} offer=${cand.id} price=${cand.dphTotal} ok=${a.success} msg=${a.msg}`);
+        if (a.success) { emitOk(a.newId, cand.id, cand.dphTotal, attempts, true); return; }
+        if (/credit|balance|permission|auth|invalid user key/i.test(a.msg)) break; // account-level — further attempts are pointless
+      }
+      emitFail(`no available ${targetGpuName}×${targetNumGpus} within +${fbPct}% of $${targetDph.toFixed(3)}/hr (tried ${attempts} offer(s)); last error: ${lastMsg}`, attempts);
+    } catch (err) {
+      emitFail(`fallback search failed: ${err instanceof Error ? err.message : String(err)}`, attempts);
+    }
     return;
   }
 

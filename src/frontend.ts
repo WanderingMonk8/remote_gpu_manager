@@ -51,6 +51,8 @@ export function setup(ctx: SpindleFrontendContext) {
     .rgm-inst b { font-size: 12px; }
     .rgm-inst span { font-size: 11px; color: var(--lumiverse-text-muted); }
     .rgm-inst button.rgm-destroy-armed { border-color: var(--lumiverse-error); background: var(--lumiverse-error); color: #fff; font-weight: 700; }
+    .rgm-fallback-pct-wrap { display: inline-flex; align-items: center; gap: 6px; }
+    .rgm-fallback-pct-wrap input { width: 56px; padding: 4px 6px; border: 1px solid var(--lumiverse-border); border-radius: 6px; background: var(--lumiverse-fill); color: var(--lumiverse-text); font: inherit; font-size: 12px; }
   `;
   const removeStyle = ctx.dom.addStyle(STYLES);
 
@@ -135,15 +137,18 @@ export function setup(ctx: SpindleFrontendContext) {
           <label class="rgm-field"><span>Boot profile</span>
             <select class="rgm-deploy-profile">
               <option value="lifecycle" selected>Lifecycle proof only (no downloads)</option>
-              <option value="full">Full worker — Anima + MOSS (≈45 GB)</option>
+              <option value="full">Full worker — Anima + MOSS (≈28 GB)</option>
             </select>
+          </label>
+          <label class="rgm-check"><input class="rgm-deploy-fallback" type="checkbox" /><span>If this offer is taken, auto-deploy a similar one within</span>
+            <span class="rgm-fallback-pct-wrap"><input class="rgm-deploy-fallback-pct" type="number" value="15" min="5" max="50" step="1" />% of its price</span>
           </label>
           <div class="rgm-filter-grid">
             <label class="rgm-field"><span>Disk (GB)</span><input class="rgm-deploy-disk" type="number" value="100" min="8" max="200" step="1" /></label>
             <label class="rgm-field"><span>Max price ($/hr)</span><input class="rgm-deploy-cap" type="number" value="0.25" min="0.01" max="2" step="0.01" /></label>
           </div>
           <div class="rgm-deploy-terms">Offer <b class="rgm-deploy-summary"></b> · your cap: <b class="rgm-deploy-cap-echo"></b></div>
-          <label class="rgm-check"><input class="rgm-deploy-approve" type="checkbox" /><span>I approve renting this machine at the displayed price. Billing starts immediately and continues until I stop or destroy it.</span></label>
+          <label class="rgm-check"><input class="rgm-deploy-approve" type="checkbox" /><span class="rgm-approve-label">I approve renting this machine at the displayed price. Billing starts immediately and continues until I stop or destroy it.</span></label>
           <div class="rgm-actions">
             <button class="rgm-deploy-go rgm-danger" type="button" disabled>Deploy — start billing</button>
             <button class="rgm-deploy-cancel" type="button">Cancel</button>
@@ -220,11 +225,18 @@ export function setup(ctx: SpindleFrontendContext) {
   const searchAge = drawer.root.querySelector(".rgm-search-age") as HTMLDivElement | null;
   const offerAgeMinutes = () => (lastSearchAt == null ? null : Math.floor((Date.now() - lastSearchAt) / 60000));
   const DEPLOY_ONSTART_FULL = `python3 -c "import urllib.request;exec(urllib.request.urlopen('https://raw.githubusercontent.com/WanderingMonk8/remote_gpu_manager/feat/vast-first/worker/bootstrap.py').read())"`;
-  let deployTarget: { id: number; dph: number; gpu: string; vramGB: string } | null = null;
+  let deployTarget: { id: number; dph: number; gpu: string; vramGB: string; gpus: number } | null = null;
   const deployProfile = drawer.root.querySelector(".rgm-deploy-profile") as HTMLSelectElement | null;
   const deployNote = drawer.root.querySelector(".rgm-deploy > .rgm-note") as HTMLParagraphElement | null;
   const NOTE_LIFECYCLE = "Rents a real machine, billed by the hour until you stop or destroy it. No model is downloaded — this first deploy only proves the create → inspect → stop → destroy lifecycle and billing.";
-  const NOTE_FULL = "Rents a real machine, billed by the hour. On first boot the bootstrap downloads ≈45 GB (Anima + MOSS INT8 + encoders + Anima ref-adapter). ComfyUI stays up; generate only after the Logs show BOOTSTRAP_COMPLETE. The disk keeps all weights across stop/start (storage cost continues while stopped).";
+  const NOTE_FULL = "Rents a real machine, billed by the hour. On first boot the bootstrap downloads ≈28 GB (Anima Turbo/Aesthetic v1.1, MOSS INT8 ×2, encoders, Anima ref-adapter). ComfyUI stays up; generate only after the Logs show BOOTSTRAP_COMPLETE. The disk keeps all weights across stop/start (storage cost continues while stopped).";
+  const deployFallback = drawer.root.querySelector(".rgm-deploy-fallback") as HTMLInputElement | null;
+  const deployFallbackPct = drawer.root.querySelector(".rgm-deploy-fallback-pct") as HTMLInputElement | null;
+  const approveLabel = drawer.root.querySelector(".rgm-approve-label") as HTMLSpanElement | null;
+  const fallbackCeiling = () => {
+    const pct = Math.min(50, Math.max(1, Number(deployFallbackPct?.value) || 15));
+    return deployTarget ? deployTarget.dph * (1 + pct / 100) : 0;
+  };
   const deployPanel = drawer.root.querySelector(".rgm-deploy") as HTMLDivElement | null;
   const deployImage = drawer.root.querySelector(".rgm-deploy-image") as HTMLInputElement | null;
   const deployDisk = drawer.root.querySelector(".rgm-deploy-disk") as HTMLInputElement | null;
@@ -242,7 +254,14 @@ export function setup(ctx: SpindleFrontendContext) {
     if (deployNote) deployNote.textContent = deployProfile?.value === "full" ? NOTE_FULL : NOTE_LIFECYCLE;
     const cap = Number(deployCap?.value ?? 0);
     if (deploySummary && deployTarget) {
-      deploySummary.textContent = `#${deployTarget.id} · ${deployTarget.gpu} · $${deployTarget.dph.toFixed(3)}/hr · ${deployTarget.vramGB} GiB`;
+      const fbOn = deployFallback?.checked === true;
+      const ceil = fallbackCeiling();
+      deploySummary.textContent = `#${deployTarget.id} · ${deployTarget.gpu} × ${deployTarget.gpus} · $${deployTarget.dph.toFixed(3)}/hr · ${deployTarget.vramGB} GiB${fbOn ? ` · fallback ≤ ${Math.min(50, Math.max(1, Number(deployFallbackPct?.value) || 15))}% (≤$${ceil.toFixed(3)}/hr)` : ""}`;
+      if (approveLabel) {
+        approveLabel.textContent = fbOn
+          ? `I approve renting this machine — or a similar offer within +${Math.min(50, Math.max(1, Number(deployFallbackPct?.value) || 15))}% of its price (up to $${ceil.toFixed(3)}/hr) if it's taken. Billing starts immediately and continues until I stop or destroy it.`
+          : "I approve renting this machine at the displayed price. Billing starts immediately and continues until I stop or destroy it.";
+      }
     }
     if (deployCapEcho) deployCapEcho.textContent = Number.isFinite(cap) ? `$${cap.toFixed(2)}/hr` : "-";
     const diskGB = Number(deployDisk?.value ?? 0);
@@ -279,11 +298,16 @@ export function setup(ctx: SpindleFrontendContext) {
       dph: Number(btn.dataset.dph ?? 0),
       gpu: btn.dataset.gpu ?? "?",
       vramGB: btn.dataset.vram ?? "?",
+      gpus: Number(btn.dataset.gpus ?? 1) || 1,
     });
   });
-  for (const el of [deployImage, deployDisk, deployCap]) el?.addEventListener("input", paintDeploy);
+  for (const el of [deployImage, deployDisk, deployCap, deployFallback, deployFallbackPct]) el?.addEventListener("input", paintDeploy);
   deployApprove?.addEventListener("change", paintDeploy);
-  deployProfile?.addEventListener("change", paintDeploy);
+  deployFallback?.addEventListener("change", paintDeploy);
+  deployProfile?.addEventListener("change", () => {
+    if (deployProfile.value === "full" && deployDisk && deployDisk.value === "100") deployDisk.value = "60"; // slim manifest now
+    paintDeploy();
+  });
   drawer.root.querySelector(".rgm-deploy-cancel")?.addEventListener("click", closeDeploy);
   deployGo?.addEventListener("click", () => {
     if (!deployTarget || deployApprove?.checked !== true) return;
@@ -293,11 +317,21 @@ export function setup(ctx: SpindleFrontendContext) {
       type: "vast_deploy_offer",
       offerId: deployTarget.id,
       image: (deployImage?.value ?? "").trim(),
-      diskGB: Number(deployDisk?.value ?? 100),
+      diskGB: Number(deployDisk?.value ?? 60),
       maxPricePerHour: Number(deployCap?.value ?? 0.25),
       label: "lumiverse-remote-gpu",
       approved: true,
       onstart: deployProfile?.value === "full" ? DEPLOY_ONSTART_FULL : undefined,
+      target: {
+        gpuName: deployTarget.gpu,
+        numGpus: deployTarget.gpus,
+        vramGB: Number(deployTarget.vramGB) || 24,
+        dphTotal: deployTarget.dph,
+      },
+      fallback: {
+        enabled: deployFallback?.checked === true,
+        fluctuationPct: Math.min(50, Math.max(5, Number(deployFallbackPct?.value) || 15)),
+      },
     });
   });
 
@@ -510,7 +544,8 @@ export function setup(ctx: SpindleFrontendContext) {
       }
       case "vast_deploy_offer_result": {
         if (payload.ok) {
-          if (deployStatus) { deployStatus.dataset.tone = "ok"; deployStatus.textContent = `Deployed! Instance #${payload.instanceId ?? "?"} is booting. Refresh My instances to see it (status transitions take ~30–60s).`; }
+          const via = payload.fallbackUsed ? `Offer #${payload.offerId} was taken — deployed #${payload.deployedOfferId}${payload.dphTotal != null ? ` at $${Number(payload.dphTotal).toFixed(3)}/hr` : ""} in ${payload.attempts ?? "?"} attempt(s)` : `Instance #${payload.instanceId ?? "?"} is booting`;
+          if (instStatus) { instStatus.dataset.tone = "ok"; instStatus.textContent = `${via}. Refresh My instances — transitions take ~30–60s.`; }
           closeDeploy();
           askInstances();
         } else {
@@ -539,7 +574,7 @@ export function setup(ctx: SpindleFrontendContext) {
               <div class="rgm-offer">
                 <div class="rgm-offer-row">
                   <div><b>Offer #${o.id}</b> · ${String(o.gpuName ?? "")} × ${o.gpuCount ?? 1} · ${((o.vramMB ?? 0) / 1024).toFixed(1)} GiB</div>
-                  <button class="rgm-deploy-offer" type="button" data-id="${o.id}" data-dph="${Number(o.dphTotal ?? 0)}" data-gpu="${escapeHtml(String(o.gpuName ?? ""))}" data-vram="${((o.vramMB ?? 0) / 1024).toFixed(1)}">Deploy</button>
+                  <button class="rgm-deploy-offer" type="button" data-id="${o.id}" data-dph="${Number(o.dphTotal ?? 0)}" data-gpu="${escapeHtml(String(o.gpuName ?? ""))}" data-vram="${((o.vramMB ?? 0) / 1024).toFixed(1)}" data-gpus="${o.gpuCount ?? 1}">Deploy</button>
                 </div>
                 <span>${((o.ramMB ?? 0) / 1024).toFixed(0)} GB RAM · ${o.diskGB} GB disk · ${String(o.geolocation ?? "-")} · reliability ${(o.reliability ?? 0).toFixed(3)}</span>
                 <div class="rgm-price">$${Number(o.dphTotal ?? 0).toFixed(3)}/hr</div>

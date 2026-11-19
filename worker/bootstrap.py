@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-LumiverSE Vast.ai worker bootstrap (v1 — notebook parity, minus tunnel).
+LumiverSE Vast.ai worker bootstrap (v2 — disk-optimized manifest).
 
 Runs on the vast.ai host via the instance `onstart` hook, ALONGSIDE the image
 entrypoint (yanwk/comfyui-boot:cu130-slim starts ComfyUI normally). Normal VRAM
@@ -9,10 +9,9 @@ mode is the default — no --lowvram/--novram flags are passed anywhere.
 Idempotent: safe to re-run on every boot. Per-file: skips downloads when the
 target file already exists (>100 MB). A marker file ends the work early.
 
-Downloads (~45 GB, notebook parity, no Anima previews):
+Downloads (≈28 GB):
   Anima (circlestone-labs/Anima, split_files/):
-    diffusion_models: anima-turbo-v1.1, anima-turbo-v1.0, anima-base-v1.0,
-      anima-aesthetic-v1.0, anima-aesthetic-v1.0b, anima-aesthetic-v1.1  (4.18 GB each)
+    diffusion_models: anima-turbo-v1.1, anima-aesthetic-v1.1            (4.18 GB each)
     text_encoders:    qwen_3_06b_base.safetensors (1.19 GB, CLIP type stable_diffusion)
     vae:              qwen_image_vae.safetensors  (0.25 GB)
   MOSS (Comfy-Org/MOSS-Image):
@@ -36,7 +35,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-MARKER = Path("/root/.lumiverse-bootstrap-v1.complete")
+MARKER = Path("/root/.lumiverse-bootstrap-v2.complete")
 MODELS = Path("/root/ComfyUI/models")
 CACHE_DIR = Path("/root/.cache/lumiverse-bootstrap")
 CUSTOM_NODES = Path("/root/ComfyUI/custom_nodes")
@@ -92,7 +91,7 @@ def main() -> int:
         print("BOOTSTRAP_COMPLETE", flush=True)
         return 0
 
-    log("start (notebook parity v1, normal VRAM)")
+    log("start (v2 disk-optimized, normal VRAM)")
     for d in ("diffusion_models", "text_encoders", "vae", "loras"):
         (MODELS / d).mkdir(parents=True, exist_ok=True)
 
@@ -108,10 +107,7 @@ def main() -> int:
     ok = True
     ANIMA = "circlestone-labs/Anima"
     for ckpt in [
-        "anima-turbo-v1.1.safetensors", "anima-turbo-v1.0.safetensors",
-        "anima-base-v1.0.safetensors",
-        "anima-aesthetic-v1.0.safetensors", "anima-aesthetic-v1.0b.safetensors",
-        "anima-aesthetic-v1.1.safetensors",
+        "anima-turbo-v1.1.safetensors", "anima-aesthetic-v1.1.safetensors",
     ]:
         ok &= fetch(ANIMA, f"split_files/diffusion_models/{ckpt}", MODELS / "diffusion_models" / ckpt)
     ok &= fetch(ANIMA, "split_files/text_encoders/qwen_3_06b_base.safetensors", MODELS / "text_encoders" / "qwen_3_06b_base.safetensors")
