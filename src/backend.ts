@@ -20,24 +20,35 @@ declare const spindle: import("lumiverse-spindle-types").SpindleAPI;
 
 const DEFAULT_GATEWAY_URL = "http://127.0.0.1:8189";
 const ENCLAVE_KEY = "vast.api_key";
-// Extension-scoped storage (spindle.storage) is wiped on reinstall — durable user state lives in spindle.userStorage (backed by the Space bucket).
-// One-time migration: if userStorage is empty but the extension-scoped file exists, copy it over.
+// Redundant persistence — userStorage (survives reinstall) preferred, but extension storage is the
+// proven fallback; if both throw we keep going with in-memory defaults rather than killing the worker.
 async function durableReadJson<T>(path: string, fallback: T): Promise<T> {
   try {
     const u: any = await spindle.userStorage.getJson<T | null>(path, { fallback: null as any });
     if (u !== null && u !== undefined) return u as T;
-  } catch { /* ignore */ }
+  } catch (err) {
+    spindle.log?.info?.(`durableReadJson userStorage failed (${path}): ${String(err)}`);
+  }
   try {
     const legacy: any = await spindle.storage.getJson<T | null>(path, { fallback: null as any });
-    if (legacy !== null && legacy !== undefined) {
-      try { await spindle.userStorage.setJson(path, legacy); } catch { /* best-effort */ }
-      return legacy as T;
-    }
-  } catch { /* ignore */ }
+    if (legacy !== null && legacy !== undefined) return legacy as T;
+  } catch (err) {
+    spindle.log?.info?.(`durableReadJson storage failed (${path}): ${String(err)}`);
+  }
   return fallback;
 }
 async function durableWriteJson(path: string, value: unknown): Promise<void> {
-  await spindle.userStorage.setJson(path, value);
+  try {
+    await spindle.userStorage.setJson(path, value);
+    return;
+  } catch (err) {
+    spindle.log?.info?.(`durableWriteJson userStorage failed (${path}): ${String(err)}`);
+  }
+  try {
+    await spindle.storage.setJson(path, value);
+  } catch (err) {
+    spindle.log?.info?.(`durableWriteJson storage failed (${path}): ${String(err)}`);
+  }
 }
 const FAILED_HOSTS_KEY = "failed-hosts.json";
 const ABSOLUTE_MAX_FAILED_HOSTS = 256;
@@ -235,6 +246,19 @@ async function vastListInstances(apiKey: string) {
 }
 
 spindle.onFrontendMessage(async (payload: any, userId?: string) => {
+  try {
+    await handleFrontendMessage(payload, userId);
+  } catch (err) {
+    // Never let an unhandled rejection kill the runtime — surface it instead.
+    const msg = err instanceof Error ? (err.stack ?? err.message) : String(err);
+    spindle.log?.info?.(`backend handler error (${payload?.type ?? "?"}): ${msg}`);
+    try {
+      spindle.sendToFrontend({ type: "backend_error", requestType: payload?.type ?? null, error: msg }, userId);
+    } catch { /* last-ditch: even sendToFrontend can fail; swallow */ }
+  }
+});
+void handleFrontendMessage;
+async function handleFrontendMessage(payload: any, userId?: string): Promise<void> {
   if (payload?.type === "set_gateway_url" && typeof payload.url === "string") {
     const url = payload.url.trim().replace(/\/+$/, "");
     if (!/^https?:\/\/[A-Za-z0-9._:[\]-]+$/.test(url)) {
@@ -722,7 +746,10 @@ spindle.onFrontendMessage(async (payload: any, userId?: string) => {
     }
     try {
       const policy = normalizeOfferPolicy(payload.policy);
-      const offers = await searchVastOffers(apiKey, policy);
+      const excludeMachineIds = await getFailedHosts();
+      if (excludeMachineIds.length) spindle.log.info(`vast_search_offers excluding ${excludeMachineIds.length} blacklisted host(s)`);
+      const policyWithExclusions = { ...policy, excludeMachineIds };
+      const offers = await searchVastOffers(apiKey, policyWithExclusions);
       spindle.sendToFrontend({ type: "vast_search_offers_result", ok: true, offers, policy }, userId);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -731,7 +758,9 @@ spindle.onFrontendMessage(async (payload: any, userId?: string) => {
     }
     return;
   }
-});
+  // Unknown message — log and stay alive.
+  spindle.log?.info?.(`unhandled frontend message type: ${payload?.type}`);
+}
 
 export interface OfferPolicyPayload {
   maxDphTotal?: number;
