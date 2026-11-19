@@ -177,7 +177,8 @@ export function setup(ctx: SpindleFrontendContext) {
           <span>Max concurrent instances</span>
           <input class="rgm-limit-input" type="number" min="1" max="8" value="1" />
           <button class="rgm-limit-save rgm-primary" type="button">Save limit</button>
-          <span class="rgm-limit-note">Deploys are refused above this. Default 1 — raise only if you intentionally run more; each bills per hour.</span>
+          <button class="rgm-clear-blacklist" type="button">Clear blocked hosts (<span class="rgm-blacklist-count">0</span>)</button>
+          <span class="rgm-limit-note">Deploys are refused above the limit. Default 1 — raise only if you intentionally run more; each bills per hour. Blocked hosts never appear as fallback-race candidates.</span>
         </div>
         <div class="rgm-actions">
           <button class="rgm-refresh-inst rgm-primary" type="button">Refresh</button>
@@ -242,7 +243,7 @@ export function setup(ctx: SpindleFrontendContext) {
   const searchAge = drawer.root.querySelector(".rgm-search-age") as HTMLDivElement | null;
   const offerAgeMinutes = () => (lastSearchAt == null ? null : Math.floor((Date.now() - lastSearchAt) / 60000));
   const DEPLOY_ONSTART_FULL = `python3 -c "import urllib.request;exec(urllib.request.urlopen('https://raw.githubusercontent.com/WanderingMonk8/remote_gpu_manager/feat/vast-first/worker/bootstrap.py').read())"`;
-  let deployTarget: { id: number; dph: number; gpu: string; vramGB: string; gpus: number } | null = null;
+  let deployTarget: { id: number; dph: number; gpu: string; vramGB: string; gpus: number; machineId: number } | null = null;
   const deployProfile = drawer.root.querySelector(".rgm-deploy-profile") as HTMLSelectElement | null;
   const deployNote = drawer.root.querySelector(".rgm-deploy > .rgm-note") as HTMLParagraphElement | null;
   const NOTE_LIFECYCLE = "Rents a real machine, billed by the hour until you stop or destroy it. No model is downloaded — this first deploy only proves the create → inspect → stop → destroy lifecycle and billing.";
@@ -256,8 +257,14 @@ export function setup(ctx: SpindleFrontendContext) {
   const deployOverride = drawer.root.querySelector(".rgm-deploy-override") as HTMLInputElement | null;
   let lastInstances: any[] = [];
   let maxInstances = 1;
+  let blockedMachineIds = new Set<number>();
   const askLimits = () => ctx.sendToBackend({ type: "vast_get_limits" });
+  const askFailedHosts = () => ctx.sendToBackend({ type: "vast_list_failed_hosts" });
   const limitInput = drawer.root.querySelector(".rgm-limit-input") as HTMLInputElement | null;
+  const blacklistCount = drawer.root.querySelector(".rgm-blacklist-count") as HTMLSpanElement | null;
+  drawer.root.querySelector(".rgm-clear-blacklist")?.addEventListener("click", () => {
+    ctx.sendToBackend({ type: "vast_clear_failed_hosts" });
+  });
   drawer.root.querySelector(".rgm-limit-save")?.addEventListener("click", () => {
     const n = Math.floor(Number(limitInput?.value ?? 1));
     if (!Number.isFinite(n) || n < 1 || n > 8) return;
@@ -324,14 +331,20 @@ export function setup(ctx: SpindleFrontendContext) {
       else if (ready && benign) { deployStatus.dataset.tone = "unknown"; deployStatus.textContent = "Approved to deploy. Clicking starts billing immediately."; }
     }
   };
-  const openDeploy = (target: { id: number; dph: number; gpu: string; vramGB: string }) => {
+  const openDeploy = (target: { id: number; dph: number; gpu: string; vramGB: string; gpus: number; machineId: number }) => {
     deployTarget = target;
     const age = offerAgeMinutes();
     const stale = age != null && age >= 3;
+    const blacklisted = target.machineId > 0 && blockedMachineIds.has(target.machineId);
     if (deployApprove) deployApprove.checked = false;
     if (deployOverride) deployOverride.checked = false;
     if (deployId) deployId.textContent = `#${target.id}`;
-    if (deployStatus) { deployStatus.dataset.tone = stale ? "bad" : "unknown"; deployStatus.textContent = stale ? `These offers are ~${age} min old — this one may already be gone. Re-search and deploy instantly.` : "Review the terms, tick the approval, then Deploy."; }
+    if (deployStatus) {
+      deployStatus.dataset.tone = (stale || blacklisted) ? "bad" : "unknown";
+      deployStatus.textContent = blacklisted
+        ? `⚠ Host m${target.machineId} is on your blocklist — this exact machine just burned you. Pick a different offer.`
+        : stale ? `These offers are ~${age} min old — this one may already be gone. Re-search and deploy instantly.` : "Review the terms, tick the approval, then Deploy.";
+    }
     paintDeploy();
     if (deployPanel) { deployPanel.removeAttribute("hidden"); deployPanel.scrollIntoView({ behavior: "smooth", block: "nearest" }); }
   };
@@ -346,6 +359,7 @@ export function setup(ctx: SpindleFrontendContext) {
       gpu: btn.dataset.gpu ?? "?",
       vramGB: btn.dataset.vram ?? "?",
       gpus: Number(btn.dataset.gpus ?? 1) || 1,
+      machineId: Number(btn.dataset.machine ?? 0) || 0,
     });
   });
   for (const el of [deployImage, deployDisk, deployCap, deployFallback, deployFallbackPct]) el?.addEventListener("input", paintDeploy);
@@ -380,6 +394,7 @@ export function setup(ctx: SpindleFrontendContext) {
       fallback: {
         enabled: deployFallback?.checked === true,
         fluctuationPct: Math.min(50, Math.max(5, Number(deployFallbackPct?.value) || 15)),
+        policy: readPolicy(),
       },
     });
   });
@@ -415,10 +430,11 @@ export function setup(ctx: SpindleFrontendContext) {
             ${canStart ? '<button class="rgm-inst-start" type="button">Start</button>' : ""}
             ${canStop ? '<button class="rgm-inst-stop" type="button">Stop</button>' : ""}
             <button class="rgm-inst-logs" type="button">Logs</button>
+            <button class="rgm-inst-block" type="button" data-machine="${i.machineId ?? ""}">Block host</button>
             <button class="rgm-inst-destroy${armed ? " rgm-destroy-armed" : ""}" type="button">${armed ? "Confirm destroy" : "Destroy"}</button>
           </div>
         </div>
-        <span>${i.dphTotal != null ? `$${Number(i.dphTotal).toFixed(3)}/hr · ` : ""}up ${fmtUptime(i.uptimeMins ?? null)}${i.label ? ` · ${escapeHtml(String(i.label))}` : ""}${i.geolocation ? ` · ${escapeHtml(String(i.geolocation))}` : ""}</span>
+        <span>${i.dphTotal != null ? `$${Number(i.dphTotal).toFixed(3)}/hr · ` : ""}up ${fmtUptime(i.uptimeMins ?? null)} · machine ${escapeHtml(String(i.machineId ?? "?"))}${i.label ? ` · ${escapeHtml(String(i.label))}` : ""}${i.geolocation ? ` · ${escapeHtml(String(i.geolocation))}` : ""}</span>
       </div>`;
     }).join("");
   };
@@ -438,6 +454,14 @@ export function setup(ctx: SpindleFrontendContext) {
       armedDestroyId = null;
       if (instStatus) { instStatus.dataset.tone = "unknown"; instStatus.textContent = `Requesting logs for #${id}… (can take ~20–30s)`; }
       ctx.sendToBackend({ type: "vast_logs_instance", id });
+      return;
+    }
+    const blockBtn = el.closest?.(".rgm-inst-block") as HTMLButtonElement | null;
+    if (blockBtn) {
+      armedDestroyId = null;
+      const machine = Number(blockBtn.dataset.machine ?? 0);
+      if (instStatus) { instStatus.dataset.tone = "unknown"; instStatus.textContent = `Blocking host m${machine}…`; }
+      ctx.sendToBackend({ type: "vast_blacklist_host", machineId: machine });
       return;
     }
     if (el.closest?.(".rgm-inst-destroy")) {
@@ -570,6 +594,26 @@ export function setup(ctx: SpindleFrontendContext) {
         if (payload.ok) { maxInstances = Math.min(8, Math.max(1, Number(payload.maxInstances) || 1)); if (limitInput) limitInput.value = String(maxInstances); }
         paintDeploy();
         return;
+      case "vast_blacklist_host_result":
+        if (payload.ok) {
+          const mid = Number(payload.machineId) || 0;
+          if (mid > 0) blockedMachineIds.add(mid);
+          if (blacklistCount) blacklistCount.textContent = String(payload.count ?? blockedMachineIds.size);
+          if (instStatus) { instStatus.dataset.tone = "ok"; instStatus.textContent = `Host m${mid} blocked — the deploy race will never land there again.`; }
+        } else if (instStatus) {
+          instStatus.dataset.tone = "bad";
+          instStatus.textContent = `Could not block host: ${payload.error ?? "unknown error"}`;
+        }
+        return;
+      case "vast_list_failed_hosts_result":
+        blockedMachineIds = new Set((payload.hosts ?? []).map(Number).filter((n: number) => n > 0));
+        if (blacklistCount) blacklistCount.textContent = String(blockedMachineIds.size);
+        return;
+      case "vast_clear_failed_hosts_result":
+        blockedMachineIds = new Set();
+        if (blacklistCount) blacklistCount.textContent = "0";
+        if (instStatus) { instStatus.dataset.tone = "ok"; instStatus.textContent = "Host blocklist cleared."; }
+        return;
       case "vast_list_instances_result": {
         if (payload.ok) {
           renderInstances(payload.instances ?? []);
@@ -643,9 +687,9 @@ export function setup(ctx: SpindleFrontendContext) {
               <div class="rgm-offer">
                 <div class="rgm-offer-row">
                   <div><b>Offer #${o.id}</b> · ${String(o.gpuName ?? "")} × ${o.gpuCount ?? 1} · ${((o.vramMB ?? 0) / 1024).toFixed(1)} GiB</div>
-                  <button class="rgm-deploy-offer" type="button" data-id="${o.id}" data-dph="${Number(o.dphTotal ?? 0)}" data-gpu="${escapeHtml(String(o.gpuName ?? ""))}" data-vram="${((o.vramMB ?? 0) / 1024).toFixed(1)}" data-gpus="${o.gpuCount ?? 1}">Deploy</button>
+                  <button class="rgm-deploy-offer" type="button" data-id="${o.id}" data-dph="${Number(o.dphTotal ?? 0)}" data-gpu="${escapeHtml(String(o.gpuName ?? ""))}" data-vram="${((o.vramMB ?? 0) / 1024).toFixed(1)}" data-gpus="${o.gpuCount ?? 1}" data-machine="${o.machineId ?? ""}">Deploy</button>
                 </div>
-                <span>${((o.ramMB ?? 0) / 1024).toFixed(0)} GB RAM · ${o.diskGB} GB disk · ${String(o.geolocation ?? "-")} · reliability ${(o.reliability ?? 0).toFixed(3)}${o.isVmDeverified ? ` · <span style="color: var(--lumiverse-error); font-weight: 700">⚠ VM deverified</span>` : o.verification ? ` · ${escapeHtml(String(o.verification))}` : ""}</span>
+                <span>${((o.ramMB ?? 0) / 1024).toFixed(0)} GB RAM · ${o.diskGB} GB disk · ${String(o.geolocation ?? "-")} · reliability ${(o.reliability ?? 0).toFixed(3)} · host ${escapeHtml(String(o.hostId ?? "?"))}/m${escapeHtml(String(o.machineId ?? "?"))}${o.isVmDeverified ? ` · <span style="color: var(--lumiverse-error); font-weight: 700">⚠ VM deverified</span>` : o.verification ? ` · ${escapeHtml(String(o.verification))}` : ""}</span>
                 <div class="rgm-price">$${Number(o.dphTotal ?? 0).toFixed(3)}/hr</div>
               </div>`).join("");
           } else {
@@ -662,6 +706,7 @@ export function setup(ctx: SpindleFrontendContext) {
   askVastStatus();
   askInstances();
   askLimits();
+  askFailedHosts();
 
   return () => {
     unsub();

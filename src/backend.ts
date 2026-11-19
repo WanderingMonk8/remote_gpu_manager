@@ -20,6 +20,23 @@ declare const spindle: import("lumiverse-spindle-types").SpindleAPI;
 
 const DEFAULT_GATEWAY_URL = "http://127.0.0.1:8189";
 const ENCLAVE_KEY = "vast.api_key";
+const FAILED_HOSTS_KEY = "failed-hosts.json";
+const ABSOLUTE_MAX_FAILED_HOSTS = 256;
+async function getFailedHosts(): Promise<number[]> {
+  const saved = await spindle.storage.getJson<{ hosts?: number[] }>(FAILED_HOSTS_KEY, { fallback: { hosts: [] } });
+  const list = Array.isArray(saved?.hosts) ? saved.hosts : [];
+  return list.map(Number).filter((n) => Number.isInteger(n) && n > 0);
+}
+async function addFailedHost(machineId: number): Promise<number[]> {
+  const hosts = await getFailedHosts();
+  if (!hosts.includes(machineId)) hosts.unshift(machineId);
+  const trimmed = hosts.slice(0, ABSOLUTE_MAX_FAILED_HOSTS);
+  await spindle.storage.setJson(FAILED_HOSTS_KEY, { hosts: trimmed });
+  return trimmed;
+}
+async function clearFailedHosts(): Promise<void> {
+  await spindle.storage.setJson(FAILED_HOSTS_KEY, { hosts: [] });
+}
 /** Hard guarantee against accidental double deploys (user double-click, replay, both UI paths). */
 let deployInFlight = false;
 const LIMITS_KEY = "instance-limits.json";
@@ -177,6 +194,24 @@ spindle.onFrontendMessage(async (payload: any, userId?: string) => {
     const gateway = await probe("/gateway/v1/status");
     const upstream = await probe("/system_stats");
     spindle.sendToFrontend({ type: "status", gateway: { ...gateway }, upstream: { ...upstream } }, userId);
+    return;
+  }
+
+  // Blacklist a host (machine_id) — used by the UI after a failed instance on that host.
+  // Blacklisted hosts are excluded from fallback-race candidates (never the primary search list).
+  if (payload?.type === "vast_blacklist_host" && typeof payload.machineId === "number" && payload.machineId > 0) {
+    const hosts = await addFailedHost(Math.floor(payload.machineId));
+    spindle.sendToFrontend({ type: "vast_blacklist_host_result", ok: true, machineId: Math.floor(payload.machineId), count: hosts.length }, userId);
+    return;
+  }
+  if (payload?.type === "vast_list_failed_hosts") {
+    const hosts = await getFailedHosts();
+    spindle.sendToFrontend({ type: "vast_list_failed_hosts_result", ok: true, hosts }, userId);
+    return;
+  }
+  if (payload?.type === "vast_clear_failed_hosts") {
+    await clearFailedHosts();
+    spindle.sendToFrontend({ type: "vast_clear_failed_hosts_result", ok: true }, userId);
     return;
   }
 
@@ -494,15 +529,22 @@ spindle.onFrontendMessage(async (payload: any, userId?: string) => {
     const ceiling = Math.min(2.0, targetDph * (1 + fbPct / 100));
     let attempts = 1;
     let lastMsg = first.msg;
+    // The race must honor the SAME quality filters the user has set in the search UI, plus the
+    // user's known-bad host blacklist — otherwise it re-lands on the very hosts they excluded.
+    const fallbackPolicy = fbRaw?.policy ? normalizeOfferPolicy(fbRaw.policy) : {};
+    const excludeMachineIds = await getFailedHosts();
+    if (excludeMachineIds.length) spindle.log.info(`vast_deploy_offer excluding ${excludeMachineIds.length} blacklisted host(s)`);
     try {
       const candidates = (
         await searchVastOffers(apiKey, {
+          ...fallbackPolicy,
           gpuNames: [targetGpuName],
           minVramGB: Math.floor(targetVramGB),
           maxDphTotal: Math.round(ceiling * 1000) / 1000,
           minDphTotal: 0,
           limit: 8,
           excludeRented: true,
+          excludeMachineIds,
         } as any) as any[]
       )
         .filter((o: any) => Number(o?.id) > 0 && Number(o?.id) !== offerId)
@@ -581,6 +623,7 @@ export interface OfferPolicyPayload {
   datacenterOnly?: boolean;
   staticIpOnly?: boolean;
   excludeRented?: boolean;
+  excludeMachineIds?: number[]; // server-internal — user blacklist of known-bad hosts
   maxStorageCostPerGBMonth?: number;
   minDirectPorts?: number;
   limit?: number;
@@ -664,6 +707,7 @@ async function searchVastOffers(apiKey: string, policy: OfferPolicyPayload = DEF
   if (p.verification === "verified") body.verification = { eq: "verified" };
   else if (p.verification === "unverified") body.verification = { eq: "unverified" };
   if (p.staticIpOnly) body.static_ip = { eq: true };
+  if (p.excludeMachineIds?.length) body.machine_id = { notin: p.excludeMachineIds };
   if (p.maxStorageCostPerGBMonth !== undefined) body.storage_cost = { lte: p.maxStorageCostPerGBMonth };
   if (p.minDirectPorts !== undefined) body.direct_port_count = { gte: p.minDirectPorts };
 
@@ -710,6 +754,7 @@ async function searchVastOffers(apiKey: string, policy: OfferPolicyPayload = DEF
       geolocation: o.geolocation,
       verification: o.verification,
       isVmDeverified: o.is_vm_deverified ?? null,
+      machineId: o.machine_id ?? null,
       duration: o.duration,
     }));
 }
