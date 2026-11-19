@@ -22,6 +22,14 @@ const DEFAULT_GATEWAY_URL = "http://127.0.0.1:8189";
 const ENCLAVE_KEY = "vast.api_key";
 /** Hard guarantee against accidental double deploys (user double-click, replay, both UI paths). */
 let deployInFlight = false;
+const LIMITS_KEY = "instance-limits.json";
+const ABSOLUTE_MAX_INSTANCES = 8;
+async function getMaxInstances(): Promise<number> {
+  const saved = await spindle.storage.getJson<{ maxInstances?: number }>(LIMITS_KEY, { fallback: { maxInstances: 1 } });
+  const n = Number(saved?.maxInstances);
+  if (!Number.isFinite(n)) return 1;
+  return Math.min(ABSOLUTE_MAX_INSTANCES, Math.max(1, Math.floor(n)));
+}
 
 async function getGatewayUrl(): Promise<string> {
   const saved = await spindle.storage.getJson<{ url?: string }>("gateway-url.json", { fallback: {} });
@@ -172,6 +180,25 @@ spindle.onFrontendMessage(async (payload: any, userId?: string) => {
     return;
   }
 
+  // Read the user's configured cap on concurrent instances.
+  if (payload?.type === "vast_get_limits") {
+    const maxInstances = await getMaxInstances();
+    spindle.sendToFrontend({ type: "vast_get_limits_result", ok: true, maxInstances }, userId);
+    return;
+  }
+
+  if (payload?.type === "vast_set_limits") {
+    const n = Math.floor(Number(payload.maxInstances));
+    if (!Number.isFinite(n) || n < 1 || n > ABSOLUTE_MAX_INSTANCES) {
+      spindle.sendToFrontend({ type: "vast_set_limits_result", ok: false, error: `limit must be an integer between 1 and ${ABSOLUTE_MAX_INSTANCES}` }, userId);
+      return;
+    }
+    await spindle.storage.setJson(LIMITS_KEY, { maxInstances: n });
+    spindle.log.info(`vast_set_limits maxInstances=${n}`);
+    spindle.sendToFrontend({ type: "vast_set_limits_result", ok: true, maxInstances: n }, userId);
+    return;
+  }
+
   if (payload?.type === "vast_get_status") {
     const configured = await spindle.enclave.has(ENCLAVE_KEY, userId);
     spindle.sendToFrontend({ type: "vast_get_status_result", configured }, userId);
@@ -304,13 +331,25 @@ spindle.onFrontendMessage(async (payload: any, userId?: string) => {
   }
 
   // Shared ask→instance creation step (single offer). Returns structured verdict.
-  const vastCreateOnOffer = async (apiKey: string, offerId: number, body: Record<string, unknown>) => {
+  // Classify create outcomes: certain failure vs. ambiguous (network/timeout/5xx/unparseable) —
+  // an ambiguous create may have rented the machine, so callers MUST reconcile, never blindly retry.
+  const vastCreateOnOffer = async (
+    apiKey: string,
+    offerId: number,
+    body: Record<string, unknown>,
+  ): Promise<{ success: boolean; newId: number | null; msg: string; ambiguous: boolean }> => {
     const res = await vastApi(apiKey, "PUT", `/api/v0/asks/${offerId}/`, body);
     const b: any = res.body;
+    const ambiguousNet = res.status === 0;
+    const ambiguous5xx = res.status >= 500;
+    const ambiguousBody = res.ok && b === undefined;
+    if (ambiguousNet || ambiguous5xx || ambiguousBody) {
+      return { success: false, newId: null, msg: res.error ?? `ambiguous response (status ${res.status})`, ambiguous: true };
+    }
     const success = res.ok && b?.success !== false;
     const newId = Number(b?.new_contract ?? b?.instance_id ?? b?.id ?? 0) || null;
     const msg = String(res.error ?? b?.msg ?? b?.error ?? "Vast.ai refused to create the instance");
-    return { success, newId, msg };
+    return { success, newId, msg, ambiguous: false };
   };
 
   // Deploy an offer as a new PAID instance. Frontend confirm panel must pass approved:true and a price cap.
@@ -372,12 +411,16 @@ spindle.onFrontendMessage(async (payload: any, userId?: string) => {
       spindle.sendToFrontend({ type: "vast_deploy_offer_result", ok: false, error: "no Vast.ai key saved yet" }, userId);
       return;
     }
-    // Ownership wall: refuse to create a SECOND instance unless the user explicitly overrode it.
+    // Ownership wall: refuse to exceed the user's configured concurrent-instance limit,
+    // unless this deploy carries an explicit one-shot override (allowMultiple).
+    let ownedIds = new Set<number>();
     try {
       const owned = await vastListInstances(apiKey);
-      if (owned.length > 0 && payload.allowMultiple !== true) {
+      const limit = await getMaxInstances();
+      ownedIds = new Set(owned.map((i) => i.id));
+      if (owned.length >= limit && payload.allowMultiple !== true) {
         const list = owned.map((i) => `#${i.id} (${i.status})`).join(", ");
-        spindle.sendToFrontend({ type: "vast_deploy_offer_result", ok: false, error: `you already own ${owned.length} instance(s): ${list} — destroy one first, or tick the override in the deploy panel to rent another` }, userId);
+        spindle.sendToFrontend({ type: "vast_deploy_offer_result", ok: false, error: `you own ${owned.length} instance(s) at your limit of ${limit}: ${list} — destroy one, raise the limit (My instances → Max concurrent instances), or tick the override to deploy above it` }, userId);
         return;
       }
     } catch (err) {
@@ -393,8 +436,22 @@ spindle.onFrontendMessage(async (payload: any, userId?: string) => {
       ...(onstart ? { onstart } : {}),
     });
 
-    const emitOk = (instanceId: number | null, deployedOfferId: number, dphTotal: number | undefined, attempts: number, fallbackUsed: boolean) => {
-      spindle.log.info(`vast_deploy_offer offer=${offerId} deployed=${deployedOfferId} image=${image} diskGB=${diskGB} maxPricePerHour=${maxPricePerHour} attempts=${attempts} fallback=${fallbackUsed} new_contract=${instanceId ?? "-"}`);
+    // Ambiguous creates may have rented the machine — reconcile against the pre-flight
+    // snapshot instead of blindly retrying. Never fires a second create.
+    const reconcile = async () => {
+      for (let i = 0; i < 3; i++) {
+        await new Promise((r) => setTimeout(r, 2500));
+        try {
+          const cur = await vastListInstances(apiKey);
+          const fresh = cur.find((x) => !ownedIds.has(x.id));
+          if (fresh) return fresh;
+        } catch { /* transient — keep polling */ }
+      }
+      return null;
+    };
+
+    const emitOk = (instanceId: number | null, deployedOfferId: number, dphTotal: number | undefined, attempts: number, fallbackUsed: boolean, reconciled = false) => {
+      spindle.log.info(`vast_deploy_offer offer=${offerId} deployed=${deployedOfferId} image=${image} diskGB=${diskGB} maxPricePerHour=${maxPricePerHour} attempts=${attempts} fallback=${fallbackUsed} reconciled=${reconciled} new_contract=${instanceId ?? "-"}`);
       spindle.sendToFrontend({
         type: "vast_deploy_offer_result",
         ok: true,
@@ -404,6 +461,7 @@ spindle.onFrontendMessage(async (payload: any, userId?: string) => {
         dphTotal,
         attempts,
         fallbackUsed,
+        reconciled,
       }, userId);
     };
     const emitFail = (error: string, attempts: number) => {
@@ -414,6 +472,16 @@ spindle.onFrontendMessage(async (payload: any, userId?: string) => {
     const first = await vastCreateOnOffer(apiKey, offerId, makeBody());
     if (first.success) {
       emitOk(first.newId, offerId, targetKnown ? targetDph : undefined, 1, false);
+      return;
+    }
+    if (first.ambiguous) {
+      const fresh = await reconcile();
+      if (fresh) {
+        spindle.log.info(`vast_deploy_offer offer=${offerId} ambiguous — reconciled instance #${fresh.id}`);
+        emitOk(fresh.id, offerId, fresh.dphTotal ?? undefined, 1, false, true);
+        return;
+      }
+      emitFail(`create of offer #${offerId} was ambiguous (${first.msg}); no new instance visible after 3 reconciles — REFUSING to retry to avoid a duplicate. Check My instances now; destroy any straggler you didn't intend.`, 1);
       return;
     }
     spindle.log.info(`vast_deploy_offer offer=${offerId} failed (${first.msg}) fallbackEnabled=${fbEnabled} targetKnown=${targetKnown}`);
@@ -447,6 +515,16 @@ spindle.onFrontendMessage(async (payload: any, userId?: string) => {
         lastMsg = a.msg;
         spindle.log.info(`vast_deploy_offer fallback attempt=${attempts} offer=${cand.id} price=${cand.dphTotal} ok=${a.success} msg=${a.msg}`);
         if (a.success) { emitOk(a.newId, cand.id, cand.dphTotal, attempts, true); return; }
+        if (a.ambiguous) {
+          const fresh = await reconcile();
+          if (fresh) {
+            spindle.log.info(`vast_deploy_offer fallback attempt=${attempts} offer=${cand.id} ambiguous — reconciled instance #${fresh.id}`);
+            emitOk(fresh.id, cand.id, cand.dphTotal, attempts, true, true);
+            return;
+          }
+          emitFail(`create of fallback offer #${cand.id} was ambiguous (${a.msg}); stopping to avoid a duplicate. Check My instances — destroy any straggler you didn't intend.`, attempts);
+          return;
+        }
         if (/credit|balance|permission|auth|invalid user key/i.test(a.msg)) break; // account-level — further attempts are pointless
       }
       emitFail(`no available ${targetGpuName}×${targetNumGpus} within +${fbPct}% of $${targetDph.toFixed(3)}/hr (tried ${attempts} offer(s)); last error: ${lastMsg}`, attempts);

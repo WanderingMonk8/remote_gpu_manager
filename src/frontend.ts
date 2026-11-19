@@ -56,6 +56,9 @@ export function setup(ctx: SpindleFrontendContext) {
     .rgm-deploy-existing { border: 1px solid var(--lumiverse-error); border-radius: 8px; padding: 8px 10px; display: grid; gap: 4px; }
     .rgm-deploy-existing .rgm-note { color: var(--lumiverse-error); }
     .rgm-deploy-existing .rgm-check { padding-top: 0; }
+    .rgm-limit-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--lumiverse-text); }
+    .rgm-limit-row input { width: 64px; padding: 4px 6px; border: 1px solid var(--lumiverse-border); border-radius: 6px; background: var(--lumiverse-fill); color: var(--lumiverse-text); font: inherit; }
+    .rgm-limit-note { font-size: 11px; color: var(--lumiverse-text-muted); flex-basis: 100%; }
   `;
   const removeStyle = ctx.dom.addStyle(STYLES);
 
@@ -147,8 +150,8 @@ export function setup(ctx: SpindleFrontendContext) {
             <span class="rgm-fallback-pct-wrap"><input class="rgm-deploy-fallback-pct" type="number" value="15" min="5" max="50" step="1" />% of its price</span>
           </label>
           <div class="rgm-deploy-existing" hidden>
-            <p class="rgm-note"><b>⚠ You already own <span class="rgm-existing-count">0</span> instance(s):</b> <span class="rgm-existing-list"></span></p>
-            <p class="rgm-note">A second deploy doubles your billing. Destroy or stop the old one first — or tick the override if you really mean it.</p>
+            <p class="rgm-note"><b>⚠ You own <span class="rgm-existing-count">0</span> of your max <span class="rgm-existing-limit">1</span> instance(s):</b> <span class="rgm-existing-list"></span></p>
+            <p class="rgm-note">Deploying more is refused at your limit. Destroy one — raise Max concurrent instances — or tick the override to deploy above it just this once.</p>
             <label class="rgm-check"><input class="rgm-deploy-override" type="checkbox" /><span>I understand — deploy another instance anyway</span></label>
           </div>
           <div class="rgm-filter-grid">
@@ -170,6 +173,12 @@ export function setup(ctx: SpindleFrontendContext) {
       <section>
         <h4>My instances</h4>
         <p class="rgm-note">Machines you have rented from this Vast.ai account. State shows raw Vast tokens (<code>actual → intended</code>); Vast's console renders <code>created</code>/<code>loading</code> as <b>Inactive</b>. <b>Stop</b> pauses GPU billing (disk storage continues to accrue). <b>Destroy</b> permanently deletes the instance and its disk — this cannot be undone.</p>
+        <div class="rgm-limit-row">
+          <span>Max concurrent instances</span>
+          <input class="rgm-limit-input" type="number" min="1" max="8" value="1" />
+          <button class="rgm-limit-save rgm-primary" type="button">Save limit</button>
+          <span class="rgm-limit-note">Deploys are refused above this. Default 1 — raise only if you intentionally run more; each bills per hour.</span>
+        </div>
         <div class="rgm-actions">
           <button class="rgm-refresh-inst rgm-primary" type="button">Refresh</button>
         </div>
@@ -242,9 +251,18 @@ export function setup(ctx: SpindleFrontendContext) {
   const deployFallbackPct = drawer.root.querySelector(".rgm-deploy-fallback-pct") as HTMLInputElement | null;
   const deployExisting = drawer.root.querySelector(".rgm-deploy-existing") as HTMLDivElement | null;
   const deployExistingCount = drawer.root.querySelector(".rgm-existing-count") as HTMLSpanElement | null;
+  const deployExistingLimit = drawer.root.querySelector(".rgm-existing-limit") as HTMLSpanElement | null;
   const deployExistingList = drawer.root.querySelector(".rgm-existing-list") as HTMLSpanElement | null;
   const deployOverride = drawer.root.querySelector(".rgm-deploy-override") as HTMLInputElement | null;
   let lastInstances: any[] = [];
+  let maxInstances = 1;
+  const askLimits = () => ctx.sendToBackend({ type: "vast_get_limits" });
+  const limitInput = drawer.root.querySelector(".rgm-limit-input") as HTMLInputElement | null;
+  drawer.root.querySelector(".rgm-limit-save")?.addEventListener("click", () => {
+    const n = Math.floor(Number(limitInput?.value ?? 1));
+    if (!Number.isFinite(n) || n < 1 || n > 8) return;
+    ctx.sendToBackend({ type: "vast_set_limits", maxInstances: n });
+  });
   const approveLabel = drawer.root.querySelector(".rgm-approve-label") as HTMLSpanElement | null;
   const fallbackCeiling = () => {
     const pct = Math.min(50, Math.max(1, Number(deployFallbackPct?.value) || 15));
@@ -281,12 +299,13 @@ export function setup(ctx: SpindleFrontendContext) {
     const overCap = !!deployTarget && Number.isFinite(cap) && deployTarget.dph > cap;
     const imageOk = imagePattern.test((deployImage?.value ?? "").trim());
     const ownedCount = lastInstances.length;
-    const ownershipOk = ownedCount === 0 || deployOverride?.checked === true;
+    const ownershipOk = ownedCount < maxInstances || deployOverride?.checked === true;
     // Reflect the ownership interstitial
     if (deployExisting) {
-      if (ownedCount > 0) {
+      if (ownedCount >= maxInstances) {
         deployExisting.removeAttribute("hidden");
         if (deployExistingCount) deployExistingCount.textContent = String(ownedCount);
+        if (deployExistingLimit) deployExistingLimit.textContent = String(maxInstances);
         if (deployExistingList) deployExistingList.textContent = lastInstances.map((i) => `#${i.id} (${i.status})`).join(", ");
       } else {
         deployExisting.setAttribute("hidden", "");
@@ -301,7 +320,7 @@ export function setup(ctx: SpindleFrontendContext) {
       const cur = deployStatus.textContent ?? "";
       const benign = cur === "" || cur.startsWith("Review the terms") || cur.startsWith("Approved") || overCap;
       if (overCap) { deployStatus.dataset.tone = "bad"; deployStatus.textContent = `Offer price $${deployTarget?.dph.toFixed(3)}/hr exceeds your $${cap.toFixed(2)}/hr cap.`; }
-      else if (!ownershipOk) { deployStatus.dataset.tone = "bad"; deployStatus.textContent = `You already own ${ownedCount} instance(s) — destroy one first, or tick the override to rent another anyway.`; }
+      else if (!ownershipOk) { deployStatus.dataset.tone = "bad"; deployStatus.textContent = `You own ${ownedCount} instance(s) at your limit of ${maxInstances} — destroy one, raise Max concurrent instances, or tick the override to deploy above it.`; }
       else if (ready && benign) { deployStatus.dataset.tone = "unknown"; deployStatus.textContent = "Approved to deploy. Clicking starts billing immediately."; }
     }
   };
@@ -536,6 +555,21 @@ export function setup(ctx: SpindleFrontendContext) {
         if (sStatus) { sStatus.dataset.tone = "bad"; sStatus.textContent = "Key cleared."; }
         paintBanner("bad", "○ No Vast.ai key saved");
         return;
+      case "vast_get_limits_result":
+        if (payload.ok) {
+          maxInstances = Math.min(8, Math.max(1, Number(payload.maxInstances) || 1));
+          if (limitInput) limitInput.value = String(maxInstances);
+          paintDeploy();
+        }
+        return;
+      case "vast_set_limits_result":
+        if (instStatus) {
+          instStatus.dataset.tone = payload.ok ? "ok" : "bad";
+          instStatus.textContent = payload.ok ? `Limit saved: max ${payload.maxInstances} concurrent instance(s).` : `Limit not saved: ${payload.error ?? "unknown error"}`;
+        }
+        if (payload.ok) { maxInstances = Math.min(8, Math.max(1, Number(payload.maxInstances) || 1)); if (limitInput) limitInput.value = String(maxInstances); }
+        paintDeploy();
+        return;
       case "vast_list_instances_result": {
         if (payload.ok) {
           renderInstances(payload.instances ?? []);
@@ -575,7 +609,11 @@ export function setup(ctx: SpindleFrontendContext) {
       }
       case "vast_deploy_offer_result": {
         if (payload.ok) {
-          const via = payload.fallbackUsed ? `Offer #${payload.offerId} was taken — deployed #${payload.deployedOfferId}${payload.dphTotal != null ? ` at $${Number(payload.dphTotal).toFixed(3)}/hr` : ""} in ${payload.attempts ?? "?"} attempt(s)` : `Instance #${payload.instanceId ?? "?"} is booting`;
+          const via = payload.reconciled
+            ? `Create response was ambiguous — but found instance #${payload.instanceId ?? "?"} on your account (no second deploy fired). Verify it in My instances; destroy it if you didn't intend this.`
+            : payload.fallbackUsed
+              ? `Offer #${payload.offerId} was taken — deployed #${payload.deployedOfferId}${payload.dphTotal != null ? ` at $${Number(payload.dphTotal).toFixed(3)}/hr` : ""} in ${payload.attempts ?? "?"} attempt(s)`
+              : `Instance #${payload.instanceId ?? "?"} is booting`;
           if (instStatus) { instStatus.dataset.tone = "ok"; instStatus.textContent = `${via}. Refresh My instances — transitions take ~30–60s.`; }
           closeDeploy();
           askInstances();
@@ -623,6 +661,7 @@ export function setup(ctx: SpindleFrontendContext) {
 
   askVastStatus();
   askInstances();
+  askLimits();
 
   return () => {
     unsub();
