@@ -69,9 +69,9 @@ const BODY_UPLOAD = 100 * 1024 * 1024;
 
 const ROUTES: RouteRule[] = [
   { method: "GET", pattern: /^\/system_stats$/, maxBytes: 16 * 1024, timeoutMs: 10_000, expectJson: true },
-  { method: "GET", pattern: /^\/object_info(\/[A-Za-z0-9_]+)?$/, maxBytes: 64 * 1024 * 1024, timeoutMs: 30_000, expectJson: true },
+  { method: "GET", pattern: /^\/object_info(\/[A-Za-z0-9_]+)?$/, maxBytes: 64 * 1024 * 1024, timeoutMs: 120_000, expectJson: true },
   { method: "POST", pattern: /^\/prompt$/, maxBytes: BODY_PROMPT, timeoutMs: 120_000, expectJson: true },
-  { method: "GET", pattern: /^\/history\/[0-9a-fA-F-]{36}$/, maxBytes: 4 * 1024 * 1024, timeoutMs: 15_000, expectJson: true },
+  { method: "GET", pattern: /^\/history\/[0-9a-fA-F-]{36}$/, maxBytes: 4 * 1024 * 1024, timeoutMs: 60_000, expectJson: true },
   { method: "GET", pattern: /^\/view$/, maxBytes: 100 * 1024 * 1024, timeoutMs: 60_000 },
   { method: "GET", pattern: /^\/queue$/, maxBytes: 256 * 1024, timeoutMs: 10_000, expectJson: true },
   { method: "POST", pattern: /^\/queue$/, maxBytes: BODY_QUEUE, timeoutMs: 10_000, expectJson: true },
