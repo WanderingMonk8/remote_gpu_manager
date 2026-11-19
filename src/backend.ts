@@ -115,7 +115,36 @@ interface VastCallResult {
   error?: string;
 }
 
-/** Authenticated Vast.ai call. Never logs the key; only whitelisted error text leaks. */
+/**
+ * Translate the extension's friendly env string into the dict shape vast actually consumes:
+ *   "-p 8188 -p 8080/tcp -e lumiverse_models=a,b" -> { "-p 8188": "1", "lumiverse_models": "a,b" }
+ * Anything unparseable is dropped with a log line rather than silently ignored.
+ */
+function parseVastEnv(input: string | undefined): Record<string, string> | undefined {
+  if (!input) return undefined;
+  const out: Record<string, string> = {};
+  const tokens = input.split(/\s+/).filter(Boolean);
+  for (let i = 0; i < tokens.length; i++) {
+    const tok = tokens[i];
+    if (tok === "-p" || tok === "-v" || tok === "-n") {
+      const val = tokens[++i];
+      if (val && /^[0-9a-z:/_]+$/i.test(val)) out[`${tok} ${val}`] = "1";
+      else spindle.log.info(`vast_deploy_offer: dropping unparsable ${tok} ${val ?? ""}`);
+      continue;
+    }
+    if (tok === "-e") {
+      const kv = tokens[++i];
+      const eq = kv?.indexOf("=") ?? -1;
+      if (eq > 0) out[kv.slice(0, eq)] = kv.slice(eq + 1).replace(/^['"]|['"]$/g, "");
+      continue;
+    }
+    // "-e KEY=VAL" written as one token, or stray junk: ignore safely
+    if (tok.startsWith("-")) spindle.log.info(`vast_deploy_offer: dropping unrecognized env token ${tok}`);
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
+/** Ask→instance creation step lives in-line in the deploy branch (paid action, requires approval). */
 async function vastApi(apiKey: string, method: "GET" | "POST" | "PUT" | "DELETE", path: string, jsonBody?: unknown): Promise<VastCallResult> {
   try {
     const res = await spindle.cors(
@@ -483,8 +512,13 @@ spindle.onFrontendMessage(async (payload: any, userId?: string) => {
     const label = typeof payload.label === "string" && payload.label.trim() ? payload.label.trim().slice(0, 64) : "lumiverse-remote-gpu";
     const onstart = typeof payload.onstart === "string" && payload.onstart.trim() ? payload.onstart.trim() : undefined;
     const env = typeof payload.env === "string" && payload.env.trim() ? payload.env.trim() : undefined;
-    if (env && (env.length > 1024 || !/^-/.test(env) || !/^-[a-zA-Z0-9_=.: -]*$/.test(env))) {
-      spindle.sendToFrontend({ type: "vast_deploy_offer_result", ok: false, error: "env must start with '-' and be ≤ 1024 chars (e.g. -e KEY=VAL -p 8188)" }, userId);
+    const parsedEnv = parseVastEnv(env);
+    if (env && !parsedEnv) {
+      spindle.sendToFrontend({ type: "vast_deploy_offer_result", ok: false, error: "env had nothing usable in it — check the -p/-e syntax (e.g. -p 8188 -e KEY=VAL)" }, userId);
+      return;
+    }
+    if (parsedEnv && !/^-/.test(env!)) {
+      spindle.sendToFrontend({ type: "vast_deploy_offer_result", ok: false, error: "env must start with '-' (e.g. -p 8188 -e KEY=VAL)" }, userId);
       return;
     }
     if (onstart && onstart.length > 4048) {
@@ -546,7 +580,7 @@ spindle.onFrontendMessage(async (payload: any, userId?: string) => {
       label,
       target_state: "running",
       ...(onstart ? { onstart } : {}),
-      ...(env ? { env } : {}),
+      ...(parsedEnv ? { env: parsedEnv } : {}),
     });
 
     // Ambiguous creates may have rented the machine — reconcile against the pre-flight
