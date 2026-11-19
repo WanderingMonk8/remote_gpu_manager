@@ -66,6 +66,7 @@ export function setup(ctx: SpindleFrontendContext) {
     .rgm-model-group { font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--lumiverse-text-muted); padding: 4px 4px 2px; }
     .rgm-model-summary { font-size: 11px; color: var(--lumiverse-text-muted); padding-top: 4px; }
     .rgm-model-summary b { color: var(--lumiverse-text); }
+    .rgm-model-grid-disabled { opacity: 0.35; pointer-events: none; filter: grayscale(.6); }
   `;
   const removeStyle = ctx.dom.addStyle(STYLES);
 
@@ -168,17 +169,12 @@ export function setup(ctx: SpindleFrontendContext) {
           <p class="rgm-note">Rents a real machine, billed by the hour until you stop or destroy it. No model is downloaded — this first deploy only proves the create → inspect → stop → destroy lifecycle and billing.</p>
           <label class="rgm-field"><span>Image</span><input class="rgm-deploy-image" type="text" spellcheck="false" value="yanwk/comfyui-boot:cu126-slim" /></label>
           <label class="rgm-check"><input class="rgm-publish-port" type="checkbox" checked /><span>Publish ComfyUI (8188) as a direct port</span></label>
+          <label class="rgm-check"><input class="rgm-lifecycle-only" type="checkbox" /><span>Lifecycle proof only — no model downloads (empty ComfyUI, still publishes 8188)</span></label>
           <div class="rgm-field">
-            <span>Models to install (min. 1 — selection saved for this account)</span>
+            <span>Models to install — min. 1 unless Lifecycle proof is ticked (selection saved for this account)</span>
             <div class="rgm-model-grid"></div>
             <div class="rgm-model-summary">Loading selection…</div>
           </div>
-          <label class="rgm-field"><span>Boot profile</span>
-            <select class="rgm-deploy-profile">
-              <option value="lifecycle" selected>Lifecycle proof only (no downloads)</option>
-              <option value="full">Full worker — Anima + MOSS (≈28 GB)</option>
-            </select>
-          </label>
           <label class="rgm-check"><input class="rgm-deploy-fallback" type="checkbox" /><span>If this offer is taken, auto-deploy a similar one within</span>
             <span class="rgm-fallback-pct-wrap"><input class="rgm-deploy-fallback-pct" type="number" value="15" min="5" max="50" step="1" />% of its price</span>
           </label>
@@ -188,7 +184,7 @@ export function setup(ctx: SpindleFrontendContext) {
             <label class="rgm-check"><input class="rgm-deploy-override" type="checkbox" /><span>I understand — deploy another instance anyway</span></label>
           </div>
           <div class="rgm-filter-grid">
-            <label class="rgm-field"><span>Disk (GB)</span><input class="rgm-deploy-disk" type="number" value="100" min="8" max="200" step="1" /></label>
+            <label class="rgm-field"><span>Disk (GB)</span><input class="rgm-deploy-disk" type="number" value="60" min="8" max="200" step="1" /></label>
             <label class="rgm-field"><span>Max price ($/hr)</span><input class="rgm-deploy-cap" type="number" value="0.25" min="0.01" max="2" step="0.01" /></label>
           </div>
           <div class="rgm-deploy-terms">Offer <b class="rgm-deploy-summary"></b> · your cap: <b class="rgm-deploy-cap-echo"></b></div>
@@ -253,6 +249,7 @@ export function setup(ctx: SpindleFrontendContext) {
     btn.textContent = hidden ? "Advanced filters ▾" : "Advanced filters ▴";
   });
   // ---------- Model picker (persisted selection, global to this account) ----------
+  const deployLifecycle = drawer.root.querySelector(".rgm-lifecycle-only") as HTMLInputElement | null;
   const MODEL_REGISTRY: Array<{ id: string; label: string; gb: number; group: string; dep?: "anima" | "moss_int8" | "moss_bf16" }> = [
     { id: "anima-turbo-1.1",      label: "Anima Turbo v1.1 · 10 steps · 4.2 GB",      gb: 4.18, group: "Anima",  dep: "anima" },
     { id: "anima-turbo-1.0",      label: "Anima Turbo v1.0 · 10 steps · 4.2 GB",      gb: 4.18, group: "Anima",  dep: "anima" },
@@ -277,6 +274,10 @@ export function setup(ctx: SpindleFrontendContext) {
     modelGrid ? [...modelGrid.querySelectorAll<HTMLInputElement>(".rm-model input:checked")].map((el) => el.dataset.id!).filter(Boolean) : [];
   const paintModelSummary = () => {
     if (!modelSummary) return;
+    if (deployLifecycle?.checked === true) {
+      modelSummary.innerHTML = '<b>Lifecycle proof — no models will be downloaded. Empty ComfyUI only.</b>';
+      return;
+    }
     const ids = selectedModelIds();
     if (!ids.length) { modelSummary.innerHTML = '<b>Select at least one model.</b>'; return; }
     const direct = ids.reduce((acc, id) => acc + (MODEL_REGISTRY.find((m) => m.id === id)?.gb ?? 0), 0);
@@ -306,11 +307,10 @@ export function setup(ctx: SpindleFrontendContext) {
   const offerAgeMinutes = () => (lastSearchAt == null ? null : Math.floor((Date.now() - lastSearchAt) / 60000));
   const DEPLOY_ONSTART_FULL = `python3 -c "import urllib.request;exec(urllib.request.urlopen('https://raw.githubusercontent.com/WanderingMonk8/remote_gpu_manager/feat/vast-first/worker/bootstrap.py').read())"`;
   let deployTarget: { id: number; dph: number; gpu: string; vramGB: string; gpus: number; machineId: number } | null = null;
-  const deployProfile = drawer.root.querySelector(".rgm-deploy-profile") as HTMLSelectElement | null;
+  const deployFallback = drawer.root.querySelector(".rgm-deploy-fallback") as HTMLInputElement | null;
   const deployNote = drawer.root.querySelector(".rgm-deploy > .rgm-note") as HTMLParagraphElement | null;
   const NOTE_LIFECYCLE = "Rents a real machine, billed by the hour until you stop or destroy it. No model is downloaded — this first deploy only proves the create → inspect → stop → destroy lifecycle and billing.";
-  const NOTE_FULL = "Rents a real machine, billed by the hour. On first boot the bootstrap downloads ≈28 GB (Anima Turbo/Aesthetic v1.1, MOSS INT8 ×2, encoders, Anima ref-adapter). ComfyUI stays up; generate only after the Logs show BOOTSTRAP_COMPLETE. The disk keeps all weights across stop/start (storage cost continues while stopped).";
-  const deployFallback = drawer.root.querySelector(".rgm-deploy-fallback") as HTMLInputElement | null;
+  const NOTE_FULL = "Rents a real machine, billed by the hour. On first boot the bootstrap downloads the models you selected (Anima + MOSS). ComfyUI stays up; generate only after the Logs show BOOTSTRAP_COMPLETE. The disk keeps all weights across stop/start (storage cost continues while stopped).";
   const deployPublishPort = drawer.root.querySelector(".rgm-publish-port") as HTMLInputElement | null;
   const deployFallbackPct = drawer.root.querySelector(".rgm-deploy-fallback-pct") as HTMLInputElement | null;
   const deployExisting = drawer.root.querySelector(".rgm-deploy-existing") as HTMLDivElement | null;
@@ -352,7 +352,7 @@ export function setup(ctx: SpindleFrontendContext) {
   const imagePattern = /^[a-z0-9]+([._-][a-z0-9]+)*(\/[a-z0-9]+([._-][a-z0-9]+)*)*(:[A-Za-z0-9][A-Za-z0-9._-]{0,127})?$/;
   const paintDeploy = () => {
     if (!deployPanel) return;
-    if (deployNote) deployNote.textContent = deployProfile?.value === "full" ? NOTE_FULL : NOTE_LIFECYCLE;
+    if (deployNote) deployNote.textContent = deployLifecycle?.checked === true ? NOTE_LIFECYCLE : NOTE_FULL;
     const cap = Number(deployCap?.value ?? 0);
     if (deploySummary && deployTarget) {
       const fbOn = deployFallback?.checked === true;
@@ -382,8 +382,10 @@ export function setup(ctx: SpindleFrontendContext) {
         if (deployOverride) deployOverride.checked = false;
       }
     }
+    const lifecycleOnly = deployLifecycle?.checked === true;
+    const modelsOk = lifecycleOnly || selectedModelIds().length > 0;
     const ready = !!deployTarget && deployApprove?.checked === true && imageOk
-      && Number.isFinite(diskGB) && diskGB >= 8 && diskGB <= 200 && !overCap && ownershipOk && selectedModelIds().length > 0;
+      && Number.isFinite(diskGB) && diskGB >= 8 && diskGB <= 200 && !overCap && ownershipOk && modelsOk;
     if (deployGo) deployGo.disabled = !ready;
     if (deployStatus) {
       // Never overwrite a terminal message (Deploying… / result / error) with the benign hint.
@@ -391,7 +393,7 @@ export function setup(ctx: SpindleFrontendContext) {
       const benign = cur === "" || cur.startsWith("Review the terms") || cur.startsWith("Approved") || overCap;
       if (overCap) { deployStatus.dataset.tone = "bad"; deployStatus.textContent = `Offer price $${deployTarget?.dph.toFixed(3)}/hr exceeds your $${cap.toFixed(2)}/hr cap.`; }
       else if (!ownershipOk) { deployStatus.dataset.tone = "bad"; deployStatus.textContent = `You own ${ownedCount} instance(s) at your limit of ${maxInstances} — destroy one, raise Max concurrent instances, or tick the override to deploy above it.`; }
-      else if (selectedModelIds().length === 0) { deployStatus.dataset.tone = "bad"; deployStatus.textContent = "Select at least one model to install (checkboxes above)."; }
+      else if (!modelsOk) { deployStatus.dataset.tone = "bad"; deployStatus.textContent = "Select at least one model to install, or tick Lifecycle proof only."; }
       else if (ready && benign) { deployStatus.dataset.tone = "unknown"; deployStatus.textContent = "Approved to deploy. Clicking starts billing immediately."; }
     }
   };
@@ -430,8 +432,17 @@ export function setup(ctx: SpindleFrontendContext) {
   deployApprove?.addEventListener("change", paintDeploy);
   deployFallback?.addEventListener("change", paintDeploy);
   deployOverride?.addEventListener("change", paintDeploy);
-  deployProfile?.addEventListener("change", () => {
-    if (deployProfile.value === "full" && deployDisk && deployDisk.value === "100") deployDisk.value = "60"; // slim manifest now
+  // Bind lifecycle-only toggle: greys out the picker and flips the deploy to boot-only mode.
+  const modelGridEl = drawer.root.querySelector(".rgm-model-grid") as HTMLDivElement | null;
+  const applyLifecycleUi = () => {
+    const on = deployLifecycle?.checked === true;
+    if (modelGridEl) modelGridEl.classList.toggle("rgm-model-grid-disabled", on);
+    if (deployNote) deployNote.textContent = on ? NOTE_LIFECYCLE : NOTE_FULL;
+    paintModelSummary();
+  };
+  deployLifecycle?.addEventListener("change", () => {
+    applyLifecycleUi();
+    if (deployLifecycle?.checked !== true && deployDisk && deployDisk.value === "100") deployDisk.value = "60";
     paintDeploy();
   });
   drawer.root.querySelector(".rgm-deploy-cancel")?.addEventListener("click", closeDeploy);
@@ -448,10 +459,10 @@ export function setup(ctx: SpindleFrontendContext) {
       label: "lumiverse-remote-gpu",
       approved: true,
       allowMultiple: deployOverride?.checked === true,
-      onstart: deployProfile?.value === "full" ? DEPLOY_ONSTART_FULL : undefined,
+      onstart: deployLifecycle?.checked === true ? undefined : DEPLOY_ONSTART_FULL,
       env: [
         deployPublishPort?.checked === true ? "-p 8188" : "",
-        selectedModelIds().length ? `-e lumiverse_models=${selectedModelIds().join(",")}` : "",
+        (deployLifecycle?.checked !== true && selectedModelIds().length) ? `-e lumiverse_models=${selectedModelIds().join(",")}` : "",
       ].filter(Boolean).join(" ") || undefined,
       target: {
         gpuName: deployTarget.gpu,
