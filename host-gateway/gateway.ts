@@ -96,53 +96,100 @@ const audit = (method: string, path: string, status: number, ms: number, bytes?:
 };
 
 /**
- * Stream a buffered upstream body back to Lumiverse while watching whether the
- * client actually consumes it.
+ * Stream `GET /view` straight through instead of buffering it in the gateway.
  *
- * Why: `GET /view` is where the generated PNG travels, and it is the only
- * request whose body is large enough for the Space-side caller to hang up
- * mid-transfer. When that happens the HTTP layer surfaces "socket connection
- * was closed unexpectedly" even though the gateway logged a 200 — the audit
- * line alone cannot tell a delivered image from a truncated one. The cancel
- * handler closes that gap: it reports how many bytes made it out before the
- * peer went away.
+ * The generated image is the largest body on this path and the tunnel needs
+ * 10-15 s to deliver it. Buffering first meant Lumiverse received no response
+ * headers for that entire window — long enough for its fetch to give up and
+ * issue a second `/view` that timed out the same way. Streaming sends headers
+ * and bytes as soon as the worker starts responding.
+ *
+ * A peer hang-up is logged with the byte count, which is the only way to tell
+ * "Lumiverse never received the image" from "Lumiverse received it and dropped
+ * it afterwards".
  */
-function streamingBody(
-  body: Uint8Array,
-  label: string,
-): { stream: ReadableStream<Uint8Array>; whenDone: Promise<void>; transferred: () => number } {
-  const total = body.byteLength;
-  let sent = 0;
-  let settled = false;
-  let resolveDone: () => void = () => {};
-  const whenDone = new Promise<void>((resolve) => {
-    resolveDone = resolve;
-  });
+async function proxyStreamingView(
+  path: string,
+  init: RequestInit,
+  rule: RouteRule,
+): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), rule.timeoutMs);
 
-  const finish = (detail: string) => {
+  let upstream: Response;
+  try {
+    upstream = await fetch(GATEWAY_UPSTREAM + path, {
+      ...init,
+      signal: controller.signal,
+      redirect: "manual",
+    });
+  } catch (err) {
+    clearTimeout(timer);
+    const e = err as Error & { cause?: { code?: string; message?: string } };
+    const detail = String(e?.cause?.code ?? e?.cause?.message ?? e?.message ?? e?.name ?? "error").slice(0, 200);
+    console.warn(`[rgm-gateway] ${path.split("?")[0]} upstream fetch failed: ${e?.name ?? "Error"} (${detail})`);
+    if (e?.name === "AbortError") throw new HttpError(504, "upstream_timeout");
+    throw new HttpError(502, "upstream_unreachable");
+  }
+
+  const contentType = (upstream.headers.get("content-type") ?? "application/octet-stream").split(";")[0];
+  const declared = Number(upstream.headers.get("content-length") ?? "");
+  const encoding = upstream.headers.get("content-encoding");
+  const headers: Record<string, string> = { "Content-Type": contentType };
+  // Only advertise a length when the bytes cannot be re-encoded in transit.
+  if (!encoding && Number.isFinite(declared) && declared > 0) {
+    headers["Content-Length"] = String(declared);
+  }
+
+  if (!upstream.body) {
+    clearTimeout(timer);
+    console.log(`[rgm-gateway] /view upstream ${upstream.status} with no body`);
+    return new Response(null, { status: upstream.status, headers });
+  }
+
+  const reader = upstream.body.getReader();
+  let transferred = 0;
+  let settled = false;
+  const settle = (message: string) => {
     if (settled) return;
     settled = true;
-    console.log(`[rgm-gateway] ${label} body ${detail} (${sent}/${total} bytes)`);
-    resolveDone();
+    clearTimeout(timer);
+    const total = declared > 0 ? `/${declared}` : "";
+    console.log(`[rgm-gateway] /view body ${message} (${transferred}${total} bytes)`);
   };
 
   const stream = new ReadableStream<Uint8Array>({
-    pull(controller) {
-      if (sent >= total) {
-        controller.close();
-        finish("delivered");
-        return;
+    async pull(controller) {
+      try {
+        const { value, done } = await reader.read();
+        if (done) {
+          controller.close();
+          settle("delivered");
+          return;
+        }
+        transferred += value.byteLength;
+        if (transferred > rule.maxBytes) {
+          try { await reader.cancel("too large"); } catch { /* ignore */ }
+          controller.error(new HttpError(502, "upstream_response_too_large"));
+          settle("aborted: too large");
+          return;
+        }
+        controller.enqueue(value);
+      } catch (err) {
+        settle(`failed: ${String((err as Error)?.message ?? err).slice(0, 160)}`);
+        try { controller.error(err); } catch { /* ignore */ }
       }
-      const end = Math.min(sent + 64 * 1024, total);
-      controller.enqueue(body.subarray(sent, end));
-      sent = end;
     },
     cancel(reason) {
-      finish(`cancelled by client: ${String(reason ?? "no reason")}`);
+      settle(`cancelled by client: ${String(reason ?? "no reason").slice(0, 160)}`);
+      try { void reader.cancel(reason); } catch { /* ignore */ }
     },
   });
 
-  return { stream, whenDone, transferred: () => sent };
+  console.log(
+    `[rgm-gateway] /view streaming ${upstream.status} (${declared > 0 ? `${declared} bytes` : "length unknown"})`,
+  );
+  return new Response(stream, { status: upstream.status, headers });
 }
 
 function upstreamHeaders(extra: Record<string, string> = {}): Record<string, string> {
@@ -330,6 +377,14 @@ const server = Bun.serve<WsData>({
         body,
       };
 
+      // `/view` streams so Lumiverse sees response headers immediately rather
+      // than waiting out the whole 10-15 s tunnel transfer.
+      if (path === "/view") {
+        const res = await proxyStreamingView(path + url.search, upstreamInit, rule);
+        audit(req.method, path, res.status, ms());
+        return res;
+      }
+
       const upstream = await fetchUpstream(path + (req.method === "GET" ? url.search : ""), upstreamInit, rule);
 
       if (rule.expectJson && upstream.status >= 200 && upstream.status < 300) {
@@ -343,15 +398,6 @@ const server = Bun.serve<WsData>({
       }
 
       const resHeaders = { "Content-Type": upstream.contentType.split(";")[0] };
-
-      // Large binary bodies (/view) are streamed so a peer that hangs up
-      // mid-transfer is recorded instead of silently looking like a success.
-      if (path === "/view") {
-        const { stream } = streamingBody(upstream.body, "GET /view");
-        const res = new Response(stream, { status: upstream.status, headers: resHeaders });
-        audit(req.method, path, upstream.status, ms(), upstream.body.byteLength);
-        return res;
-      }
 
       const res = new Response(upstream.body, {
         status: upstream.status,

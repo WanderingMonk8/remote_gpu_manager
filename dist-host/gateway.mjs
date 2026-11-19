@@ -51,37 +51,83 @@ var audit = (method, path, status, ms, bytes) => {
   const size = typeof bytes === "number" ? ` bytes=${bytes}` : "";
   console.log(`${new Date().toISOString()} ${method} ${path} -> ${status} ${ms}ms${size}`);
 };
-function streamingBody(body, label) {
-  const total = body.byteLength;
-  let sent = 0;
+async function proxyStreamingView(path, init, rule) {
+  const controller = new AbortController;
+  const timer = setTimeout(() => controller.abort(), rule.timeoutMs);
+  let upstream;
+  try {
+    upstream = await fetch(GATEWAY_UPSTREAM + path, {
+      ...init,
+      signal: controller.signal,
+      redirect: "manual"
+    });
+  } catch (err) {
+    clearTimeout(timer);
+    const e = err;
+    const detail = String(e?.cause?.code ?? e?.cause?.message ?? e?.message ?? e?.name ?? "error").slice(0, 200);
+    console.warn(`[rgm-gateway] ${path.split("?")[0]} upstream fetch failed: ${e?.name ?? "Error"} (${detail})`);
+    if (e?.name === "AbortError")
+      throw new HttpError(504, "upstream_timeout");
+    throw new HttpError(502, "upstream_unreachable");
+  }
+  const contentType = (upstream.headers.get("content-type") ?? "application/octet-stream").split(";")[0];
+  const declared = Number(upstream.headers.get("content-length") ?? "");
+  const encoding = upstream.headers.get("content-encoding");
+  const headers = { "Content-Type": contentType };
+  if (!encoding && Number.isFinite(declared) && declared > 0) {
+    headers["Content-Length"] = String(declared);
+  }
+  if (!upstream.body) {
+    clearTimeout(timer);
+    console.log(`[rgm-gateway] /view upstream ${upstream.status} with no body`);
+    return new Response(null, { status: upstream.status, headers });
+  }
+  const reader = upstream.body.getReader();
+  let transferred = 0;
   let settled = false;
-  let resolveDone = () => {};
-  const whenDone = new Promise((resolve) => {
-    resolveDone = resolve;
-  });
-  const finish = (detail) => {
+  const settle = (message) => {
     if (settled)
       return;
     settled = true;
-    console.log(`[rgm-gateway] ${label} body ${detail} (${sent}/${total} bytes)`);
-    resolveDone();
+    clearTimeout(timer);
+    const total = declared > 0 ? `/${declared}` : "";
+    console.log(`[rgm-gateway] /view body ${message} (${transferred}${total} bytes)`);
   };
   const stream = new ReadableStream({
-    pull(controller) {
-      if (sent >= total) {
-        controller.close();
-        finish("delivered");
-        return;
+    async pull(controller) {
+      try {
+        const { value, done } = await reader.read();
+        if (done) {
+          controller.close();
+          settle("delivered");
+          return;
+        }
+        transferred += value.byteLength;
+        if (transferred > rule.maxBytes) {
+          try {
+            await reader.cancel("too large");
+          } catch {}
+          controller.error(new HttpError(502, "upstream_response_too_large"));
+          settle("aborted: too large");
+          return;
+        }
+        controller.enqueue(value);
+      } catch (err) {
+        settle(`failed: ${String(err?.message ?? err).slice(0, 160)}`);
+        try {
+          controller.error(err);
+        } catch {}
       }
-      const end = Math.min(sent + 64 * 1024, total);
-      controller.enqueue(body.subarray(sent, end));
-      sent = end;
     },
     cancel(reason) {
-      finish(`cancelled by client: ${String(reason ?? "no reason")}`);
+      settle(`cancelled by client: ${String(reason ?? "no reason").slice(0, 160)}`);
+      try {
+        reader.cancel(reason);
+      } catch {}
     }
   });
-  return { stream, whenDone, transferred: () => sent };
+  console.log(`[rgm-gateway] /view streaming ${upstream.status} (${declared > 0 ? `${declared} bytes` : "length unknown"})`);
+  return new Response(stream, { status: upstream.status, headers });
 }
 function upstreamHeaders(extra = {}) {
   const h = { ...extra };
@@ -231,6 +277,11 @@ var server = Bun.serve({
         headers: upstreamHeaders(body ? { "Content-Type": contentType } : {}),
         body
       };
+      if (path === "/view") {
+        const res = await proxyStreamingView(path + url.search, upstreamInit, rule);
+        audit(req.method, path, res.status, ms());
+        return res;
+      }
       const upstream = await fetchUpstream(path + (req.method === "GET" ? url.search : ""), upstreamInit, rule);
       if (rule.expectJson && upstream.status >= 200 && upstream.status < 300) {
         try {
@@ -242,12 +293,6 @@ var server = Bun.serve({
         }
       }
       const resHeaders = { "Content-Type": upstream.contentType.split(";")[0] };
-      if (path === "/view") {
-        const { stream } = streamingBody(upstream.body, "GET /view");
-        const res = new Response(stream, { status: upstream.status, headers: resHeaders });
-        audit(req.method, path, upstream.status, ms(), upstream.body.byteLength);
-        return res;
-      }
       const res = new Response(upstream.body, {
         status: upstream.status,
         headers: resHeaders
