@@ -3,7 +3,7 @@
 LumiverSE Vast.ai worker bootstrap (v2 — disk-optimized manifest).
 
 Runs on the vast.ai host via the instance `onstart` hook, ALONGSIDE the image
-entrypoint (yanwk/comfyui-boot:cu130-slim starts ComfyUI normally). Normal VRAM
+entrypoint (yanwk/comfyui-boot:cu126-slim starts ComfyUI normally). Normal VRAM
 mode is the default — no --lowvram/--novram flags are passed anywhere.
 
 Idempotent: safe to re-run on every boot. Per-file: skips downloads when the

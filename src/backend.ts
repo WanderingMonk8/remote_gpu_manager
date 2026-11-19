@@ -395,7 +395,7 @@ spindle.onFrontendMessage(async (payload: any, userId?: string) => {
     }
     // image: dockerhub-style or registry path with optional :tag — no URLs, credentials or ports
     if (!/^[a-z0-9]+([._-][a-z0-9]+)*(\/[a-z0-9]+([._-][a-z0-9]+)*)*(:[A-Za-z0-9][A-Za-z0-9._-]{0,127})?$/.test(image) || image.length < 3 || image.length > 400) {
-      spindle.sendToFrontend({ type: "vast_deploy_offer_result", ok: false, error: "image must be a plain image reference like yanwk/comfyui-boot:cu130-slim" }, userId);
+      spindle.sendToFrontend({ type: "vast_deploy_offer_result", ok: false, error: "image must be a plain image reference like yanwk/comfyui-boot:cu126-slim" }, userId);
       return;
     }
     if (!Number.isFinite(diskGB) || diskGB < 8 || diskGB > 200) {

@@ -139,7 +139,7 @@ export function setup(ctx: SpindleFrontendContext) {
         <div class="rgm-deploy" hidden>
           <h5>Deploy offer <span class="rgm-deploy-id"></span></h5>
           <p class="rgm-note">Rents a real machine, billed by the hour until you stop or destroy it. No model is downloaded — this first deploy only proves the create → inspect → stop → destroy lifecycle and billing.</p>
-          <label class="rgm-field"><span>Image</span><input class="rgm-deploy-image" type="text" spellcheck="false" value="yanwk/comfyui-boot:cu130-slim" /></label>
+          <label class="rgm-field"><span>Image</span><input class="rgm-deploy-image" type="text" spellcheck="false" value="yanwk/comfyui-boot:cu126-slim" /></label>
           <label class="rgm-field"><span>Boot profile</span>
             <select class="rgm-deploy-profile">
               <option value="lifecycle" selected>Lifecycle proof only (no downloads)</option>

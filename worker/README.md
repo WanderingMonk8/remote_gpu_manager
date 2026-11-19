@@ -7,7 +7,7 @@ the Space-side gateway is the transport (ADR-001/ADR-003).
 ## Bootstrap (`bootstrap.py`)
 
 Runs on the vast.ai host via the instance `onstart` hook alongside the image
-entrypoint (`yanwk/comfyui-boot:cu130-slim` — ComfyUI starts normally on
+entrypoint (`yanwk/comfyui-boot:cu126-slim` — ComfyUI starts normally on
 `0.0.0.0:8188`). Idempotent; a marker file (`/root/.lumiverse-bootstrap-v2.complete`)
 ends early. Failures print `BOOTSTRAP_FAILED <reason>` but ComfyUI stays up.
 Launch it from the **Full worker — Anima + MOSS (≈28 GB)** boot profile in the
