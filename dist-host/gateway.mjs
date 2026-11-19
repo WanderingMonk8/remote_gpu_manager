@@ -47,9 +47,42 @@ function matchRoute(method, path) {
   }
   return null;
 }
-var audit = (method, path, status, ms) => {
-  console.log(`${new Date().toISOString()} ${method} ${path} -> ${status} ${ms}ms`);
+var audit = (method, path, status, ms, bytes) => {
+  const size = typeof bytes === "number" ? ` bytes=${bytes}` : "";
+  console.log(`${new Date().toISOString()} ${method} ${path} -> ${status} ${ms}ms${size}`);
 };
+function streamingBody(body, label) {
+  const total = body.byteLength;
+  let sent = 0;
+  let settled = false;
+  let resolveDone = () => {};
+  const whenDone = new Promise((resolve) => {
+    resolveDone = resolve;
+  });
+  const finish = (detail) => {
+    if (settled)
+      return;
+    settled = true;
+    console.log(`[rgm-gateway] ${label} body ${detail} (${sent}/${total} bytes)`);
+    resolveDone();
+  };
+  const stream = new ReadableStream({
+    pull(controller) {
+      if (sent >= total) {
+        controller.close();
+        finish("delivered");
+        return;
+      }
+      const end = Math.min(sent + 64 * 1024, total);
+      controller.enqueue(body.subarray(sent, end));
+      sent = end;
+    },
+    cancel(reason) {
+      finish(`cancelled by client: ${String(reason ?? "no reason")}`);
+    }
+  });
+  return { stream, whenDone, transferred: () => sent };
+}
 function upstreamHeaders(extra = {}) {
   const h = { ...extra };
   if (AUTHORIZATION)
@@ -208,11 +241,18 @@ var server = Bun.serve({
           return res;
         }
       }
+      const resHeaders = { "Content-Type": upstream.contentType.split(";")[0] };
+      if (path === "/view") {
+        const { stream } = streamingBody(upstream.body, "GET /view");
+        const res = new Response(stream, { status: upstream.status, headers: resHeaders });
+        audit(req.method, path, upstream.status, ms(), upstream.body.byteLength);
+        return res;
+      }
       const res = new Response(upstream.body, {
         status: upstream.status,
-        headers: { "Content-Type": upstream.contentType.split(";")[0] }
+        headers: resHeaders
       });
-      audit(req.method, path, upstream.status, ms());
+      audit(req.method, path, upstream.status, ms(), upstream.body.byteLength);
       return res;
     } catch (err) {
       const status = err instanceof HttpError ? err.status : 500;

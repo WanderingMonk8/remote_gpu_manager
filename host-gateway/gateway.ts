@@ -90,9 +90,60 @@ function matchRoute(method: string, path: string): RouteRule | null {
 
 /* ---------------- helpers ---------------- */
 
-const audit = (method: string, path: string, status: number, ms: number) => {
-  console.log(`${new Date().toISOString()} ${method} ${path} -> ${status} ${ms}ms`);
+const audit = (method: string, path: string, status: number, ms: number, bytes?: number) => {
+  const size = typeof bytes === "number" ? ` bytes=${bytes}` : "";
+  console.log(`${new Date().toISOString()} ${method} ${path} -> ${status} ${ms}ms${size}`);
 };
+
+/**
+ * Stream a buffered upstream body back to Lumiverse while watching whether the
+ * client actually consumes it.
+ *
+ * Why: `GET /view` is where the generated PNG travels, and it is the only
+ * request whose body is large enough for the Space-side caller to hang up
+ * mid-transfer. When that happens the HTTP layer surfaces "socket connection
+ * was closed unexpectedly" even though the gateway logged a 200 — the audit
+ * line alone cannot tell a delivered image from a truncated one. The cancel
+ * handler closes that gap: it reports how many bytes made it out before the
+ * peer went away.
+ */
+function streamingBody(
+  body: Uint8Array,
+  label: string,
+): { stream: ReadableStream<Uint8Array>; whenDone: Promise<void>; transferred: () => number } {
+  const total = body.byteLength;
+  let sent = 0;
+  let settled = false;
+  let resolveDone: () => void = () => {};
+  const whenDone = new Promise<void>((resolve) => {
+    resolveDone = resolve;
+  });
+
+  const finish = (detail: string) => {
+    if (settled) return;
+    settled = true;
+    console.log(`[rgm-gateway] ${label} body ${detail} (${sent}/${total} bytes)`);
+    resolveDone();
+  };
+
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (sent >= total) {
+        controller.close();
+        finish("delivered");
+        return;
+      }
+      const end = Math.min(sent + 64 * 1024, total);
+      controller.enqueue(body.subarray(sent, end));
+      sent = end;
+    },
+    cancel(reason) {
+      finish(`cancelled by client: ${String(reason ?? "no reason")}`);
+    },
+  });
+
+  return { stream, whenDone, transferred: () => sent };
+}
 
 function upstreamHeaders(extra: Record<string, string> = {}): Record<string, string> {
   const h: Record<string, string> = { ...extra };
@@ -291,11 +342,22 @@ const server = Bun.serve<WsData>({
         }
       }
 
+      const resHeaders = { "Content-Type": upstream.contentType.split(";")[0] };
+
+      // Large binary bodies (/view) are streamed so a peer that hangs up
+      // mid-transfer is recorded instead of silently looking like a success.
+      if (path === "/view") {
+        const { stream } = streamingBody(upstream.body, "GET /view");
+        const res = new Response(stream, { status: upstream.status, headers: resHeaders });
+        audit(req.method, path, upstream.status, ms(), upstream.body.byteLength);
+        return res;
+      }
+
       const res = new Response(upstream.body, {
         status: upstream.status,
-        headers: { "Content-Type": upstream.contentType.split(";")[0] },
+        headers: resHeaders,
       });
-      audit(req.method, path, upstream.status, ms());
+      audit(req.method, path, upstream.status, ms(), upstream.body.byteLength);
       return res;
     } catch (err) {
       const status = err instanceof HttpError ? err.status : 500;

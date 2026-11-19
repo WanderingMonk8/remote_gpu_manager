@@ -2,6 +2,8 @@
 # a local patched copy may exist as Space.Dockerfile — never commit it.
 Space.Dockerfile
 **/Space.Dockerfile
+Dockerfile_swipe_state_fix
+**/Dockerfile_swipe_state_fix
 
 sdk-inspect/
 notebook_dump.txt
