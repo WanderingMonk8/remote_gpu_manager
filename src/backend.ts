@@ -22,6 +22,14 @@ const DEFAULT_GATEWAY_URL = "http://127.0.0.1:8189";
 const ENCLAVE_KEY = "vast.api_key";
 const FAILED_HOSTS_KEY = "failed-hosts.json";
 const ABSOLUTE_MAX_FAILED_HOSTS = 256;
+const MODEL_SELECTION_KEY = "model-selection.json";
+const VALID_MODEL_IDS = new Set([
+  "anima-turbo-1.1", "anima-turbo-1.0", "anima-base-1.0",
+  "anima-aesthetic-1.1", "anima-aesthetic-1.0", "anima-aesthetic-1.0b",
+  "anima-preview", "anima-preview2", "anima-preview3-base",
+  "moss-sft-int8", "moss-base-int8", "moss-sft-bf16", "moss-base-bf16", "adapter-ref",
+]);
+const DEFAULT_MODEL_SELECTION = ["anima-turbo-1.1", "anima-aesthetic-1.1", "moss-sft-int8", "moss-base-int8", "adapter-ref"];
 async function getFailedHosts(): Promise<number[]> {
   const saved = await spindle.storage.getJson<{ hosts?: number[] }>(FAILED_HOSTS_KEY, { fallback: { hosts: [] } });
   const list = Array.isArray(saved?.hosts) ? saved.hosts : [];
@@ -212,6 +220,25 @@ spindle.onFrontendMessage(async (payload: any, userId?: string) => {
   if (payload?.type === "vast_clear_failed_hosts") {
     await clearFailedHosts();
     spindle.sendToFrontend({ type: "vast_clear_failed_hosts_result", ok: true }, userId);
+    return;
+  }
+
+  // Persisted (global) model selection. Must match the worker's registry — unknown IDs are rejected.
+  if (payload?.type === "vast_get_model_selection") {
+    const saved = await spindle.storage.getJson<{ ids?: string[] }>(MODEL_SELECTION_KEY, { fallback: { ids: DEFAULT_MODEL_SELECTION } });
+    const ids = Array.isArray(saved?.ids) ? saved.ids.filter((i) => VALID_MODEL_IDS.has(i)) : DEFAULT_MODEL_SELECTION;
+    spindle.sendToFrontend({ type: "vast_get_model_selection_result", ok: true, ids: ids.length ? ids : DEFAULT_MODEL_SELECTION }, userId);
+    return;
+  }
+  if (payload?.type === "vast_set_model_selection") {
+    const raw = (payload.ids ?? []) as unknown[];
+    const ids = [...new Set(raw.filter((i): i is string => typeof i === "string" && VALID_MODEL_IDS.has(i)))];
+    if (!ids.length) {
+      spindle.sendToFrontend({ type: "vast_set_model_selection_result", ok: false, error: "pick at least one model" }, userId);
+      return;
+    }
+    await spindle.storage.setJson(MODEL_SELECTION_KEY, { ids });
+    spindle.sendToFrontend({ type: "vast_set_model_selection_result", ok: true, ids }, userId);
     return;
   }
 
@@ -456,8 +483,8 @@ spindle.onFrontendMessage(async (payload: any, userId?: string) => {
     const label = typeof payload.label === "string" && payload.label.trim() ? payload.label.trim().slice(0, 64) : "lumiverse-remote-gpu";
     const onstart = typeof payload.onstart === "string" && payload.onstart.trim() ? payload.onstart.trim() : undefined;
     const env = typeof payload.env === "string" && payload.env.trim() ? payload.env.trim() : undefined;
-    if (env && (env.length > 256 || !/^-/.test(env) || !/^-[a-zA-Z0-9_=.: -]*$/.test(env))) {
-      spindle.sendToFrontend({ type: "vast_deploy_offer_result", ok: false, error: "env must start with '-' and be ≤ 256 chars (e.g. -e KEY=VAL -p 8188)" }, userId);
+    if (env && (env.length > 1024 || !/^-/.test(env) || !/^-[a-zA-Z0-9_=.: -]*$/.test(env))) {
+      spindle.sendToFrontend({ type: "vast_deploy_offer_result", ok: false, error: "env must start with '-' and be ≤ 1024 chars (e.g. -e KEY=VAL -p 8188)" }, userId);
       return;
     }
     if (onstart && onstart.length > 4048) {

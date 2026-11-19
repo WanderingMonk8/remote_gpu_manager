@@ -59,6 +59,13 @@ export function setup(ctx: SpindleFrontendContext) {
     .rgm-limit-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--lumiverse-text); }
     .rgm-limit-row input { width: 64px; padding: 4px 6px; border: 1px solid var(--lumiverse-border); border-radius: 6px; background: var(--lumiverse-fill); color: var(--lumiverse-text); font: inherit; }
     .rgm-limit-note { font-size: 11px; color: var(--lumiverse-text-muted); flex-basis: 100%; }
+    .rgm-model-grid { display: grid; grid-template-columns: 1fr; gap: 4px; max-height: 240px; overflow: auto; border: 1px solid var(--lumiverse-border); border-radius: 8px; padding: 8px; background: var(--lumiverse-fill); }
+    .rgm-model-grid .rgm-check { padding-top: 0; padding: 3px 4px; border-radius: 6px; }
+    .rgm-model-grid .rgm-check:hover { background: color-mix(in srgb, var(--lumiverse-primary) 8%, transparent); }
+    .rgm-model-grid input { width: auto; }
+    .rgm-model-group { font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--lumiverse-text-muted); padding: 4px 4px 2px; }
+    .rgm-model-summary { font-size: 11px; color: var(--lumiverse-text-muted); padding-top: 4px; }
+    .rgm-model-summary b { color: var(--lumiverse-text); }
   `;
   const removeStyle = ctx.dom.addStyle(STYLES);
 
@@ -85,6 +92,26 @@ export function setup(ctx: SpindleFrontendContext) {
         </div>
         <div class="rgm-status" data-tone="unknown">Not checked yet.</div>
         <pre class="rgm-out"></pre>
+      </section>
+
+      <hr class="rgm-section-divider" />
+
+      <section>
+        <h4>My instances</h4>
+        <p class="rgm-note">Machines you have rented from this Vast.ai account. State shows raw Vast tokens (<code>actual → intended</code>); Vast's console renders <code>created</code>/<code>loading</code> as <b>Inactive</b>. <b>Stop</b> pauses GPU billing (disk storage continues to accrue). <b>Destroy</b> permanently deletes the instance and its disk — this cannot be undone. If the vast console shows <i>“Error response from daemon”</i>, the host cannot inject the GPU into containers — destroy the instance and deploy a different offer.</p>
+        <div class="rgm-limit-row">
+          <span>Max concurrent instances</span>
+          <input class="rgm-limit-input" type="number" min="1" max="8" value="1" />
+          <button class="rgm-limit-save rgm-primary" type="button">Save limit</button>
+          <button class="rgm-clear-blacklist" type="button">Clear blocked hosts (<span class="rgm-blacklist-count">0</span>)</button>
+          <span class="rgm-limit-note">Deploys are refused above the limit. Default 1 — raise only if you intentionally run more; each bills per hour. Blocked hosts never appear as fallback-race candidates.</span>
+        </div>
+        <div class="rgm-actions">
+          <button class="rgm-refresh-inst rgm-primary" type="button">Refresh</button>
+        </div>
+        <div class="rgm-status" data-tone="unknown" id="rgm-inst-status">Loading…</div>
+        <div class="rgm-inst-list"></div>
+        <pre class="rgm-out rgm-logs" hidden></pre>
       </section>
 
       <hr class="rgm-section-divider" />
@@ -141,6 +168,11 @@ export function setup(ctx: SpindleFrontendContext) {
           <p class="rgm-note">Rents a real machine, billed by the hour until you stop or destroy it. No model is downloaded — this first deploy only proves the create → inspect → stop → destroy lifecycle and billing.</p>
           <label class="rgm-field"><span>Image</span><input class="rgm-deploy-image" type="text" spellcheck="false" value="yanwk/comfyui-boot:cu126-slim" /></label>
           <label class="rgm-check"><input class="rgm-publish-port" type="checkbox" checked /><span>Publish ComfyUI (8188) as a direct port</span></label>
+          <div class="rgm-field">
+            <span>Models to install (min. 1 — selection saved for this account)</span>
+            <div class="rgm-model-grid"></div>
+            <div class="rgm-model-summary">Loading selection…</div>
+          </div>
           <label class="rgm-field"><span>Boot profile</span>
             <select class="rgm-deploy-profile">
               <option value="lifecycle" selected>Lifecycle proof only (no downloads)</option>
@@ -169,25 +201,6 @@ export function setup(ctx: SpindleFrontendContext) {
         </div>
       </section>
 
-      <hr class="rgm-section-divider" />
-
-      <section>
-        <h4>My instances</h4>
-        <p class="rgm-note">Machines you have rented from this Vast.ai account. State shows raw Vast tokens (<code>actual → intended</code>); Vast's console renders <code>created</code>/<code>loading</code> as <b>Inactive</b>. <b>Stop</b> pauses GPU billing (disk storage continues to accrue). <b>Destroy</b> permanently deletes the instance and its disk — this cannot be undone. If the vast console shows <i>“Error response from daemon”</i>, the host cannot inject the GPU into containers — destroy the instance and deploy a different offer.</p>
-        <div class="rgm-limit-row">
-          <span>Max concurrent instances</span>
-          <input class="rgm-limit-input" type="number" min="1" max="8" value="1" />
-          <button class="rgm-limit-save rgm-primary" type="button">Save limit</button>
-          <button class="rgm-clear-blacklist" type="button">Clear blocked hosts (<span class="rgm-blacklist-count">0</span>)</button>
-          <span class="rgm-limit-note">Deploys are refused above the limit. Default 1 — raise only if you intentionally run more; each bills per hour. Blocked hosts never appear as fallback-race candidates.</span>
-        </div>
-        <div class="rgm-actions">
-          <button class="rgm-refresh-inst rgm-primary" type="button">Refresh</button>
-        </div>
-        <div class="rgm-status" data-tone="unknown" id="rgm-inst-status">Loading…</div>
-        <div class="rgm-inst-list"></div>
-        <pre class="rgm-out rgm-logs" hidden></pre>
-      </section>
     </div>`;
 
   const out = drawer.root.querySelector(".rgm-out") as HTMLPreElement | null;
@@ -239,6 +252,54 @@ export function setup(ctx: SpindleFrontendContext) {
     if (hidden) box.setAttribute("hidden", ""); else box.removeAttribute("hidden");
     btn.textContent = hidden ? "Advanced filters ▾" : "Advanced filters ▴";
   });
+  // ---------- Model picker (persisted selection, global to this account) ----------
+  const MODEL_REGISTRY: Array<{ id: string; label: string; gb: number; group: string; dep?: "anima" | "moss_int8" | "moss_bf16" }> = [
+    { id: "anima-turbo-1.1",      label: "Anima Turbo v1.1 · 10 steps · 4.2 GB",      gb: 4.18, group: "Anima",  dep: "anima" },
+    { id: "anima-turbo-1.0",      label: "Anima Turbo v1.0 · 10 steps · 4.2 GB",      gb: 4.18, group: "Anima",  dep: "anima" },
+    { id: "anima-base-1.0",       label: "Anima Base v1.0 · 30 steps · 4.2 GB",       gb: 4.18, group: "Anima",  dep: "anima" },
+    { id: "anima-aesthetic-1.1",  label: "Anima Aesthetic v1.1 · 30 steps · 4.2 GB",  gb: 4.18, group: "Anima",  dep: "anima" },
+    { id: "anima-aesthetic-1.0",  label: "Anima Aesthetic v1.0 · 30 steps · 4.2 GB",  gb: 4.18, group: "Anima",  dep: "anima" },
+    { id: "anima-aesthetic-1.0b", label: "Anima Aesthetic v1.0b · 30 steps · 4.2 GB", gb: 4.18, group: "Anima",  dep: "anima" },
+    { id: "anima-preview",        label: "Anima Preview · 4.2 GB",                    gb: 4.18, group: "Anima",  dep: "anima" },
+    { id: "anima-preview2",       label: "Anima Preview 2 · 4.2 GB",                  gb: 4.18, group: "Anima",  dep: "anima" },
+    { id: "anima-preview3-base",  label: "Anima Preview 3 Base · 4.2 GB",             gb: 4.18, group: "Anima",  dep: "anima" },
+    { id: "moss-sft-int8",        label: "MOSS SFT INT8 · 25 steps · 5.4 GB",         gb: 5.41, group: "MOSS",   dep: "moss_int8" },
+    { id: "moss-base-int8",       label: "MOSS Base INT8 · 25 steps · 5.4 GB",        gb: 5.41, group: "MOSS",   dep: "moss_int8" },
+    { id: "moss-sft-bf16",        label: "MOSS SFT bf16 · 25 steps · 10.2 GB (+ 19.3 GB encoder)", gb: 10.16, group: "MOSS", dep: "moss_bf16" },
+    { id: "moss-base-bf16",       label: "MOSS Base bf16 · 25 steps · 10.2 GB (+ 19.3 GB encoder)", gb: 10.16, group: "MOSS", dep: "moss_bf16" },
+    { id: "adapter-ref",          label: "Anima reference-image adapter · 0.2 GB",    gb: 0.18, group: "Adapter" },
+  ];
+  // Auto-added when any member of the family is selected (mirrors bootstrap with_dependencies()).
+  const DEPS = { anima: { gb: 1.44, note: "Anima encoder 1.2 GB + VAE 0.25 GB" }, moss_int8: { gb: 7.59, note: "MOSS INT8 encoder 7.3 GB + VAE 0.25 GB" }, moss_bf16: { gb: 19.65, note: "MOSS bf16 encoder 19.3 GB + VAE 0.34 GB" } } as const;
+  const modelGrid = drawer.root.querySelector(".rgm-model-grid") as HTMLDivElement | null;
+  const modelSummary = drawer.root.querySelector(".rgm-model-summary") as HTMLDivElement | null;
+  const selectedModelIds = (): string[] =>
+    modelGrid ? [...modelGrid.querySelectorAll<HTMLInputElement>(".rm-model input:checked")].map((el) => el.dataset.id!).filter(Boolean) : [];
+  const paintModelSummary = () => {
+    if (!modelSummary) return;
+    const ids = selectedModelIds();
+    if (!ids.length) { modelSummary.innerHTML = '<b>Select at least one model.</b>'; return; }
+    const direct = ids.reduce((acc, id) => acc + (MODEL_REGISTRY.find((m) => m.id === id)?.gb ?? 0), 0);
+    const depGb = (ids.some((id) => id.startsWith("anima-")) ? DEPS.anima.gb : 0)
+      + (ids.some((id) => id === "moss-sft-int8" || id === "moss-base-int8") ? DEPS.moss_int8.gb : 0)
+      + (ids.some((id) => id === "moss-sft-bf16" || id === "moss-base-bf16") ? DEPS.moss_bf16.gb : 0);
+    modelSummary.innerHTML = `Selection: <b>${ids.length} model(s)</b> · model files <b>${direct.toFixed(1)} GB</b> + dependencies <b>${depGb.toFixed(1)} GB</b> → ~<b>${(direct + depGb).toFixed(1)} GB</b> downloaded on first boot`;
+  };
+  const persistSelection = () => {
+    const ids = selectedModelIds();
+    if (ids.length) ctx.sendToBackend({ type: "vast_set_model_selection", ids });
+  };
+  const renderModelPicker = (checkedIds: string[]) => {
+    if (!modelGrid) return;
+    const groups: Record<string, string> = { Anima: "ANIMA", MOSS: "MOSS", Adapter: "ADAPTER" };
+    modelGrid.innerHTML = Object.entries(groups).map(([key, title]) => `<div class="rgm-model-group">${title}</div>` +
+      MODEL_REGISTRY.filter((m) => m.group === key).map((m) => `
+        <label class="rgm-check rm-model"><input type="checkbox" data-id="${m.id}" ${checkedIds.includes(m.id) ? "checked" : ""} /><span>${m.label}</span></label>`).join("")
+    ).join("");
+    modelGrid.querySelectorAll(".rm-model input").forEach((el) => el.addEventListener("change", () => { paintModelSummary(); persistSelection(); paintDeploy(); }));
+    paintModelSummary();
+  };
+
   // ---------- Deploy flow (paid action — explicit user approval required) ----------
   let lastSearchAt: number | null = null;
   const searchAge = drawer.root.querySelector(".rgm-search-age") as HTMLDivElement | null;
@@ -322,7 +383,7 @@ export function setup(ctx: SpindleFrontendContext) {
       }
     }
     const ready = !!deployTarget && deployApprove?.checked === true && imageOk
-      && Number.isFinite(diskGB) && diskGB >= 8 && diskGB <= 200 && !overCap && ownershipOk;
+      && Number.isFinite(diskGB) && diskGB >= 8 && diskGB <= 200 && !overCap && ownershipOk && selectedModelIds().length > 0;
     if (deployGo) deployGo.disabled = !ready;
     if (deployStatus) {
       // Never overwrite a terminal message (Deploying… / result / error) with the benign hint.
@@ -330,6 +391,7 @@ export function setup(ctx: SpindleFrontendContext) {
       const benign = cur === "" || cur.startsWith("Review the terms") || cur.startsWith("Approved") || overCap;
       if (overCap) { deployStatus.dataset.tone = "bad"; deployStatus.textContent = `Offer price $${deployTarget?.dph.toFixed(3)}/hr exceeds your $${cap.toFixed(2)}/hr cap.`; }
       else if (!ownershipOk) { deployStatus.dataset.tone = "bad"; deployStatus.textContent = `You own ${ownedCount} instance(s) at your limit of ${maxInstances} — destroy one, raise Max concurrent instances, or tick the override to deploy above it.`; }
+      else if (selectedModelIds().length === 0) { deployStatus.dataset.tone = "bad"; deployStatus.textContent = "Select at least one model to install (checkboxes above)."; }
       else if (ready && benign) { deployStatus.dataset.tone = "unknown"; deployStatus.textContent = "Approved to deploy. Clicking starts billing immediately."; }
     }
   };
@@ -387,7 +449,10 @@ export function setup(ctx: SpindleFrontendContext) {
       approved: true,
       allowMultiple: deployOverride?.checked === true,
       onstart: deployProfile?.value === "full" ? DEPLOY_ONSTART_FULL : undefined,
-      env: deployPublishPort?.checked === true ? "-p 8188" : undefined,
+      env: [
+        deployPublishPort?.checked === true ? "-p 8188" : "",
+        selectedModelIds().length ? `-e lumiverse_models=${selectedModelIds().join(",")}` : "",
+      ].filter(Boolean).join(" ") || undefined,
       target: {
         gpuName: deployTarget.gpu,
         numGpus: deployTarget.gpus,
@@ -589,6 +654,12 @@ export function setup(ctx: SpindleFrontendContext) {
         if (sStatus) { sStatus.dataset.tone = "bad"; sStatus.textContent = "Key cleared."; }
         paintBanner("bad", "○ No Vast.ai key saved");
         return;
+      case "vast_get_model_selection_result":
+        renderModelPicker(Array.isArray(payload.ids) ? payload.ids : []);
+        return;
+      case "vast_set_model_selection_result":
+        if (!payload.ok && modelSummary) modelSummary.innerHTML = `<b>Could not save selection:</b> ${escapeHtml(String(payload.error ?? "unknown error"))}`;
+        return;
       case "vast_get_limits_result":
         if (payload.ok) {
           maxInstances = Math.min(8, Math.max(1, Number(payload.maxInstances) || 1));
@@ -737,10 +808,13 @@ export function setup(ctx: SpindleFrontendContext) {
     }
   });
 
+  renderModelPicker(["anima-turbo-1.1", "anima-aesthetic-1.1", "moss-sft-int8", "moss-base-int8", "adapter-ref"]);
+  const askModelSelection = () => ctx.sendToBackend({ type: "vast_get_model_selection" });
   askVastStatus();
   askInstances();
   askLimits();
   askFailedHosts();
+  askModelSelection();
 
   return () => {
     unsub();
