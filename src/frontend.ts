@@ -430,6 +430,7 @@ export function setup(ctx: SpindleFrontendContext) {
             ${canStart ? '<button class="rgm-inst-start" type="button">Start</button>' : ""}
             ${canStop ? '<button class="rgm-inst-stop" type="button">Stop</button>' : ""}
             <button class="rgm-inst-logs" type="button">Logs</button>
+            <button class="rgm-inst-details" type="button">Details</button>
             <button class="rgm-inst-block" type="button" data-machine="${i.machineId ?? ""}">Block host</button>
             <button class="rgm-inst-destroy${armed ? " rgm-destroy-armed" : ""}" type="button">${armed ? "Confirm destroy" : "Destroy"}</button>
           </div>
@@ -454,6 +455,12 @@ export function setup(ctx: SpindleFrontendContext) {
       armedDestroyId = null;
       if (instStatus) { instStatus.dataset.tone = "unknown"; instStatus.textContent = `Requesting logs for #${id}… (can take ~20–30s)`; }
       ctx.sendToBackend({ type: "vast_logs_instance", id });
+      return;
+    }
+    if (el.closest?.(".rgm-inst-details")) {
+      armedDestroyId = null;
+      if (instStatus) { instStatus.dataset.tone = "unknown"; instStatus.textContent = `Fetching details for #${id}…`; }
+      ctx.sendToBackend({ type: "vast_show_instance", id });
       return;
     }
     const blockBtn = el.closest?.(".rgm-inst-block") as HTMLButtonElement | null;
@@ -642,6 +649,30 @@ export function setup(ctx: SpindleFrontendContext) {
         }
         askInstances();
         return;
+      case "vast_show_instance_result": {
+        if (payload.ok && payload.view) {
+          const v = payload.view;
+          if (logsOut) {
+            logsOut.removeAttribute("hidden");
+            const ports = Array.isArray(v.ports) && v.ports.length
+              ? (v.ports as Array<[number, number]>).map(([ext, int]) => `${ext} → :${int}`).join("\n")
+              : "(no direct port mappings reported)";
+            logsOut.textContent = [
+              `Instance #${v.id} — ${v.gpuName ?? "?"} × ${v.numGpus ?? 1} — ${v.status}${v.intendedStatus ? ` (intended: ${v.intendedStatus})` : ""}`,
+              `Public IP: ${v.publicIpaddr ?? "?"}`,
+              `Ports:\n${ports}`,
+              v.sshHost ? `SSH: ssh -p ${v.sshPort} root@${v.sshHost} (needs your vast ssh key)` : "SSH: (none reported)",
+              `Cost: $${v.dphTotal != null ? Number(v.dphTotal).toFixed(3) : "?"}/hr · up ${fmtUptime(v.uptimeMins ?? null)}`,
+            ].join("\n");
+            logsOut.scrollIntoView({ behavior: "smooth", block: "nearest" });
+          }
+          if (instStatus) { instStatus.dataset.tone = "ok"; instStatus.textContent = `Details for #${payload.id} — look for :8188 in the ports list to reach ComfyUI.`; }
+        } else if (instStatus) {
+          instStatus.dataset.tone = "bad";
+          instStatus.textContent = `Details for #${payload.id}: ${payload.error ?? "failed"}`;
+        }
+        return;
+      }
       case "vast_logs_instance_result": {
         if (payload.ok) {
           if (logsOut) { logsOut.removeAttribute("hidden"); logsOut.textContent = String(payload.text ?? ""); logsOut.scrollIntoView({ behavior: "smooth", block: "nearest" }); }

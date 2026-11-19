@@ -278,6 +278,46 @@ spindle.onFrontendMessage(async (payload: any, userId?: string) => {
     return;
   }
 
+  // Read-only inspection of one OWNED instance — public IP, direct port mapping, status.
+  // Used by the UI (details button) and later by the host-gateway to route to the worker.
+  if (payload?.type === "vast_show_instance" && typeof payload.id === "number") {
+    const id = Math.floor(payload.id);
+    const apiKey = await spindle.enclave.get(ENCLAVE_KEY, userId);
+    if (!apiKey) {
+      spindle.sendToFrontend({ type: "vast_show_instance_result", ok: false, error: "no Vast.ai key saved yet" }, userId);
+      return;
+    }
+    const res = await vastApi(apiKey, "GET", `/api/v0/instances/${id}/?owner=me`);
+    if (!res.ok) {
+      spindle.sendToFrontend({ type: "vast_show_instance_result", ok: false, error: res.error ?? `HTTP ${res.status}` }, userId);
+      return;
+    }
+    const b: any = res.body?.instances ?? res.body;
+    const ports: Array<[number, number]> = Array.isArray(b?.ports)
+      ? b.ports.map((p: any) => (Array.isArray(p) ? [Number(p[0]), Number(p[1])] : null)).filter(Boolean)
+      : [];
+    spindle.sendToFrontend({
+      type: "vast_show_instance_result",
+      ok: true,
+      id,
+      view: {
+        id: Number(b?.id ?? id) || id,
+        label: typeof b?.label === "string" ? b.label.slice(0, 64) : null,
+        gpuName: typeof b?.gpu_name === "string" ? b.gpu_name : null,
+        numGpus: Number(b?.num_gpus ?? 1) || 1,
+        publicIpaddr: typeof b?.public_ipaddr === "string" ? b.public_ipaddr : null,
+        ports,
+        sshHost: typeof b?.ssh_host === "string" ? b.ssh_host : null,
+        sshPort: typeof b?.ssh_port === "number" ? b.ssh_port : null,
+        status: String(b?.actual_status ?? b?.cur_state ?? "unknown"),
+        intendedStatus: b?.intended_status ?? null,
+        uptimeMins: typeof b?.uptime_mins === "number" ? b.uptime_mins : null,
+        dphTotal: typeof b?.dph_total === "number" ? b.dph_total : Number(b?.dph_total) || null,
+      },
+    }, userId);
+    return;
+  }
+
   // Fetch an instance's log text (read-only). vast requires a two-step request_logs -> result_url -> GET flow.
   if (payload?.type === "vast_logs_instance" && typeof payload.id === "number") {
     const id = Math.floor(payload.id);
