@@ -579,8 +579,8 @@ spindle.onFrontendMessage(async (payload: any, userId?: string) => {
       disk: diskGB,
       label,
       target_state: "running",
-      // vast's own preference-list syntax (matches CLI --ssh --direct): direct ports if host supports, else proxy.
-      runtype: "ssh_direc ssh_proxy",
+      // vast's enum exposes ssh_direct for raw-TCP direct port access; yanwk's sshd-less image needs it
+      runtype: "ssh_direct",
       ...(onstart ? { onstart } : {}),
       ...(parsedEnv ? { env: parsedEnv } : {}),
     });
