@@ -170,6 +170,7 @@ export function setup(ctx: SpindleFrontendContext) {
           <label class="rgm-field"><span>Image</span><input class="rgm-deploy-image" type="text" spellcheck="false" value="yanwk/comfyui-boot:cu126-slim" /></label>
           <label class="rgm-check"><input class="rgm-publish-port" type="checkbox" checked /><span>Publish ComfyUI (8188) as a direct port</span></label>
           <label class="rgm-check"><input class="rgm-lifecycle-only" type="checkbox" /><span>Lifecycle proof only — no model downloads (empty ComfyUI, still publishes 8188)</span></label>
+          <label class="rgm-check"><input class="rgm-probe-conn" type="checkbox" /><span>Connectivity probe — no models, no ComfyUI, just a bare HTTP server on 8188</span></label>
           <div class="rgm-field">
             <span>Models to install — min. 1 unless Lifecycle proof is ticked (selection saved for this account)</span>
             <div class="rgm-model-grid"></div>
@@ -301,7 +302,8 @@ export function setup(ctx: SpindleFrontendContext) {
     paintModelSummary();
   };
 
-  // ---------- Deploy flow (paid action — explicit user approval required) ----------
+  // Connectivity-probe onstart (no models): just validates vast's port forwarding end-to-end.
+  const DEPLOY_ONSTART_PROBE = "python3 -m http.server 8188 --bind 0.0.0.0";
   let lastSearchAt: number | null = null;
   const searchAge = drawer.root.querySelector(".rgm-search-age") as HTMLDivElement | null;
   const offerAgeMinutes = () => (lastSearchAt == null ? null : Math.floor((Date.now() - lastSearchAt) / 60000));
@@ -383,7 +385,8 @@ export function setup(ctx: SpindleFrontendContext) {
       }
     }
     const lifecycleOnly = deployLifecycle?.checked === true;
-    const modelsOk = lifecycleOnly || selectedModelIds().length > 0;
+    const probe = probeConn?.checked === true;
+    const modelsOk = lifecycleOnly || probe || selectedModelIds().length > 0;
     const ready = !!deployTarget && deployApprove?.checked === true && imageOk
       && Number.isFinite(diskGB) && diskGB >= 8 && diskGB <= 200 && !overCap && ownershipOk && modelsOk;
     if (deployGo) deployGo.disabled = !ready;
@@ -393,7 +396,7 @@ export function setup(ctx: SpindleFrontendContext) {
       const benign = cur === "" || cur.startsWith("Review the terms") || cur.startsWith("Approved") || overCap;
       if (overCap) { deployStatus.dataset.tone = "bad"; deployStatus.textContent = `Offer price $${deployTarget?.dph.toFixed(3)}/hr exceeds your $${cap.toFixed(2)}/hr cap.`; }
       else if (!ownershipOk) { deployStatus.dataset.tone = "bad"; deployStatus.textContent = `You own ${ownedCount} instance(s) at your limit of ${maxInstances} — destroy one, raise Max concurrent instances, or tick the override to deploy above it.`; }
-      else if (!modelsOk) { deployStatus.dataset.tone = "bad"; deployStatus.textContent = "Select at least one model to install, or tick Lifecycle proof only."; }
+      else if (!modelsOk) { deployStatus.dataset.tone = "bad"; deployStatus.textContent = "Select at least one model to install, or tick Lifecycle proof / Connectivity probe."; }
       else if (ready && benign) { deployStatus.dataset.tone = "unknown"; deployStatus.textContent = "Approved to deploy. Clicking starts billing immediately."; }
     }
   };
@@ -433,11 +436,13 @@ export function setup(ctx: SpindleFrontendContext) {
   deployFallback?.addEventListener("change", paintDeploy);
   deployOverride?.addEventListener("change", paintDeploy);
   // Bind lifecycle-only toggle: greys out the picker and flips the deploy to boot-only mode.
+  const probeConn = drawer.root.querySelector(".rgm-probe-conn") as HTMLInputElement | null;
   const modelGridEl = drawer.root.querySelector(".rgm-model-grid") as HTMLDivElement | null;
   const applyLifecycleUi = () => {
     const on = deployLifecycle?.checked === true;
-    if (modelGridEl) modelGridEl.classList.toggle("rgm-model-grid-disabled", on);
-    if (deployNote) deployNote.textContent = on ? NOTE_LIFECYCLE : NOTE_FULL;
+    const probe = probeConn?.checked === true;
+    if (modelGridEl) modelGridEl.classList.toggle("rgm-model-grid-disabled", on || probe);
+    if (deployNote) deployNote.textContent = probe ? "Connectivity probe — boots a bare HTTP server on 8188 to validate port publishing. No ComfyUI, no models." : on ? NOTE_LIFECYCLE : NOTE_FULL;
     paintModelSummary();
   };
   deployLifecycle?.addEventListener("change", () => {
@@ -445,6 +450,7 @@ export function setup(ctx: SpindleFrontendContext) {
     if (deployLifecycle?.checked !== true && deployDisk && deployDisk.value === "100") deployDisk.value = "60";
     paintDeploy();
   });
+  probeConn?.addEventListener("change", () => { applyLifecycleUi(); paintDeploy(); });
   drawer.root.querySelector(".rgm-deploy-cancel")?.addEventListener("click", closeDeploy);
   deployGo?.addEventListener("click", () => {
     if (!deployTarget || deployApprove?.checked !== true) return;
@@ -453,16 +459,17 @@ export function setup(ctx: SpindleFrontendContext) {
     ctx.sendToBackend({
       type: "vast_deploy_offer",
       offerId: deployTarget.id,
-      image: (deployImage?.value ?? "").trim(),
       diskGB: Number(deployDisk?.value ?? 60),
       maxPricePerHour: Number(deployCap?.value ?? 0.25),
       label: "lumiverse-remote-gpu",
       approved: true,
       allowMultiple: deployOverride?.checked === true,
-      onstart: deployLifecycle?.checked === true ? undefined : DEPLOY_ONSTART_FULL,
+      // transport note: probe runs bare python http.server on vast's base image — validates port publish end-to-end
+      image: probeConn?.checked === true ? "vastai/base-image:cuda-13.0.3-auto" : (deployImage?.value ?? "").trim(),
+      onstart: probeConn?.checked === true ? DEPLOY_ONSTART_PROBE : (deployLifecycle?.checked === true ? undefined : DEPLOY_ONSTART_FULL),
       env: [
         deployPublishPort?.checked === true ? "-p 8188" : "",
-        (deployLifecycle?.checked !== true && selectedModelIds().length) ? `-e lumiverse_models=${selectedModelIds().join(",")}` : "",
+        (deployLifecycle?.checked !== true && probeConn?.checked !== true && selectedModelIds().length) ? `-e lumiverse_models=${selectedModelIds().join(",")}` : "",
       ].filter(Boolean).join(" ") || undefined,
       target: {
         gpuName: deployTarget.gpu,
