@@ -20,6 +20,8 @@ declare const spindle: import("lumiverse-spindle-types").SpindleAPI;
 
 const DEFAULT_GATEWAY_URL = "http://127.0.0.1:8189";
 const ENCLAVE_KEY = "vast.api_key";
+/** Hard guarantee against accidental double deploys (user double-click, replay, both UI paths). */
+let deployInFlight = false;
 
 async function getGatewayUrl(): Promise<string> {
   const saved = await spindle.storage.getJson<{ url?: string }>("gateway-url.json", { fallback: {} });
@@ -314,7 +316,16 @@ spindle.onFrontendMessage(async (payload: any, userId?: string) => {
   // Deploy an offer as a new PAID instance. Frontend confirm panel must pass approved:true and a price cap.
   // If payload.fallback.enabled, a failed create races onto freshly searched similar offers
   // (same GPU, >= target VRAM/count, price <= target x (1 + pct/100)), cheapest first.
+  // Single-flight: at most ONE deploy workflow at a time; plus a hard ownership wall so a
+  // second instance is never created by accident (explicit allowMultiple override required).
   if (payload?.type === "vast_deploy_offer") {
+    if (deployInFlight) {
+      spindle.sendToFrontend({ type: "vast_deploy_offer_result", ok: false, error: "a deploy is already in flight — wait for it to finish before trying again" }, userId);
+      return;
+    }
+    deployInFlight = true;
+    try {
+
     if (payload.approved !== true) {
       spindle.sendToFrontend({ type: "vast_deploy_offer_result", ok: false, error: "deploy requires approved:true (frontend must get explicit user approval first)" }, userId);
       return;
@@ -359,6 +370,19 @@ spindle.onFrontendMessage(async (payload: any, userId?: string) => {
     const apiKey = await spindle.enclave.get(ENCLAVE_KEY, userId);
     if (!apiKey) {
       spindle.sendToFrontend({ type: "vast_deploy_offer_result", ok: false, error: "no Vast.ai key saved yet" }, userId);
+      return;
+    }
+    // Ownership wall: refuse to create a SECOND instance unless the user explicitly overrode it.
+    try {
+      const owned = await vastListInstances(apiKey);
+      if (owned.length > 0 && payload.allowMultiple !== true) {
+        const list = owned.map((i) => `#${i.id} (${i.status})`).join(", ");
+        spindle.sendToFrontend({ type: "vast_deploy_offer_result", ok: false, error: `you already own ${owned.length} instance(s): ${list} — destroy one first, or tick the override in the deploy panel to rent another` }, userId);
+        return;
+      }
+    } catch (err) {
+      spindle.log.info(`vast_deploy_offer ownership check failed: ${String(err)} — refusing to deploy blind`);
+      spindle.sendToFrontend({ type: "vast_deploy_offer_result", ok: false, error: `could not verify existing instances (${err instanceof Error ? err.message : String(err)}) — refusing to deploy blind. Refresh the list and try again.` }, userId);
       return;
     }
     const makeBody = (): Record<string, unknown> => ({
@@ -430,6 +454,9 @@ spindle.onFrontendMessage(async (payload: any, userId?: string) => {
       emitFail(`fallback search failed: ${err instanceof Error ? err.message : String(err)}`, attempts);
     }
     return;
+    } finally {
+      deployInFlight = false;
+    }
   }
 
   // Read-only offer search. The key never leaves this process; the frontend only

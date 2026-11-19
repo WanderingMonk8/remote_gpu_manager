@@ -53,6 +53,9 @@ export function setup(ctx: SpindleFrontendContext) {
     .rgm-inst button.rgm-destroy-armed { border-color: var(--lumiverse-error); background: var(--lumiverse-error); color: #fff; font-weight: 700; }
     .rgm-fallback-pct-wrap { display: inline-flex; align-items: center; gap: 6px; }
     .rgm-fallback-pct-wrap input { width: 56px; padding: 4px 6px; border: 1px solid var(--lumiverse-border); border-radius: 6px; background: var(--lumiverse-fill); color: var(--lumiverse-text); font: inherit; font-size: 12px; }
+    .rgm-deploy-existing { border: 1px solid var(--lumiverse-error); border-radius: 8px; padding: 8px 10px; display: grid; gap: 4px; }
+    .rgm-deploy-existing .rgm-note { color: var(--lumiverse-error); }
+    .rgm-deploy-existing .rgm-check { padding-top: 0; }
   `;
   const removeStyle = ctx.dom.addStyle(STYLES);
 
@@ -143,6 +146,11 @@ export function setup(ctx: SpindleFrontendContext) {
           <label class="rgm-check"><input class="rgm-deploy-fallback" type="checkbox" /><span>If this offer is taken, auto-deploy a similar one within</span>
             <span class="rgm-fallback-pct-wrap"><input class="rgm-deploy-fallback-pct" type="number" value="15" min="5" max="50" step="1" />% of its price</span>
           </label>
+          <div class="rgm-deploy-existing" hidden>
+            <p class="rgm-note"><b>⚠ You already own <span class="rgm-existing-count">0</span> instance(s):</b> <span class="rgm-existing-list"></span></p>
+            <p class="rgm-note">A second deploy doubles your billing. Destroy or stop the old one first — or tick the override if you really mean it.</p>
+            <label class="rgm-check"><input class="rgm-deploy-override" type="checkbox" /><span>I understand — deploy another instance anyway</span></label>
+          </div>
           <div class="rgm-filter-grid">
             <label class="rgm-field"><span>Disk (GB)</span><input class="rgm-deploy-disk" type="number" value="100" min="8" max="200" step="1" /></label>
             <label class="rgm-field"><span>Max price ($/hr)</span><input class="rgm-deploy-cap" type="number" value="0.25" min="0.01" max="2" step="0.01" /></label>
@@ -232,6 +240,11 @@ export function setup(ctx: SpindleFrontendContext) {
   const NOTE_FULL = "Rents a real machine, billed by the hour. On first boot the bootstrap downloads ≈28 GB (Anima Turbo/Aesthetic v1.1, MOSS INT8 ×2, encoders, Anima ref-adapter). ComfyUI stays up; generate only after the Logs show BOOTSTRAP_COMPLETE. The disk keeps all weights across stop/start (storage cost continues while stopped).";
   const deployFallback = drawer.root.querySelector(".rgm-deploy-fallback") as HTMLInputElement | null;
   const deployFallbackPct = drawer.root.querySelector(".rgm-deploy-fallback-pct") as HTMLInputElement | null;
+  const deployExisting = drawer.root.querySelector(".rgm-deploy-existing") as HTMLDivElement | null;
+  const deployExistingCount = drawer.root.querySelector(".rgm-existing-count") as HTMLSpanElement | null;
+  const deployExistingList = drawer.root.querySelector(".rgm-existing-list") as HTMLSpanElement | null;
+  const deployOverride = drawer.root.querySelector(".rgm-deploy-override") as HTMLInputElement | null;
+  let lastInstances: any[] = [];
   const approveLabel = drawer.root.querySelector(".rgm-approve-label") as HTMLSpanElement | null;
   const fallbackCeiling = () => {
     const pct = Math.min(50, Math.max(1, Number(deployFallbackPct?.value) || 15));
@@ -267,14 +280,28 @@ export function setup(ctx: SpindleFrontendContext) {
     const diskGB = Number(deployDisk?.value ?? 0);
     const overCap = !!deployTarget && Number.isFinite(cap) && deployTarget.dph > cap;
     const imageOk = imagePattern.test((deployImage?.value ?? "").trim());
+    const ownedCount = lastInstances.length;
+    const ownershipOk = ownedCount === 0 || deployOverride?.checked === true;
+    // Reflect the ownership interstitial
+    if (deployExisting) {
+      if (ownedCount > 0) {
+        deployExisting.removeAttribute("hidden");
+        if (deployExistingCount) deployExistingCount.textContent = String(ownedCount);
+        if (deployExistingList) deployExistingList.textContent = lastInstances.map((i) => `#${i.id} (${i.status})`).join(", ");
+      } else {
+        deployExisting.setAttribute("hidden", "");
+        if (deployOverride) deployOverride.checked = false;
+      }
+    }
     const ready = !!deployTarget && deployApprove?.checked === true && imageOk
-      && Number.isFinite(diskGB) && diskGB >= 8 && diskGB <= 200 && !overCap;
+      && Number.isFinite(diskGB) && diskGB >= 8 && diskGB <= 200 && !overCap && ownershipOk;
     if (deployGo) deployGo.disabled = !ready;
     if (deployStatus) {
       // Never overwrite a terminal message (Deploying… / result / error) with the benign hint.
       const cur = deployStatus.textContent ?? "";
       const benign = cur === "" || cur.startsWith("Review the terms") || cur.startsWith("Approved") || overCap;
       if (overCap) { deployStatus.dataset.tone = "bad"; deployStatus.textContent = `Offer price $${deployTarget?.dph.toFixed(3)}/hr exceeds your $${cap.toFixed(2)}/hr cap.`; }
+      else if (!ownershipOk) { deployStatus.dataset.tone = "bad"; deployStatus.textContent = `You already own ${ownedCount} instance(s) — destroy one first, or tick the override to rent another anyway.`; }
       else if (ready && benign) { deployStatus.dataset.tone = "unknown"; deployStatus.textContent = "Approved to deploy. Clicking starts billing immediately."; }
     }
   };
@@ -283,6 +310,7 @@ export function setup(ctx: SpindleFrontendContext) {
     const age = offerAgeMinutes();
     const stale = age != null && age >= 3;
     if (deployApprove) deployApprove.checked = false;
+    if (deployOverride) deployOverride.checked = false;
     if (deployId) deployId.textContent = `#${target.id}`;
     if (deployStatus) { deployStatus.dataset.tone = stale ? "bad" : "unknown"; deployStatus.textContent = stale ? `These offers are ~${age} min old — this one may already be gone. Re-search and deploy instantly.` : "Review the terms, tick the approval, then Deploy."; }
     paintDeploy();
@@ -304,6 +332,7 @@ export function setup(ctx: SpindleFrontendContext) {
   for (const el of [deployImage, deployDisk, deployCap, deployFallback, deployFallbackPct]) el?.addEventListener("input", paintDeploy);
   deployApprove?.addEventListener("change", paintDeploy);
   deployFallback?.addEventListener("change", paintDeploy);
+  deployOverride?.addEventListener("change", paintDeploy);
   deployProfile?.addEventListener("change", () => {
     if (deployProfile.value === "full" && deployDisk && deployDisk.value === "100") deployDisk.value = "60"; // slim manifest now
     paintDeploy();
@@ -321,6 +350,7 @@ export function setup(ctx: SpindleFrontendContext) {
       maxPricePerHour: Number(deployCap?.value ?? 0.25),
       label: "lumiverse-remote-gpu",
       approved: true,
+      allowMultiple: deployOverride?.checked === true,
       onstart: deployProfile?.value === "full" ? DEPLOY_ONSTART_FULL : undefined,
       target: {
         gpuName: deployTarget.gpu,
@@ -347,6 +377,7 @@ export function setup(ctx: SpindleFrontendContext) {
     return d > 0 ? `${d}d ${h}h` : h > 0 ? `${h}h ${m}m` : `${m}m`;
   };
   const renderInstances = (instances: any[]) => {
+    lastInstances = instances;
     if (!instList) return;
     if (!instances.length) { instList.innerHTML = '<div class="rgm-status" data-tone="unknown">No instances in this Vast.ai account.</div>'; return; }
     instList.innerHTML = instances.map((i: any) => {
