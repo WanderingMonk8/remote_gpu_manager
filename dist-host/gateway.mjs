@@ -237,6 +237,7 @@ async function handleControl(req, path) {
 var server = Bun.serve({
   hostname: "127.0.0.1",
   port: GATEWAY_PORT,
+  idleTimeout: 255,
   async fetch(req, server) {
     const started = Date.now();
     const url = new URL(req.url);

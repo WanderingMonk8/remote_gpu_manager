@@ -327,6 +327,19 @@ const server = Bun.serve<WsData>({
   hostname: "127.0.0.1",
   port: GATEWAY_PORT,
 
+  // Bun's default is 10 seconds, and it does NOT exempt a request whose handler
+  // is still waiting on upstream — the socket is simply closed.
+  //
+  // That is what broke 1024px generations: `/view` needed 11-13 s to pull the
+  // image out of the tunnel, the gateway had written nothing yet, and Bun closed
+  // the connection at ~10.7 s. Lumiverse then reported "socket connection was
+  // closed unexpectedly" and threw the image away. 512px transfers finish under
+  // 10 s, which is why they almost always succeeded.
+  //
+  // Cold `/object_info` can also take 20-120 s. 255 s is Bun's maximum and
+  // comfortably covers both.
+  idleTimeout: 255,
+
   async fetch(req, server) {
     const started = Date.now();
     const url = new URL(req.url);

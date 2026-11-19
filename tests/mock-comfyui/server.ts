@@ -24,6 +24,9 @@ const PORT = Number(process.env.MOCK_PORT || 8188);
 const BASIC_USER = process.env.MOCK_USER || "lumiverse";
 const BASIC_PASS = process.env.MOCK_PASS || "test-secret";
 const EXECUTION_MS = Number(process.env.MOCK_EXECUTION_MS || 150);
+// Delay before the first /view byte. Used to reproduce slow tunnel transfers
+// (an 11-13 s image) without needing a multi-megabyte fixture.
+const VIEW_DELAY_MS = Number(process.env.MOCK_VIEW_DELAY_MS || 0);
 
 // 1x1 transparent PNG
 const TINY_PNG = Buffer.from(
@@ -175,6 +178,10 @@ function json(data: unknown, status = 200): Response {
 const server = Bun.serve({
   hostname: "127.0.0.1",
   port: PORT,
+  // The real ComfyUI worker is Python/aiohttp, which has no 10 s idle cap.
+  // Without this the fixture's own default would close slow /view requests and
+  // mask the gateway behaviour the tests are meant to exercise.
+  idleTimeout: 255,
   async fetch(req, server) {
     const url = new URL(req.url);
     const path = url.pathname.replace(/\/+$/, "") || "/";
@@ -265,6 +272,10 @@ const server = Bun.serve({
         return new Response("bad filename", { status: 400 });
       }
       if (!filename) return new Response("filename required", { status: 400 });
+      // Simulate a big image over a slow tunnel: silence before the first byte.
+      if (VIEW_DELAY_MS > 0) {
+        await new Promise((resolve) => setTimeout(resolve, VIEW_DELAY_MS));
+      }
       return new Response(TINY_PNG, {
         headers: { "Content-Type": "image/png", "Content-Length": String(TINY_PNG.length) },
       });

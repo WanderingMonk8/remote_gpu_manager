@@ -20,6 +20,8 @@ const MOCK_PORT = PORT_BASE;
 const GW_PORT = PORT_BASE + 1;
 const GW_PORT_BAD = PORT_BASE + 2; // gateway with intentionally wrong upstream creds
 const GW2_PORT = PORT_BASE + 3; // gateway with no control token
+const MOCK_SLOW_PORT = PORT_BASE + 4; // mock whose /view stalls 11 s before the first byte
+const GW_SLOW_PORT = PORT_BASE + 5; // gateway in front of the slow mock
 const CONTROL_TOKEN = "control-test-token-0123456789abcdef";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -48,9 +50,12 @@ const mossWorkflow = {
 let mock: Subprocess | null = null;
 let gateway: Subprocess | null = null;
 let gatewayBad: Subprocess | null = null;
+let mockSlow: Subprocess | null = null;
+let gatewaySlow: Subprocess | null = null;
 
 const base = () => `http://127.0.0.1:${GW_PORT}`;
 const gwBad = () => `http://127.0.0.1:${GW_PORT_BAD}`;
+const gwSlow = () => `http://127.0.0.1:${GW_SLOW_PORT}`;
 
 beforeAll(async () => {
   mock = Bun.spawn(["bun", "tests/mock-comfyui/server.ts"], {
@@ -81,12 +86,38 @@ beforeAll(async () => {
   });
   await waitFor(async () => (await fetch(`${base()}/system_stats`)).ok);
   await waitFor(async () => (await fetch(`${gwBad()}/system_stats`)).status === 401);
+
+  mockSlow = Bun.spawn(["bun", "tests/mock-comfyui/server.ts"], {
+    env: {
+      ...process.env,
+      MOCK_PORT: String(MOCK_SLOW_PORT),
+      MOCK_USER: "lumiverse",
+      MOCK_PASS: "test-secret",
+      MOCK_EXECUTION_MS: "50",
+      MOCK_VIEW_DELAY_MS: "13000",
+    },
+    stdout: "ignore",
+    stderr: "ignore",
+  });
+  gatewaySlow = Bun.spawn(["bun", "host-gateway/gateway.ts"], {
+    env: {
+      ...process.env,
+      GATEWAY_PORT: String(GW_SLOW_PORT),
+      GATEWAY_UPSTREAM: `http://127.0.0.1:${MOCK_SLOW_PORT}`,
+      GATEWAY_BASIC_AUTH: "lumiverse:test-secret",
+    },
+    stdout: "ignore",
+    stderr: "ignore",
+  });
+  await waitFor(async () => (await fetch(`${gwSlow()}/system_stats`)).ok);
 });
 
 afterAll(() => {
   mock?.kill("SIGKILL");
   gateway?.kill("SIGKILL");
   gatewayBad?.kill("SIGKILL");
+  mockSlow?.kill("SIGKILL");
+  gatewaySlow?.kill("SIGKILL");
 });
 
 describe("allowlisted health/catalog paths", () => {
@@ -200,4 +231,27 @@ describe("gateway auth handling", () => {
     const body = (await ok.json()) as any;
     expect(body.upstream.reachable).toBe(true);
   });
+});
+
+describe("slow /view survives Bun's idle timeout", () => {
+  /**
+   * Regression guard for the 1024px image bug.
+   *
+   * `Bun.serve` closes a connection whose handler has produced nothing for
+   * `idleTimeout` seconds (default 10) — even when the handler is still
+   * awaiting upstream. A 1024px image needs 11-13 s to come out of the tunnel,
+   * so the old buffered `/view` was killed at ~10.7 s and Lumiverse reported
+   * "socket connection was closed unexpectedly". 512px finishes under 10 s,
+   * which is why those generations usually succeeded.
+   */
+  test("a /view that stalls 13 s before its first byte still returns the image", async () => {
+    const started = Date.now();
+    const res = await fetch(`${gwSlow()}/view?filename=moss_00001_.png&subfolder=&type=output`);
+    const elapsedMs = Date.now() - started;
+
+    expect(res.status).toBe(200);
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    expect([...bytes.slice(0, 4)]).toEqual([0x89, 0x50, 0x4e, 0x47]); // PNG magic
+    expect(elapsedMs).toBeGreaterThan(12_000);
+  }, 30_000);
 });
