@@ -468,7 +468,7 @@ export function setup(ctx: SpindleFrontendContext) {
       image: probeConn?.checked === true ? "vastai/base-image:cuda-13.0.3-auto" : (deployImage?.value ?? "").trim(),
       onstart: probeConn?.checked === true ? DEPLOY_ONSTART_PROBE : (deployLifecycle?.checked === true ? undefined : DEPLOY_ONSTART_FULL),
       env: [
-        deployPublishPort?.checked === true ? "-p 8188" : "",
+        deployPublishPort?.checked === true ? "-p 8188 OPEN_BUTTON_PORT=8188" : "",
         (deployLifecycle?.checked !== true && probeConn?.checked !== true && selectedModelIds().length) ? `-e lumiverse_models=${selectedModelIds().join(",")}` : "",
       ].filter(Boolean).join(" ") || undefined,
       target: {

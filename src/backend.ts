@@ -168,7 +168,15 @@ function parseVastEnv(input: string | undefined): Record<string, string> | undef
       if (eq > 0) out[kv.slice(0, eq)] = kv.slice(eq + 1).replace(/^['"]|['"]$/g, "");
       continue;
     }
-    // "-e KEY=VAL" written as one token, or stray junk: ignore safely
+    // bare KEY=VALUE token — vast passes through as-is ("VAR=value")
+    if (tok.includes("=") && !tok.startsWith("-")) {
+      const eq = tok.indexOf("=");
+      const key = tok.slice(0, eq);
+      if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+        out[key] = tok.slice(eq + 1).replace(/^['"]|['"]$/g, "");
+        continue;
+      }
+    }
     if (tok.startsWith("-")) spindle.log.info(`vast_deploy_offer: dropping unrecognized env token ${tok}`);
   }
   return Object.keys(out).length ? out : undefined;
@@ -561,7 +569,7 @@ async function handleFrontendMessage(payload: any, userId?: string): Promise<voi
       return;
     }
     if (parsedEnv && !/^-/.test(env!)) {
-      spindle.sendToFrontend({ type: "vast_deploy_offer_result", ok: false, error: "env must start with '-' (e.g. -p 8188 -e KEY=VAL)" }, userId);
+      spindle.sendToFrontend({ type: "vast_deploy_offer_result", ok: false, error: "env must start with '-' (e.g. -p 8188 OPEN_BUTTON_PORT=8188 -e KEY=VAL)" }, userId);
       return;
     }
     if (onstart && onstart.length > 4048) {
