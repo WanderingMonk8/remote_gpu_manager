@@ -30,9 +30,9 @@ var BODY_QUEUE = 64 * 1024;
 var BODY_UPLOAD = 100 * 1024 * 1024;
 var ROUTES = [
   { method: "GET", pattern: /^\/system_stats$/, maxBytes: 16 * 1024, timeoutMs: 1e4, expectJson: true },
-  { method: "GET", pattern: /^\/object_info(\/[A-Za-z0-9_]+)?$/, maxBytes: 64 * 1024 * 1024, timeoutMs: 30000, expectJson: true },
+  { method: "GET", pattern: /^\/object_info(\/[A-Za-z0-9_]+)?$/, maxBytes: 64 * 1024 * 1024, timeoutMs: 120000, expectJson: true },
   { method: "POST", pattern: /^\/prompt$/, maxBytes: BODY_PROMPT, timeoutMs: 120000, expectJson: true },
-  { method: "GET", pattern: /^\/history\/[0-9a-fA-F-]{36}$/, maxBytes: 4 * 1024 * 1024, timeoutMs: 15000, expectJson: true },
+  { method: "GET", pattern: /^\/history\/[0-9a-fA-F-]{36}$/, maxBytes: 4 * 1024 * 1024, timeoutMs: 60000, expectJson: true },
   { method: "GET", pattern: /^\/view$/, maxBytes: 100 * 1024 * 1024, timeoutMs: 60000 },
   { method: "GET", pattern: /^\/queue$/, maxBytes: 256 * 1024, timeoutMs: 1e4, expectJson: true },
   { method: "POST", pattern: /^\/queue$/, maxBytes: BODY_QUEUE, timeoutMs: 1e4, expectJson: true },
@@ -253,7 +253,11 @@ var server = Bun.serve({
       });
       upstream.addEventListener("message", (event) => {
         try {
-          ws.send(event.data);
+          const data = event.data;
+          const bytes = typeof data === "string" ? new TextEncoder().encode(data).length : data?.byteLength ?? 0;
+          const preview = typeof data === "string" ? data.slice(0, 80) : `binary ${bytes}B`;
+          console.log(`[rgm-gateway] upstream ws message clientId=${clientId} bytes=${bytes} preview=${preview}`);
+          ws.send(data);
         } catch {}
       });
     },
