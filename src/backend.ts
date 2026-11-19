@@ -709,6 +709,7 @@ async function searchVastOffers(apiKey: string, policy: OfferPolicyPayload = DEF
       reliability: o.reliability,
       geolocation: o.geolocation,
       verification: o.verification,
+      isVmDeverified: o.is_vm_deverified ?? null,
       duration: o.duration,
     }));
 }

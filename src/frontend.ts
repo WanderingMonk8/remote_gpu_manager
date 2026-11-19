@@ -172,7 +172,7 @@ export function setup(ctx: SpindleFrontendContext) {
 
       <section>
         <h4>My instances</h4>
-        <p class="rgm-note">Machines you have rented from this Vast.ai account. State shows raw Vast tokens (<code>actual → intended</code>); Vast's console renders <code>created</code>/<code>loading</code> as <b>Inactive</b>. <b>Stop</b> pauses GPU billing (disk storage continues to accrue). <b>Destroy</b> permanently deletes the instance and its disk — this cannot be undone.</p>
+        <p class="rgm-note">Machines you have rented from this Vast.ai account. State shows raw Vast tokens (<code>actual → intended</code>); Vast's console renders <code>created</code>/<code>loading</code> as <b>Inactive</b>. <b>Stop</b> pauses GPU billing (disk storage continues to accrue). <b>Destroy</b> permanently deletes the instance and its disk — this cannot be undone. If the vast console shows <i>“Error response from daemon”</i>, the host cannot inject the GPU into containers — destroy the instance and deploy a different offer.</p>
         <div class="rgm-limit-row">
           <span>Max concurrent instances</span>
           <input class="rgm-limit-input" type="number" min="1" max="8" value="1" />
@@ -645,7 +645,7 @@ export function setup(ctx: SpindleFrontendContext) {
                   <div><b>Offer #${o.id}</b> · ${String(o.gpuName ?? "")} × ${o.gpuCount ?? 1} · ${((o.vramMB ?? 0) / 1024).toFixed(1)} GiB</div>
                   <button class="rgm-deploy-offer" type="button" data-id="${o.id}" data-dph="${Number(o.dphTotal ?? 0)}" data-gpu="${escapeHtml(String(o.gpuName ?? ""))}" data-vram="${((o.vramMB ?? 0) / 1024).toFixed(1)}" data-gpus="${o.gpuCount ?? 1}">Deploy</button>
                 </div>
-                <span>${((o.ramMB ?? 0) / 1024).toFixed(0)} GB RAM · ${o.diskGB} GB disk · ${String(o.geolocation ?? "-")} · reliability ${(o.reliability ?? 0).toFixed(3)}</span>
+                <span>${((o.ramMB ?? 0) / 1024).toFixed(0)} GB RAM · ${o.diskGB} GB disk · ${String(o.geolocation ?? "-")} · reliability ${(o.reliability ?? 0).toFixed(3)}${o.isVmDeverified ? ` · <span style="color: var(--lumiverse-error); font-weight: 700">⚠ VM deverified</span>` : o.verification ? ` · ${escapeHtml(String(o.verification))}` : ""}</span>
                 <div class="rgm-price">$${Number(o.dphTotal ?? 0).toFixed(3)}/hr</div>
               </div>`).join("");
           } else {
