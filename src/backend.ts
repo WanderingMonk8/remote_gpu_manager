@@ -20,6 +20,25 @@ declare const spindle: import("lumiverse-spindle-types").SpindleAPI;
 
 const DEFAULT_GATEWAY_URL = "http://127.0.0.1:8189";
 const ENCLAVE_KEY = "vast.api_key";
+// Extension-scoped storage (spindle.storage) is wiped on reinstall — durable user state lives in spindle.userStorage (backed by the Space bucket).
+// One-time migration: if userStorage is empty but the extension-scoped file exists, copy it over.
+async function durableReadJson<T>(path: string, fallback: T): Promise<T> {
+  try {
+    const u: any = await spindle.userStorage.getJson<T | null>(path, { fallback: null as any });
+    if (u !== null && u !== undefined) return u as T;
+  } catch { /* ignore */ }
+  try {
+    const legacy: any = await spindle.storage.getJson<T | null>(path, { fallback: null as any });
+    if (legacy !== null && legacy !== undefined) {
+      try { await spindle.userStorage.setJson(path, legacy); } catch { /* best-effort */ }
+      return legacy as T;
+    }
+  } catch { /* ignore */ }
+  return fallback;
+}
+async function durableWriteJson(path: string, value: unknown): Promise<void> {
+  await spindle.userStorage.setJson(path, value);
+}
 const FAILED_HOSTS_KEY = "failed-hosts.json";
 const ABSOLUTE_MAX_FAILED_HOSTS = 256;
 const MODEL_SELECTION_KEY = "model-selection.json";
@@ -31,7 +50,7 @@ const VALID_MODEL_IDS = new Set([
 ]);
 const DEFAULT_MODEL_SELECTION = ["anima-turbo-1.1", "anima-aesthetic-1.1", "moss-sft-int8", "moss-base-int8", "adapter-ref"];
 async function getFailedHosts(): Promise<number[]> {
-  const saved = await spindle.storage.getJson<{ hosts?: number[] }>(FAILED_HOSTS_KEY, { fallback: { hosts: [] } });
+  const saved = await durableReadJson<{ hosts?: number[] }>(FAILED_HOSTS_KEY, { hosts: [] });
   const list = Array.isArray(saved?.hosts) ? saved.hosts : [];
   return list.map(Number).filter((n) => Number.isInteger(n) && n > 0);
 }
@@ -39,25 +58,25 @@ async function addFailedHost(machineId: number): Promise<number[]> {
   const hosts = await getFailedHosts();
   if (!hosts.includes(machineId)) hosts.unshift(machineId);
   const trimmed = hosts.slice(0, ABSOLUTE_MAX_FAILED_HOSTS);
-  await spindle.storage.setJson(FAILED_HOSTS_KEY, { hosts: trimmed });
+  await durableWriteJson(FAILED_HOSTS_KEY, { hosts: trimmed });
   return trimmed;
 }
 async function clearFailedHosts(): Promise<void> {
-  await spindle.storage.setJson(FAILED_HOSTS_KEY, { hosts: [] });
+  await durableWriteJson(FAILED_HOSTS_KEY, { hosts: [] });
 }
 /** Hard guarantee against accidental double deploys (user double-click, replay, both UI paths). */
 let deployInFlight = false;
 const LIMITS_KEY = "instance-limits.json";
 const ABSOLUTE_MAX_INSTANCES = 8;
 async function getMaxInstances(): Promise<number> {
-  const saved = await spindle.storage.getJson<{ maxInstances?: number }>(LIMITS_KEY, { fallback: { maxInstances: 1 } });
+  const saved = await durableReadJson<{ maxInstances?: number }>(LIMITS_KEY, { maxInstances: 1 });
   const n = Number(saved?.maxInstances);
   if (!Number.isFinite(n)) return 1;
   return Math.min(ABSOLUTE_MAX_INSTANCES, Math.max(1, Math.floor(n)));
 }
 
 async function getGatewayUrl(): Promise<string> {
-  const saved = await spindle.storage.getJson<{ url?: string }>("gateway-url.json", { fallback: {} });
+  const saved = await durableReadJson<{ url?: string }>("gateway-url.json", {});
   return saved.url ?? DEFAULT_GATEWAY_URL;
 }
 
@@ -222,7 +241,7 @@ spindle.onFrontendMessage(async (payload: any, userId?: string) => {
       spindle.sendToFrontend({ type: "gateway_url_error", error: "URL must be http(s)://host[:port]" }, userId);
       return;
     }
-    await spindle.storage.setJson("gateway-url.json", { url });
+    await durableWriteJson("gateway-url.json", { url });
     spindle.sendToFrontend({ type: "gateway_url_saved", url }, userId);
     return;
   }
@@ -254,7 +273,7 @@ spindle.onFrontendMessage(async (payload: any, userId?: string) => {
 
   // Persisted (global) model selection. Must match the worker's registry — unknown IDs are rejected.
   if (payload?.type === "vast_get_model_selection") {
-    const saved = await spindle.storage.getJson<{ ids?: string[] }>(MODEL_SELECTION_KEY, { fallback: { ids: DEFAULT_MODEL_SELECTION } });
+    const saved = await durableReadJson<{ ids?: string[] }>(MODEL_SELECTION_KEY, { ids: DEFAULT_MODEL_SELECTION });
     const ids = Array.isArray(saved?.ids) ? saved.ids.filter((i) => VALID_MODEL_IDS.has(i)) : DEFAULT_MODEL_SELECTION;
     spindle.sendToFrontend({ type: "vast_get_model_selection_result", ok: true, ids: ids.length ? ids : DEFAULT_MODEL_SELECTION }, userId);
     return;
@@ -266,7 +285,7 @@ spindle.onFrontendMessage(async (payload: any, userId?: string) => {
       spindle.sendToFrontend({ type: "vast_set_model_selection_result", ok: false, error: "pick at least one model" }, userId);
       return;
     }
-    await spindle.storage.setJson(MODEL_SELECTION_KEY, { ids });
+    await durableWriteJson(MODEL_SELECTION_KEY, { ids });
     spindle.sendToFrontend({ type: "vast_set_model_selection_result", ok: true, ids }, userId);
     return;
   }
@@ -284,7 +303,7 @@ spindle.onFrontendMessage(async (payload: any, userId?: string) => {
       spindle.sendToFrontend({ type: "vast_set_limits_result", ok: false, error: `limit must be an integer between 1 and ${ABSOLUTE_MAX_INSTANCES}` }, userId);
       return;
     }
-    await spindle.storage.setJson(LIMITS_KEY, { maxInstances: n });
+    await durableWriteJson(LIMITS_KEY, { maxInstances: n });
     spindle.log.info(`vast_set_limits maxInstances=${n}`);
     spindle.sendToFrontend({ type: "vast_set_limits_result", ok: true, maxInstances: n }, userId);
     return;
