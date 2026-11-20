@@ -1,6 +1,6 @@
 # Spike: Tailscale Funnel as the stable Colab worker URL
 
-**Status:** Ready to run — not yet executed on Colab
+**Status:** Executed on Colab 2026-11-19 — **functional pass**. Multiple 1024 px generations went through the Funnel, and the worker survived a Colab disconnect/reconnect. Throughput numbers from §5 are still to be recorded.
 **Date:** 2026-11-19
 **Target:** replace `*.trycloudflare.com` (new hostname every session) with a fixed
 `https://<node>.<tailnet>.ts.net`
@@ -388,6 +388,104 @@ Record these. The ADR only gets updated with numbers, not impressions.
 | 6 | `/view` bytes + duration | `[rgm-gateway] /view streaming …` / `body delivered` | the historical 12 s killer |
 | 7 | Whether the URL is identical after a **new** Colab runtime with Drive mounted | second session | the entire premise |
 
+### 5.1 Measurement helper
+
+§5 says the ADR only gets numbers, not impressions. Run this after the tunnel cell in the same
+runtime; it drives everything through `tailscaled`'s SOCKS5 proxy, so the traffic leaves the node
+and comes back through the relay exactly as a remote client's does, and it prints one copyable
+block. It reads the Basic Auth password from the tunnel cell's globals when they are still there.
+
+```python
+# @title Measure the Funnel path from inside the runtime (numbers only, no secrets printed)
+import subprocess, urllib.parse
+from getpass import getpass
+
+URL  = (globals().get("URL") or input("Funnel URL: ")).strip().rstrip("/")
+USER = globals().get("BASIC_USER") or input("Basic Auth user: ").strip()
+PASS = globals().get("BASIC_PASS") or getpass("Basic Auth password: ")
+PROXY = "socks5h://127.0.0.1:1055"   # tailscaled userspace proxy: leaves and re-enters via the relay
+
+def curl(*args, timeout=300):
+    cmd = ["curl", "-sS", "--proxy", PROXY, "-u", f"{USER}:{PASS}",
+           "--max-time", str(timeout), *args]
+    r = subprocess.run(cmd, text=True, capture_output=True)
+    return r.returncode, r.stdout, r.stderr.strip()
+
+def timed(path, timeout=300):
+    """-> (http_code, seconds, bytes) or None"""
+    rc, out, err = curl("-o", "/dev/null",
+                        "-w", "%{http_code} %{time_total} %{size_download}",
+                        URL + path, timeout=timeout)
+    parts = out.split()
+    if rc != 0 or len(parts) != 3:
+        print(f"  {path} FAILED rc={rc} {err[:300]}")
+        return None
+    code, secs, size = int(parts[0]), float(parts[1]), int(float(parts[2]))
+    return code, secs, size
+
+def rate(size, secs):
+    return f"{size/1e6:.2f} MB in {secs:.1f} s ({size/1e6/max(secs,1e-9):.3f} MB/s)"
+
+print("NOTE: this measures node -> relay -> funnel -> node, which is slower than")
+print("      the Space -> funnel path. Treat it as an upper bound.\n")
+
+stats = [timed("/system_stats") for _ in range(3)]
+print("1. /system_stats   ", [f"{s[1]*1000:.0f} ms" for s in stats if s])
+
+print("2. /object_info (cold-ish: this may hit ComfyUI's cache)")
+oi = timed("/object_info", timeout=600)
+if oi:
+    print("   ", rate(oi[2], oi[1]))
+
+print("3. /ws upgrade")
+rc, out, err = curl("-i", "-o", "-", "--max-time", "10", "--http1.1",
+                    "-H", "Connection: Upgrade", "-H", "Upgrade: websocket",
+                    "-H", "Sec-WebSocket-Version: 13",
+                    "-H", "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+                    URL + "/ws?clientId=spike")
+first = (out.splitlines() or ["(no response)"])[0].strip()
+print("   ", first if first else err[:300])
+
+print("4. /view (last image in ComfyUI history)")
+rc, hist, err = curl(URL + "/history", timeout=120)
+view_line = "   (no image found)"
+try:
+    import json
+    h = json.loads(hist or "{}")
+    newest = list(h.values())[-1]
+    imgs = [i for o in (newest.get("outputs") or {}).values()
+            for i in (o.get("images") or [])]
+    if imgs:
+        im = imgs[0]
+        q = urllib.parse.urlencode({"filename": im["filename"],
+                                    "subfolder": im.get("subfolder", ""),
+                                    "type": im.get("type", "output")})
+        v = timed("/view?" + q, timeout=600)
+        if v:
+            view_line = "   " + rate(v[2], v[1])
+except Exception as exc:
+    view_line = f"   (history parse failed: {exc})"
+print(view_line)
+
+print("\n" + "=" * 60)
+print("copy this block into the chat / the spike document:")
+print("=" * 60)
+print(f"funnel_url        = {URL}")
+print("system_stats      = " + ", ".join(f"{s[1]*1000:.0f} ms" for s in stats if s))
+print(f"object_info       = {rate(oi[2], oi[1]) if oi else 'failed'}")
+print(f"ws_upgrade        = {first}")
+print(f"view              = {view_line.strip()}")
+print("=" * 60)
+print("Also copy these lines from the Space log if present:")
+print("  [rgm-gateway] GET /ws -> 101")
+print("  [rgm-gateway] /view streaming")
+print("  [rgm-gateway] /view body delivered")
+```
+
+Treat these as an **upper bound** on latency: node → relay → funnel → node is one extra leg that
+the Space does not pay. The authoritative `/view` figures are the gateway's own
+`/view streaming` / `body delivered` log lines from the Space.
+
 ### Pass criteria
 
 - Two consecutive 1024 px generations persist to chat **and** gallery.
@@ -442,3 +540,37 @@ Fall back in this order, both already specified in ADR-005:
 2. **T4 (named Cloudflare tunnel)** — requires the ~$10/yr domain decision.
 3. Live endpoint swap (ADR-005 Layer 1) — gives one paste per session instead of secret + restart,
    and is a prerequisite for every remaining option.
+
+---
+
+## 8. Result (2026-11-19)
+
+**Functionally proven on Colab.** The owner ran the fixed cell (local-disk `tailscaled`, Drive mirror
+of identity + certs) and reported:
+
+- The Funnel URL came up and the Space reached the worker through it with no per-session change.
+- **Multiple 1024 px images generated end to end** through the tunnel.
+- **Colab disconnected and reconnected, and it still worked** — the failure mode this spike exists
+  to eliminate (new hostname every session → secret edit + Factory restart) did not occur.
+
+That settles the two questions that could have killed T5 outright: Funnel egress and control plane
+are reachable from Colab (risk 5), and the relay path carries a real generation session rather than
+just a health check.
+
+Still open, in priority order:
+
+1. **Was the post-reconnect runtime a fresh VM?** If Colab only reattached to the same VM, the tunnel
+   process never restarted and measurement 7 is not proven yet. The discriminator is the cell's own
+   first line after rerun: `restored node identity, TLS certificate` (fresh VM, state came off Drive)
+   versus `first run, nothing to restore` (Drive not mounted, or same VM).
+2. **Numbers 1–6** from §5.1, plus the Space-side `/view streaming` and `body delivered` lines.
+   Until they exist, T5 is "selected and working", not "accepted": risk 3 (Funnel bandwidth) is
+   untested against a 1.3–1.4 MB body, and the historical failure was a slow body, not a broken one.
+3. **`/ws` upgrade through the Funnel.** Lumiverse progress streaming depends on it. If it fails,
+   generation still works but the client loses live progress.
+4. **Certificate reuse across sessions.** One reconnect does not prove it; the proof is no new
+   issuance while the Drive copy is restored. `tailscale cert` prints a warning on failure, so a
+   clean run means the cached pair was accepted.
+
+If 1–3 hold, T5 moves to accepted in ADR-005 §13 and the notebook's `cloudflare` branch becomes the
+documented rollback rather than a parallel option.
