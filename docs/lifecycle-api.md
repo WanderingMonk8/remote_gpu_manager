@@ -17,6 +17,7 @@ All routes live on the existing loopback control plane and require
 | `POST` | `/gateway/v1/runtime/credentials` | Store Colab OAuth credentials **in memory** |
 | `DELETE` | `/gateway/v1/runtime/credentials` | Wipe them (restart, rotation, shutdown) |
 | `POST` | `/gateway/v1/runtime` | Start: allocate a runtime, wait for `connectionInfo` |
+| `GET` | `/gateway/v1/runtime/specs` | List account-eligible GPU types; no allocation |
 | `GET` | `/gateway/v1/runtime` | Status, adopted runtime, idle countdown |
 | `DELETE` | `/gateway/v1/runtime` | Stop: delete and **confirm** deletion |
 | `PUT` | `/gateway/v1/runtime/idle` | Set idle minutes (`0` disables) |
@@ -86,6 +87,14 @@ Keep this feature disabled until those gaps are addressed. No production
 Space deployment is implied by its presence in the repository.
 
 ## Start
+
+`GET /gateway/v1/runtime/specs` returns the GPU specs Colab reports as eligible.
+Eligibility is not a reservation or a price quote. A start can specify, for
+example, `{"accelerator":"L4","shape":"SHAPE_STANDARD","confirm_non_default":true}`.
+Non-T4-standard choices require explicit confirmation; the gateway checks the
+selected spec against Colab's eligibility response again before allocating.
+Without a request body, the configured defaults are used. Charges or compute-unit
+usage depend on the account and provider; the API does not quote a price here.
 
 ```json
 POST /gateway/v1/runtime  ->  200

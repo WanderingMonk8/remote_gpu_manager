@@ -72,9 +72,10 @@ spindle.onFrontendMessage(async (payload: any, userId?: string) => {
           result = { config: await automation.getPickerConfig(userId) };
           break;
         case "automation_start":
-          await automation.start(userId);
+          await automation.start(userId, payload.choice);
           result = { status: "running" };
           break;
+        case "automation_gpu_specs": result = await automation.gpuSpecs(userId); break;
         case "automation_poll": result = await automation.poll(userId); break;
         case "automation_status": result = await automation.status(userId); break;
         case "automation_stop": result = await automation.stop(userId, payload.force === true); break;

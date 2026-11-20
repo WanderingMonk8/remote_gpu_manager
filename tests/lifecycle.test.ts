@@ -191,6 +191,27 @@ describe("credentials custody (ADR-006)", () => {
 });
 
 describe("start / status / stop", () => {
+  test("lists eligible GPUs without allocation and starts only a confirmed eligible choice", async () => {
+    await ensureCreds(base());
+    const before = await (await fetch(`${colabBase()}/__log`)).json();
+    const specs = await (await fetch(`${base()}/gateway/v1/runtime/specs`, { headers: auth })).json();
+    expect(specs.specs.map((s: any) => s.accelerator)).toEqual(["T4", "L4"]);
+    const after = await (await fetch(`${colabBase()}/__log`)).json();
+    expect(after.runtimes).toEqual(before.runtimes);
+    const start = (body: unknown) => fetch(`${base()}/gateway/v1/runtime`, {
+      method: "POST", headers: { ...auth, "Content-Type": "application/json" }, body: JSON.stringify(body),
+    });
+    const noConfirm = await start({ accelerator: "L4", shape: "SHAPE_STANDARD" });
+    expect(noConfirm.status).toBe(400);
+    expect((await noConfirm.json()).error).toBe("gpu_confirmation_required");
+    const unsupported = await start({ accelerator: "A100", shape: "SHAPE_STANDARD", confirm_non_default: true });
+    expect(unsupported.status).toBe(403);
+    const chosen = await start({ accelerator: "L4", shape: "SHAPE_STANDARD", confirm_non_default: true });
+    expect(chosen.status).toBe(200);
+    expect((await chosen.json()).runtime.spec.accelerator).toBe("L4");
+    expect((await fetch(`${base()}/gateway/v1/runtime`, { method: "DELETE", headers: auth })).status).toBe(200);
+  });
+
   test("Drive preflight checks selected files without allocating a runtime", async () => {
     await ensureCreds(base());
     const files = [

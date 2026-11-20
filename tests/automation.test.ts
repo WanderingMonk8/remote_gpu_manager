@@ -5,6 +5,31 @@ const secrets: AutomationSecrets = { controlToken: "control", clientId: "id", cl
   refreshToken: "refresh", tailnetKey: "ts-secret", basicUser: "user", basicPass: "password" };
 
 describe("automation controller", () => {
+  test("loads eligible GPUs without allocating and forwards an explicit GPU choice", async () => {
+    const entries = new Map<string, string>();
+    const calls: Array<{ path: string; body: any }> = [];
+    const controller = new AutomationController({
+      async get(key, user) { return entries.get(`${user}:${key}`) ?? null; },
+      async put(key, value, user) { entries.set(`${user}:${key}`, value); },
+    }, async (path, _method, _token, body) => {
+      calls.push({ path, body });
+      if (path.endsWith("/specs")) return { specs: [{ accelerator: "L4", shape: "SHAPE_STANDARD" }] };
+      if (path.endsWith("/bootstrap") && body === undefined) return { status: "idle" };
+      return {};
+    });
+    await controller.save("owner", secrets);
+    await controller.saveDriveFiles("owner", [
+      { id: "a", name: "moss_image_sft_int8_convrot.safetensors" },
+      { id: "b", name: "qwen3.5_9b_w4a8_gptq.safetensors" },
+      { id: "c", name: "flux2-vae_small.safetensors" },
+    ]);
+    expect((await controller.gpuSpecs("owner")).specs[0].accelerator).toBe("L4");
+    expect(calls.some(call => call.path === "/gateway/v1/runtime")).toBe(false);
+    await controller.start("owner", { accelerator: "L4", shape: "SHAPE_STANDARD", confirmNonDefault: true });
+    expect(calls.find(call => call.path === "/gateway/v1/runtime")?.body)
+      .toEqual({ accelerator: "L4", shape: "SHAPE_STANDARD", confirm_non_default: true });
+  });
+
   test("distinguishes Picker selection problems without exposing file IDs", () => {
     expect(driveSelectionIssue([])).toBe("drive_selection_empty");
     expect(driveSelectionIssue([{ id: "valid-id", name: "wrong-file.safetensors" }])).toBe("drive_selection_unrecognized");

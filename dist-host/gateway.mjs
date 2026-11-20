@@ -437,16 +437,20 @@ function colabError(status, json) {
     return new HttpError(503, "offline", message);
   return new HttpError(502, "colab_error", message);
 }
-async function pickEligibleSpec() {
+async function eligibleGpuSpecs() {
   const { status, json } = await colabRequest("GET", "/v1beta/runtimespecs");
   if (status !== 200)
     throw colabError(status, json);
-  const specs = json?.runtimeSpecs ?? [];
-  const hit = specs.find((e) => e?.eligible && e?.key?.variant === "VARIANT_GPU" && e?.key?.accelerator === SPEC_ACCELERATOR && e?.key?.shape === `SHAPE_${SPEC_SHAPE}`);
+  if (!Array.isArray(json?.runtimeSpecs))
+    throw new HttpError(502, "colab_invalid_response");
+  return json.runtimeSpecs.filter((e) => e?.eligible === true && e?.key?.variant === "VARIANT_GPU" && typeof e.key.accelerator === "string" && /^[A-Z0-9_]{1,40}$/.test(e.key.accelerator) && typeof e.key.shape === "string" && /^SHAPE_[A-Z0-9_]{1,40}$/.test(e.key.shape)).map((e) => ({ variant: e.key.variant, accelerator: e.key.accelerator, shape: e.key.shape }));
+}
+async function pickEligibleSpec(accelerator, shape) {
+  const hit = (await eligibleGpuSpecs()).find((e) => e.accelerator === accelerator && e.shape === shape);
   if (!hit) {
-    throw new HttpError(403, "policy_restricted", `${SPEC_ACCELERATOR} ${SPEC_SHAPE} is not eligible for this account right now`);
+    throw new HttpError(403, "policy_restricted", `${accelerator} ${shape} is not eligible for this account right now`);
   }
-  return hit.key;
+  return hit;
 }
 function maskRuntime(r) {
   return {
@@ -489,7 +493,7 @@ async function reconcile() {
     console.log(`[rgm-gateway] lifecycle: adopted existing runtime ${owned.name}`);
   }
 }
-async function startRuntime() {
+async function startRuntime(req) {
   if (provisioning || bootstrapJob?.status === "running")
     return errJson(409, "provisioning_in_progress");
   if (owned)
@@ -500,6 +504,23 @@ async function startRuntime() {
     return errJson(409, "allocation_uncertain");
   provisioning = true;
   try {
+    let input = {};
+    try {
+      const body = new TextDecoder().decode(await readBounded(req, 4096));
+      if (body)
+        input = JSON.parse(body);
+    } catch {
+      return errJson(400, "invalid_json");
+    }
+    if (!input || typeof input !== "object" || Array.isArray(input))
+      return errJson(400, "runtime_spec_invalid");
+    const accelerator = input.accelerator ?? SPEC_ACCELERATOR;
+    const shape = input.shape ?? `SHAPE_${SPEC_SHAPE}`;
+    if (typeof accelerator !== "string" || !/^[A-Z0-9_]{1,40}$/.test(accelerator) || typeof shape !== "string" || !/^SHAPE_[A-Z0-9_]{1,40}$/.test(shape))
+      return errJson(400, "runtime_spec_invalid");
+    if ((accelerator !== "T4" || shape !== "SHAPE_STANDARD") && input.confirm_non_default !== true) {
+      return errJson(400, "gpu_confirmation_required");
+    }
     await reconcile();
     if (owned)
       return Response.json({ runtime: maskRuntime(owned), state: "ready", reused: true });
@@ -512,7 +533,7 @@ async function startRuntime() {
           throw new Error("intent_unavailable");
       }
     }
-    const spec = await pickEligibleSpec();
+    const spec = await pickEligibleSpec(accelerator, shape);
     const runtimeId = RUNTIME_PREFIX + crypto.randomUUID().slice(0, 8);
     if (INTENT_FILE) {
       try {
@@ -559,7 +580,7 @@ async function startRuntime() {
             adoptedAt: new Date().toISOString(),
             tokenExpireTime: got.json?.connectionInfo?.expireTime ?? ""
           };
-          console.log(`[rgm-gateway] lifecycle: runtime ready ${name} (${SPEC_ACCELERATOR} ${SPEC_SHAPE})`);
+          console.log(`[rgm-gateway] lifecycle: runtime ready ${name} (${spec.accelerator} ${spec.shape})`);
           return Response.json({ runtime: maskRuntime(owned), state: "ready" });
         }
       } else if (got.status !== 404) {
@@ -791,6 +812,9 @@ function setIdle(body) {
 async function handleRuntime(req, path) {
   if (path === "/gateway/v1/runtime/bootstrap")
     return bootstrapControl(req);
+  if (path === "/gateway/v1/runtime/specs" && req.method === "GET") {
+    return Response.json({ specs: await eligibleGpuSpecs() });
+  }
   if (path === "/gateway/v1/runtime/cache-check" && req.method === "POST") {
     let body;
     try {
@@ -836,7 +860,7 @@ async function handleRuntime(req, path) {
   }
   if (path === "/gateway/v1/runtime") {
     if (req.method === "POST")
-      return startRuntime();
+      return startRuntime(req);
     if (req.method === "GET")
       return statusRuntime();
     if (req.method === "DELETE")
