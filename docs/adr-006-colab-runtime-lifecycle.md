@@ -108,13 +108,22 @@ Lifecycle control is the gateway's job, called through the Colab API — not the
   $0.50/hr price filter.
 - Vast lifecycle per ADR-003 — parked on `feat/vast-first`; untouched by this ADR.
 
-## 6. Open items
+## 6. Status and next steps
 
-1. Token custody decision (owner).
-2. Gateway endpoints: `POST/GET/DELETE /manager/v1/runtime`, idle-timer wiring, and the
-   worker-config endpoint that hands Basic Auth to the worker.
-3. Bootstrap: reduced profile proven (`tools/colab-bootstrap-probe.py`). Remaining is the
-   full profile — cell 6 (weights) and cell 25 (tunnel) — plus returning the Funnel URL so
-   `GATEWAY_UPSTREAM` can be repointed without a secret edit (ADR-005).
-4. Funnel stays: the proxy does not route port 8188, so the worker must be published through
-   the existing Tailscale Funnel (or equivalent) as before.
+**Paused 2026-11-20 by owner.** Manual Colab start/stop is the current operating mode: with
+the Drive cache it starts in ~2-3 minutes, whereas the headless path re-downloads 12.1 GiB
+(~12-15 min) and is bound to one machine. The full assessment and the four build steps are in
+[colab-automation-next-steps.md](./colab-automation-next-steps.md).
+
+Everything up to and including "the Space can reach a running worker" is proven. Resuming
+requires, in dependency order:
+
+1. Run the bootstrap inside the Space (Python sidecar or a TS port) so start is not PC-bound.
+2. Move OAuth credentials, `TS_AUTHKEY`, Basic Auth, and `tailscaled.state` into the Spindle
+   enclave. Colab Secrets cannot be used: `userdata.get` fails headless.
+3. Add `drive.file` to the consent and fetch cached weights through the Drive API
+   (`drive.mount()` blocks without a browser).
+4. Extension UI (Start/Stop/Idle/Adopt) and a real work signal for idle auto-stop.
+
+Funnel stays: the proxy does not route port 8188, so the worker is published through the
+existing Tailscale Funnel.
