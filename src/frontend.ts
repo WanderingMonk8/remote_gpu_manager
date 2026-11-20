@@ -6,12 +6,13 @@ const ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" wi
 
 export function setup(ctx: SpindleFrontendContext) {
   const STYLES = `
-    .rgm-panel { display: grid; gap: 10px; padding: 16px; color: var(--lumiverse-text); }
+    .rgm-panel { display: grid; min-width: 0; gap: 10px; padding: 16px; color: var(--lumiverse-text); }
     .rgm-panel h3 { margin: 0; font-size: 15px; }
     .rgm-panel p { margin: 0; color: var(--lumiverse-text-muted); font-size: 12px; line-height: 1.5; }
     .rgm-panel input { width: 100%; box-sizing: border-box; padding: 7px 9px; border: 1px solid var(--lumiverse-border); border-radius: 8px; background: var(--lumiverse-fill); color: var(--lumiverse-text); font: inherit; }
     .rgm-panel input:focus { outline: 2px solid var(--lumiverse-primary); outline-offset: 1px; }
-    .rgm-actions { display: flex; gap: 8px; }
+    .rgm-actions { display: flex; flex-wrap: wrap; min-width: 0; gap: 8px; }
+    .rgm-runtime-actions button { flex: 1 1 110px; min-width: 0; }
     .rgm-panel button { padding: 7px 12px; border: 1px solid var(--lumiverse-border); border-radius: 8px; background: var(--lumiverse-fill-subtle); color: var(--lumiverse-text); font: inherit; font-weight: 600; cursor: pointer; }
     .rgm-panel button:hover { background: var(--lumiverse-fill); }
     .rgm-panel button.rgm-primary { border-color: var(--lumiverse-primary); color: var(--lumiverse-primary); }
@@ -77,7 +78,7 @@ export function setup(ctx: SpindleFrontendContext) {
       </label>
       <button class="rgm-gpu-refresh" type="button">Load eligible GPUs</button>
       <p class="rgm-gpu-status" role="status">Eligibility and availability depend on your Colab account. Check your plan for compute-unit usage and costs.</p>
-      <div class="rgm-actions">
+      <div class="rgm-actions rgm-runtime-actions">
         <button class="rgm-start" type="button">Start Colab</button>
         <button class="rgm-stop" type="button">Stop Colab</button>
         <button class="rgm-force-stop" type="button">Force stop</button>
