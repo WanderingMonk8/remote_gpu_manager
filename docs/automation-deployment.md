@@ -6,26 +6,30 @@ Changes to the deployed Space need the owner's explicit approval.
 
 ## Space image and settings
 
-Install Python 3 and `websocket-client` in the Space image. For example, where
-the base image provides apt and Python:
+The local `Space.Dockerfile` reference already installs Python 3 and
+`python3-venv`, and builds the gateway from `/opt/remote-gpu-manager`. Add the
+following after the gateway build block and before `ENV GATEWAY_PORT=8189`:
 
 ```dockerfile
-RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-pip \
-    && rm -rf /var/lib/apt/lists/*
-RUN python3 -m pip install --no-cache-dir websocket-client
+RUN python3 -m venv /opt/rgm-venv \
+    && /opt/rgm-venv/bin/pip install --no-cache-dir websocket-client
 ENV GATEWAY_LIFECYCLE=1 \
     GATEWAY_BOOTSTRAP=1 \
-    GATEWAY_BOOTSTRAP_PYTHON=python3 \
+    GATEWAY_BOOTSTRAP_PYTHON=/opt/rgm-venv/bin/python \
     GATEWAY_BOOTSTRAP_SCRIPT=/opt/remote-gpu-manager/tools/colab-bootstrap-worker.py \
     RUNTIME_INTENT_FILE=/app/data/rgm/runtime-intent.json
 ```
 
-The exact package installation must fit the actual base image (some Debian
-images require a Python virtual environment). The checkout must include the
-notebook and `tools/` files, not only `dist-host/`. Create `/app/data/rgm` with
-permissions for the gateway process before starting it. The intent file stores
+Add `mkdir -p /app/data/rgm` inside `start_rgm_gateway`, immediately before
+`bun run /opt/remote-gpu-manager/dist-host/gateway.mjs &`, so the directory is
+created after the persistent volume is mounted. The checkout must include the
+notebook and `tools/` files, not only `dist-host/`. The intent file stores
 only the manager runtime name; do not place credentials there. Persistent
 storage must survive restarts for allocation fencing to work.
+
+The reference Dockerfile currently clones `main`; the implementation commits
+must first be made available on the branch that the Space builds. The locally
+checked-out archive branch alone is not available to the remote Space.
 
 Set `GATEWAY_CONTROL_TOKEN` as a Space secret. The same token is entered in the
 extension's credential form and saved in the per-user enclave. Keep the gateway
