@@ -622,8 +622,16 @@ async function bootstrapRuntime(req) {
     }), "/gateway/v1/upstream");
     if (!adopted.ok)
       return errJson(502, "bootstrap_endpoint_invalid");
+    let workerHealthy = false;
+    try {
+      const rule = ROUTES.find((r) => r.method === "GET" && r.pattern.test("/system_stats"));
+      if (rule) {
+        const health = await fetchUpstream("/system_stats", { method: "GET", headers: upstreamHeaders() }, rule);
+        workerHealthy = health.status >= 200 && health.status < 300;
+      }
+    } catch {}
     noteWork();
-    return Response.json({ ok: true, upstream: GATEWAY_UPSTREAM, state: result.state }, { headers: { "Cache-Control": "no-store" } });
+    return Response.json({ ok: true, workerHealthy, upstream: GATEWAY_UPSTREAM, state: result.state }, { headers: { "Cache-Control": "no-store" } });
   } catch (err) {
     if (err instanceof HttpError)
       throw err;

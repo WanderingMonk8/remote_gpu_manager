@@ -192,6 +192,8 @@ describe("start / status / stop", () => {
     const gateway = spawnGateway(port, COLAB_PORT, `http://127.0.0.1:${MOCK_PORT}`, {
       GATEWAY_BOOTSTRAP: "1", GATEWAY_BOOTSTRAP_PYTHON: process.execPath,
       GATEWAY_BOOTSTRAP_SCRIPT: "tests/mock-colab/bootstrap-worker.ts",
+      MOCK_BOOTSTRAP_URL: `http://127.0.0.1:${MOCK_PORT}`,
+      GATEWAY_UPSTREAM_ALLOW_HTTP: "1", GATEWAY_UPSTREAM_ALLOW: ".0.0.1",
     });
     const url = `http://127.0.0.1:${port}`;
     try {
@@ -200,7 +202,7 @@ describe("start / status / stop", () => {
       expect((await fetch(`${url}/gateway/v1/runtime`, { method: "POST", headers: auth })).status).toBe(200);
       const response = await fetch(`${url}/gateway/v1/runtime/bootstrap`, {
         method: "POST", headers: { ...auth, "Content-Type": "application/json" },
-        body: JSON.stringify({ ts_authkey: "key", basic_user: "user", basic_pass: "secret", state: {} }),
+        body: JSON.stringify({ ts_authkey: "key", basic_user: "lumiverse", basic_pass: "test-secret", state: {} }),
       });
       expect(response.status).toBe(202);
       await waitFor(async () => {
@@ -210,7 +212,8 @@ describe("start / status / stop", () => {
       const job = await (await fetch(`${url}/gateway/v1/runtime/bootstrap`, { headers: auth })).json();
       expect(job.httpStatus).toBe(200);
       const data = job.result;
-      expect(data.upstream).toBe("https://mock.ts.net");
+      expect(data.upstream).toBe(`http://127.0.0.1:${MOCK_PORT}`);
+      expect(data.workerHealthy).toBe(true);
       expect(data.state["tailscaled.state"]).toBe("c2VjcmV0");
       expect(JSON.stringify(data)).not.toContain("mock-proxy-token-SECRET");
       expect((await fetch(`${url}/gateway/v1/runtime/bootstrap`, { method: "DELETE", headers: auth })).status).toBe(200);
