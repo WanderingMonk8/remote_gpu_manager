@@ -47,6 +47,7 @@ Bun.serve({
       return json({
         runtimeSpecs: [
           { key: { variant: "VARIANT_GPU", accelerator: "T4", shape: "SHAPE_STANDARD" }, eligible: true },
+          { key: { variant: "VARIANT_GPU", accelerator: "L4", shape: "SHAPE_STANDARD" }, eligible: true },
           { key: { variant: "VARIANT_GPU", accelerator: "A100", shape: "SHAPE_STANDARD" }, eligible: false },
         ],
       });
@@ -56,13 +57,14 @@ Bun.serve({
       if (CREATE_FAIL) {
         return json({ error: { code: 9, status: "FAILED_PRECONDITION", message: "Free tier has no T4 right now" } }, 400);
       }
+      const request = await req.json() as any;
       if (CREATE_DELAY_MS > 0) {
         await new Promise((r) => setTimeout(r, CREATE_DELAY_MS));
       }
       const id = url.searchParams.get("runtimeId") ?? "rgm-gw-unknown";
       runtimes.set(id, {
         name: `runtimes/${id}`,
-        runtimeSpec: { variant: "VARIANT_GPU", accelerator: "T4", shape: "SHAPE_STANDARD" },
+        runtimeSpec: request.runtimeSpec,
         connectionInfo: {
           url: "https://8080-gpu-t4-s-mock.colab.dev",
           token: TOKEN,

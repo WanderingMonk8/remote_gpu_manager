@@ -20,6 +20,7 @@ const DRIVE = "automation-drive-cache-v1";
 const PICKER = "automation-picker-config-v1";
 export type DriveFile = { id: string; name: string };
 export type PickerConfig = { clientId: string; apiKey: string; projectNumber: string };
+export type GpuChoice = { accelerator: string; shape: string; confirmNonDefault: boolean };
 const DEFAULT_FILES = ["moss_image_sft_int8_convrot.safetensors", "qwen3.5_9b_w4a8_gptq.safetensors", "flux2-vae_small.safetensors"];
 const MODEL_FILES = new Set([...DEFAULT_FILES, "moss_image_base_int8_convrot.safetensors", "qwen_3_06b_base.safetensors", "qwen_image_vae.safetensors",
   ...["base-v1.0", "turbo-v1.0", "turbo-v1.1", "aesthetic-v1.0", "aesthetic-v1.0b", "aesthetic-v1.1"].map(name => `anima-${name}.safetensors`)]);
@@ -101,7 +102,14 @@ export class AutomationController {
     return this.call("/gateway/v1/runtime", "GET", s.controlToken);
   }
 
-  async start(user: string): Promise<void> {
+  async gpuSpecs(user: string): Promise<any> {
+    const s = await this.secrets(user);
+    await this.call("/gateway/v1/runtime/credentials", "POST", s.controlToken,
+      { client_id: s.clientId, client_secret: s.clientSecret, refresh_token: s.refreshToken });
+    return this.call("/gateway/v1/runtime/specs", "GET", s.controlToken);
+  }
+
+  async start(user: string, choice?: GpuChoice): Promise<void> {
     const s = await this.secrets(user);
     const savedState = await this.store.get(STATE, user);
     const state = savedState ? JSON.parse(savedState) : {};
@@ -116,7 +124,9 @@ export class AutomationController {
     await this.call("/gateway/v1/runtime/credentials", "POST", s.controlToken,
       { client_id: s.clientId, client_secret: s.clientSecret, refresh_token: s.refreshToken });
     await this.call("/gateway/v1/runtime/cache-check", "POST", s.controlToken, { files: driveFiles });
-    const allocation = await this.call("/gateway/v1/runtime", "POST", s.controlToken);
+    const allocation = await this.call("/gateway/v1/runtime", "POST", s.controlToken, choice ? {
+      accelerator: choice.accelerator, shape: choice.shape, confirm_non_default: choice.confirmNonDefault,
+    } : undefined);
     // Do not rerun notebook setup on a reused runtime that may contain work.
     if (allocation.reused) throw new Error("runtime_already_exists");
     await this.call("/gateway/v1/runtime/bootstrap", "POST", s.controlToken,

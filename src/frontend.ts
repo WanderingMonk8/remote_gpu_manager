@@ -69,6 +69,11 @@ export function setup(ctx: SpindleFrontendContext) {
         <button class="rgm-picker" type="button">Select cache files</button>
         <p class="rgm-drive-status" role="status">No selection made in this session.</p>
       </details>
+      <label>Colab GPU
+        <select class="rgm-gpu"><option value="T4|SHAPE_STANDARD">T4 — standard (default)</option></select>
+      </label>
+      <button class="rgm-gpu-refresh" type="button">Load eligible GPUs</button>
+      <p class="rgm-gpu-status" role="status">Eligibility and availability depend on your Colab account. Check your plan for compute-unit usage and costs.</p>
       <div class="rgm-actions">
         <button class="rgm-start" type="button">Start Colab</button>
         <button class="rgm-stop" type="button">Stop Colab</button>
@@ -88,6 +93,8 @@ export function setup(ctx: SpindleFrontendContext) {
   const automationStatus = drawer.root.querySelector(".rgm-automation-status") as HTMLDivElement | null;
   const driveStatus = drawer.root.querySelector(".rgm-drive-status") as HTMLParagraphElement | null;
   const pickerSettingsStatus = drawer.root.querySelector(".rgm-picker-settings-status") as HTMLParagraphElement | null;
+  const gpuSelect = drawer.root.querySelector(".rgm-gpu") as HTMLSelectElement;
+  const gpuStatus = drawer.root.querySelector(".rgm-gpu-status") as HTMLParagraphElement | null;
   let pollTimer: ReturnType<typeof setTimeout> | null = null;
   let pendingSecrets: Record<string, string> | null = null;
   let pickerDirty = false;
@@ -141,7 +148,20 @@ export function setup(ctx: SpindleFrontendContext) {
       if (driveStatus) driveStatus.textContent = "File selection did not complete. Please try again.";
     }
   });
-  drawer.root.querySelector(".rgm-start")?.addEventListener("click", () => send("automation_start"));
+  drawer.root.querySelector(".rgm-gpu-refresh")?.addEventListener("click", () => {
+    if (gpuStatus) gpuStatus.textContent = "Checking eligible GPUs…";
+    send("automation_gpu_specs");
+  });
+  drawer.root.querySelector(".rgm-start")?.addEventListener("click", () => {
+    const [accelerator, shape] = gpuSelect.value.split("|");
+    if (!accelerator || !shape) {
+      if (gpuStatus) gpuStatus.textContent = "Choose an eligible GPU first.";
+      return;
+    }
+    const nonDefault = accelerator !== "T4" || shape !== "SHAPE_STANDARD";
+    if (!window.confirm(`Start a ${accelerator} ${shape.replace(/^SHAPE_/, "")} runtime? This may consume compute units or incur charges depending on your Colab plan. Check your plan before continuing.`)) return;
+    send("automation_start", { choice: { accelerator, shape, confirmNonDefault: nonDefault } });
+  });
   drawer.root.querySelector(".rgm-stop")?.addEventListener("click", () => send("automation_stop"));
   drawer.root.querySelector(".rgm-force-stop")?.addEventListener("click", () => {
     if (window.confirm("Force stop this Colab runtime even if work is active or its status is unknown?")) {
@@ -163,6 +183,31 @@ export function setup(ctx: SpindleFrontendContext) {
   });
 
   const unsub = ctx.onBackendMessage((payload: any) => {
+    if (payload?.action === "automation_gpu_specs") {
+      if (payload.type === "automation_error") {
+        if (gpuStatus) gpuStatus.textContent = `Could not load eligible GPUs: ${payload.error}.`;
+        return;
+      }
+      if (payload.type === "automation_result") {
+        const specs = Array.isArray(payload.result?.specs) ? payload.result.specs : [];
+        const prior = gpuSelect.value;
+        gpuSelect.replaceChildren();
+        for (const spec of specs) {
+          if (typeof spec?.accelerator !== "string" || !/^[A-Z0-9_]{1,40}$/.test(spec.accelerator) ||
+              typeof spec?.shape !== "string" || !/^SHAPE_[A-Z0-9_]{1,40}$/.test(spec.shape)) continue;
+          const option = document.createElement("option");
+          option.value = `${spec.accelerator}|${spec.shape}`;
+          option.textContent = `${spec.accelerator} — ${spec.shape.replace(/^SHAPE_/, "").toLowerCase()}`;
+          gpuSelect.appendChild(option);
+        }
+        if ([...gpuSelect.options].some(option => option.value === prior)) gpuSelect.value = prior;
+        else if ([...gpuSelect.options].some(option => option.value === "T4|SHAPE_STANDARD")) gpuSelect.value = "T4|SHAPE_STANDARD";
+        if (gpuStatus) gpuStatus.textContent = gpuSelect.options.length
+          ? "These GPUs are eligible for your account; availability is not guaranteed. Check your plan for compute-unit usage and costs."
+          : "Colab reports no eligible GPUs for this account right now.";
+        return;
+      }
+    }
     if (payload?.action === "automation_picker_config_get") {
       if (payload.type === "automation_result" && payload.result?.config && !pickerDirty) {
         const config = payload.result.config;
