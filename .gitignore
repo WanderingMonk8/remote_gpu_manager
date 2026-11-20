@@ -22,3 +22,8 @@ docs/colab-eligibility-result.json
 .venv/
 # Colab runtime spike output (may contain account identifiers)
 **/colab-runtime-api-result.json
+
+# Python bytecode
+__pycache__/
+*.pyc
+

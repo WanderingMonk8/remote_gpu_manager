@@ -124,7 +124,8 @@ def auth():
     creds = flow.run_local_server(
         port=0,
         prompt="consent",
-        authorization_prompt_message="Authorize runtime create/delete on your Colab account…",
+        authorization_prompt_message="Authorize runtime create/delete on your Colab account: "
+                                  "{url}",
         success_message="Authorized. You can close this tab.",
     )
     return creds.token  # in memory only
