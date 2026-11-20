@@ -1,0 +1,219 @@
+#!/usr/bin/env python3
+"""
+Bootstrap spike (ADR-006 §4): push a reduced cell set into a fresh Colab runtime
+over the Jupyter API and prove ComfyUI comes up.
+
+This is the missing link between "start/stop works" and "start means worker ready".
+It reuses the notebook as the bootstrap script rather than inventing a second one.
+
+Reduced profile — cells 2, 4, 8, 10:
+  2   imports, GPU check
+  4   clone ComfyUI, pip install requirements, dirs   (patched: USE_DRIVE=False)
+  8   worker lifecycle / start_comfy definition       (patched: LIFECYCLE=False)
+  10  launch ComfyUI and wait for /system_stats
+
+Section 3 (cell 6) is replaced by a small stub: it defines comfy_ready,
+stop_owned_server, ACTIVE_PROFILE and MODEL_CHOICE, but skips the multi-GB weight
+download. ComfyUI starts with no models — /system_stats and /object_info answer,
+which is what proves the mechanism. The full profile adds cell 6.
+
+Cost: one T4 allocation for ~3-6 minutes (git clone + pip install + launch).
+Deleted automatically unless --keep.
+
+Run:
+  .venv\\Scripts\\python.exe tools\\colab-bootstrap-probe.py
+  .venv\\Scripts\\python.exe tools\\colab-bootstrap-probe.py --keep
+  .venv\\Scripts\\python.exe tools\\colab-bootstrap-probe.py --cells 2,4,8,10
+"""
+
+import argparse
+import importlib.util
+import json
+import sys
+import time
+import urllib.request
+import uuid
+from pathlib import Path
+
+import websocket
+
+HERE = Path(__file__).resolve().parent
+spec = importlib.util.spec_from_file_location("probe", HERE / "colab-port-routing-probe.py")
+probe = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(probe)
+
+CELL_TIMEOUT = 900
+PREAMBLE = (
+    "import subprocess, sys\n"
+    "subprocess.run([sys.executable, '-m', 'pip', 'install', '-q', 'psutil'], check=False)\n"
+    "print('preamble: psutil ready')\n"
+)
+
+# Replaces section 3 for the reduced profile: the helpers cells 8 and 10 expect,
+# without the weight download.
+STUB = """
+import requests as _rq
+def comfy_ready():
+    try:
+        return _rq.get('http://127.0.0.1:8188/system_stats', timeout=3).ok
+    except Exception:
+        return False
+def stop_owned_server():
+    proc = globals().get('comfy_proc')
+    if proc is not None and proc.poll() is None:
+        proc.terminate()
+ACTIVE_PROFILE = {'family': 'moss'}
+MODEL_CHOICE = 'MOSS SFT INT8'
+print('stub: comfy_ready, stop_owned_server, ACTIVE_PROFILE, MODEL_CHOICE')
+"""
+
+VERIFY = """
+import requests
+r = requests.get('http://127.0.0.1:8188/system_stats', timeout=15)
+print('COMFY', r.status_code, r.text[:200])
+"""
+
+
+def load_cells():
+    nb = json.loads(
+        (HERE.parent / "Unified_MOSS_Anima_Colab_Studio_Tailscale.ipynb").read_text(encoding="utf-8")
+    )
+    return ["".join(c["source"]) for c in nb["cells"]]
+
+
+def patch(index, source):
+    """Make one notebook cell safe to run unattended."""
+    if index == 4:
+        source = source.replace("USE_DRIVE = True # @param", "USE_DRIVE = False # @param", 1)
+    if index == 8:
+        source = source.replace(
+            "LIFECYCLE = True            # @param",
+            "LIFECYCLE = False           # @param", 1)
+    return source
+
+
+def execute_live(ws, session_id, code, timeout=CELL_TIMEOUT):
+    """Run code on the kernel, printing output live. Returns (ok, status, output)."""
+    msg_id = str(uuid.uuid4())
+    ws.send(json.dumps({
+        "header": {"msg_id": msg_id, "username": "bootstrap", "session": session_id,
+                   "msg_type": "execute_request", "version": "5.3"},
+        "parent_header": {}, "metadata": {},
+        "content": {"code": code, "silent": False, "store_history": False,
+                    "user_expressions": {}, "allow_stdin": False, "stop_on_error": True},
+        "channel": "shell",
+    }))
+    deadline = time.time() + timeout
+    out = []
+    while time.time() < deadline:
+        try:
+            raw = ws.recv()
+        except websocket.WebSocketTimeoutException:
+            return False, "socket timeout", "".join(out)
+        except Exception as exc:
+            return False, f"socket error: {exc}", "".join(out)
+        reply = json.loads(raw)
+        if reply.get("parent_header", {}).get("msg_id") != msg_id:
+            continue
+        kind = reply.get("header", {}).get("msg_type")
+        content = reply.get("content", {})
+        if kind == "stream":
+            text = content.get("text", "")
+            out.append(text)
+            sys.stdout.write(text)
+            sys.stdout.flush()
+        elif kind in ("execute_result", "display_data"):
+            text = content.get("data", {}).get("text/plain", "")
+            if text:
+                out.append(text + "\n")
+                print(text)
+        elif kind == "error":
+            trace = "\n".join(content.get("traceback", []))
+            out.append(trace)
+            print(trace)
+            return False, content.get("ename", "error"), "".join(out)
+        elif kind == "execute_reply":
+            return content.get("status") == "ok", content.get("status"), "".join(out)
+    return False, "timeout", "".join(out)
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Bootstrap a Colab runtime from the notebook.")
+    parser.add_argument("--keep", action="store_true", help="leave the runtime running")
+    parser.add_argument("--accelerator", default="T4")
+    parser.add_argument("--cells", default="2,4,8,10", help="comma-separated cell indices")
+    args = parser.parse_args()
+    indices = [int(x) for x in args.cells.split(",") if x.strip()]
+
+    token = probe.access_token()
+    cells = load_cells()
+    print("=== Colab bootstrap probe ===")
+    name, runtime = probe.create_runtime(token, args.accelerator.upper())
+    host, port, suffix, ptoken = probe.parse_proxy(runtime["connectionInfo"])
+    print(f"  runtime {name}")
+    print(f"  host    {host}")
+
+    verdict, detail = "INCONCLUSIVE", ""
+    try:
+        scheme, status, body, err = probe.discover_scheme(host, ptoken)
+        print(f"[1] Jupyter API via {scheme} -> HTTP {status}")
+        if scheme is None or status != 200:
+            verdict, detail = "NO_JUPYTER", f"HTTP {status} {err}"
+            return 1
+
+        req = urllib.request.Request(
+            f"https://{host}/api/kernels",
+            data=json.dumps({"name": "python3"}).encode(),
+            method="POST",
+            headers={"Content-Type": "application/json", "X-Colab-Runtime-Proxy-Token": ptoken},
+        )
+        with urllib.request.urlopen(req, timeout=60) as r:
+            kernel_id = json.loads(r.read().decode())["id"]
+        print(f"[2] kernel {kernel_id}")
+        if not probe.wait_for_kernel(host, ptoken, scheme, kernel_id):
+            print("    kernel did not report idle; continuing")
+
+        ws, session_id = probe.ws_connect(host, ptoken, scheme, kernel_id)
+        ws.settimeout(CELL_TIMEOUT)
+
+        print("[3] preamble")
+        ok, st, _ = execute_live(ws, session_id, PREAMBLE, timeout=180)
+        if not ok:
+            verdict, detail = "PREAMBLE_FAILED", st
+            return 1
+
+        print("[4] stubbing section 3")
+        ok, st, _ = execute_live(ws, session_id, STUB, timeout=120)
+        if not ok:
+            verdict, detail = "STUB_FAILED", st
+            return 1
+
+        for idx in indices:
+            print(f"\n[5] cell {idx}")
+            ok, st, _ = execute_live(ws, session_id, patch(idx, cells[idx]))
+            print(f"    -> {st}")
+            if not ok:
+                verdict, detail = "CELL_FAILED", f"cell {idx}: {st}"
+                return 1
+
+        print("\n[6] verifying ComfyUI")
+        ok, st, out = execute_live(ws, session_id, VERIFY, timeout=120)
+        ws.close()
+        if ok and "COMFY 200" in out:
+            verdict, detail = "COMFY_UP", "cells ran; ComfyUI answered /system_stats"
+        else:
+            verdict, detail = "VERIFY_FAILED", (out.strip() or st)
+        print(f"\nRESULT: {verdict}")
+        print(f"  {detail}")
+        return 0 if verdict == "COMFY_UP" else 1
+    finally:
+        if args.keep:
+            print(f"\n--keep: {name} is still running.")
+            print(f"  stop: python tools/colab-runtime-api.py delete {name}")
+        else:
+            print("\n=== deleting runtime ===")
+            probe.delete_runtime(token, name)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

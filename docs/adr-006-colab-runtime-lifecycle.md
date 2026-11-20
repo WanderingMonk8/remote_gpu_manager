@@ -63,9 +63,13 @@ Lifecycle control is the gateway's job, called through the Colab API — not the
   returned `200`. The proxy routes only the Jupyter port. **The Funnel stays** for ComfyUI;
   the port-prefix shortcut is not available. Probe: `tools/colab-port-routing-probe.py`.
 - `connectionInfo.url` targets Jupyter (8080), not ComfyUI (8188). Confirmed, not assumed.
-- The bootstrap path (how our stack lands on a blank API-created runtime: Jupyter-API cell
-  execution vs startup script) is unresolved and gates the extension-controlled start. The
-  probe proved the Jupyter API is reachable and can execute code, so cell execution is viable.
+- **RESOLVED — bootstrap works.** `tools/colab-bootstrap-probe.py` pushed notebook cells
+  2, 4, 8, 10 into a fresh runtime over the Jupyter API and ComfyUI came up:
+  `COMFY 200` with `comfyui_version 0.46.0` on `/system_stats`, runtime deleted after.
+  Patches: `USE_DRIVE=False` (no interactive Drive mount), `LIFECYCLE=False` (no
+  supervisor), and a stub replacing section 3's multi-GB weight download. ComfyUI runs
+  with no models, which is enough to prove the mechanism. The full profile adds cell 6
+  (weights) and cell 25 (tunnel).
 
 ## 5. Alternatives considered
 
@@ -80,8 +84,8 @@ Lifecycle control is the gateway's job, called through the Colab API — not the
 1. Token custody decision (owner).
 2. Gateway endpoints: `POST/GET/DELETE /manager/v1/runtime`, idle-timer wiring, and the
    worker-config endpoint that hands Basic Auth to the worker.
-3. Bootstrap design: how the notebook's cells execute on an API-created runtime. The probe
-   confirmed the Jupyter API accepts `execute_request` over the authenticated WebSocket, so
-   cell execution is viable; the remaining question is how to inject the notebook's cells.
+3. Bootstrap: reduced profile proven (`tools/colab-bootstrap-probe.py`). Remaining is the
+   full profile — cell 6 (weights) and cell 25 (tunnel) — plus returning the Funnel URL so
+   `GATEWAY_UPSTREAM` can be repointed without a secret edit (ADR-005).
 4. Funnel stays: the proxy does not route port 8188, so the worker must be published through
    the existing Tailscale Funnel (or equivalent) as before.
