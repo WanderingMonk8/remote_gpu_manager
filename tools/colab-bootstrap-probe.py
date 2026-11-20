@@ -27,8 +27,10 @@ Run:
 """
 
 import argparse
+import base64
 import importlib.util
 import json
+import re
 import sys
 import time
 import urllib.request
@@ -73,23 +75,37 @@ r = requests.get('http://127.0.0.1:8188/system_stats', timeout=15)
 print('COMFY', r.status_code, r.text[:200])
 """
 
+ENV_KEYS = ("TS_AUTHKEY", "BASIC_AUTH_USER", "BASIC_AUTH_PASS")
 
-def load_cells():
-    nb = json.loads(
-        (HERE.parent / "Unified_MOSS_Anima_Colab_Studio_Tailscale.ipynb").read_text(encoding="utf-8")
+
+def env_preamble():
+    """Set RGM_AUTOMATION and inject the tunnel credentials into the kernel.
+
+    The values are base64-encoded so a syntax error in the cell cannot print them
+    in a traceback. Nothing here is written to disk in the runtime.
+    """
+    values = {"RGM_AUTOMATION": "1"}
+    creds_path = HERE / ".colab-creds.json"
+    if creds_path.is_file():
+        saved = json.loads(creds_path.read_text(encoding="utf-8"))
+        for key in ENV_KEYS:
+            if str(saved.get(key, "")).strip():
+                values[key] = str(saved[key]).strip()
+    blob = base64.b64encode(json.dumps(values).encode("utf-8")).decode("ascii")
+    code = (
+        "import base64, json, os\n"
+        f"_cfg = json.loads(base64.b64decode('{blob}').decode('utf-8'))\n"
+        "for _k, _v in _cfg.items():\n"
+        "    os.environ.setdefault(_k, _v)\n"
+        "print('env: automation=1, injected', ', '.join(sorted(_cfg)))\n"
+        "del _cfg\n"
     )
+    return code, sorted(values)
+
+
+def load_cells(path):
+    nb = json.loads(path.read_text(encoding="utf-8"))
     return ["".join(c["source"]) for c in nb["cells"]]
-
-
-def patch(index, source):
-    """Make one notebook cell safe to run unattended."""
-    if index == 4:
-        source = source.replace("USE_DRIVE = True # @param", "USE_DRIVE = False # @param", 1)
-    if index == 8:
-        source = source.replace(
-            "LIFECYCLE = True            # @param",
-            "LIFECYCLE = False           # @param", 1)
-    return source
 
 
 def execute_live(ws, session_id, code, timeout=CELL_TIMEOUT):
@@ -142,18 +158,37 @@ def main():
     parser.add_argument("--keep", action="store_true", help="leave the runtime running")
     parser.add_argument("--accelerator", default="T4")
     parser.add_argument("--cells", default="2,4,8,10", help="comma-separated cell indices")
+    parser.add_argument("--timeout", type=int, default=CELL_TIMEOUT, help="per-cell seconds")
+    parser.add_argument("--stub", action="store_true",
+                        help="replace section 3 with a no-weights stub (reduced profile)")
+    parser.add_argument("--notebook", default=str(HERE.parent / "Unified_MOSS_Anima_Colab_Studio_Tailscale.ipynb"),
+                        help="path to the .ipynb to execute")
+    parser.add_argument("--list-cells", action="store_true",
+                        help="print the notebook's cells and exit (no allocation)")
     args = parser.parse_args()
     indices = [int(x) for x in args.cells.split(",") if x.strip()]
 
+    cells = load_cells(Path(args.notebook))
+    if args.list_cells:
+        print(f"{args.notebook}: {len(cells)} cells")
+        for i, src in enumerate(cells):
+            title = ""
+            for line in src.splitlines():
+                if "@title" in line:
+                    title = line.split("@title", 1)[1].strip()
+                    break
+            first = src.strip().splitlines()[0] if src.strip() else ""
+            print(f"{i:2} {len(src.splitlines()):4}L  {title or first[:64]}")
+        return 0
+
     token = probe.access_token()
-    cells = load_cells()
     print("=== Colab bootstrap probe ===")
     name, runtime = probe.create_runtime(token, args.accelerator.upper())
     host, port, suffix, ptoken = probe.parse_proxy(runtime["connectionInfo"])
     print(f"  runtime {name}")
     print(f"  host    {host}")
 
-    verdict, detail = "INCONCLUSIVE", ""
+    verdict, detail, funnel = "INCONCLUSIVE", "", None
     try:
         scheme, status, body, err = probe.discover_scheme(host, ptoken)
         print(f"[1] Jupyter API via {scheme} -> HTTP {status}")
@@ -174,37 +209,53 @@ def main():
             print("    kernel did not report idle; continuing")
 
         ws, session_id = probe.ws_connect(host, ptoken, scheme, kernel_id)
-        ws.settimeout(CELL_TIMEOUT)
+        ws.settimeout(args.timeout)
 
-        print("[3] preamble")
+        print("[3] environment")
         ok, st, _ = execute_live(ws, session_id, PREAMBLE, timeout=180)
         if not ok:
             verdict, detail = "PREAMBLE_FAILED", st
             return 1
-
-        print("[4] stubbing section 3")
-        ok, st, _ = execute_live(ws, session_id, STUB, timeout=120)
+        env_code, injected = env_preamble()
+        ok, st, _ = execute_live(ws, session_id, env_code, timeout=60)
         if not ok:
-            verdict, detail = "STUB_FAILED", st
+            verdict, detail = "ENV_FAILED", st
             return 1
+        print(f"    injected: {', '.join(injected)}")
+
+        if args.stub:
+            print("[4] stubbing section 3")
+            ok, st, _ = execute_live(ws, session_id, STUB, timeout=120)
+            if not ok:
+                verdict, detail = "STUB_FAILED", st
+                return 1
 
         for idx in indices:
             print(f"\n[5] cell {idx}")
-            ok, st, _ = execute_live(ws, session_id, patch(idx, cells[idx]))
+            ok, st, out = execute_live(ws, session_id, cells[idx], timeout=args.timeout)
             print(f"    -> {st}")
             if not ok:
                 verdict, detail = "CELL_FAILED", f"cell {idx}: {st}"
                 return 1
+            for pattern in (r"GATEWAY_UPSTREAM=(https?://\S+)", r"Tunnel online:\s*(https?://\S+)"):
+                m = re.search(pattern, out or "")
+                if m:
+                    funnel = m.group(1).rstrip(".,)")
 
         print("\n[6] verifying ComfyUI")
         ok, st, out = execute_live(ws, session_id, VERIFY, timeout=120)
         ws.close()
         if ok and "COMFY 200" in out:
-            verdict, detail = "COMFY_UP", "cells ran; ComfyUI answered /system_stats"
+            verdict = "COMFY_UP"
+            detail = "cells ran; ComfyUI answered /system_stats"
         else:
             verdict, detail = "VERIFY_FAILED", (out.strip() or st)
+        if funnel:
+            detail += f" | funnel {funnel}"
         print(f"\nRESULT: {verdict}")
         print(f"  {detail}")
+        if funnel:
+            print(f"  GATEWAY_UPSTREAM={funnel}")
         return 0 if verdict == "COMFY_UP" else 1
     finally:
         if args.keep:
