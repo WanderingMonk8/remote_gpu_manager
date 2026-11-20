@@ -4,8 +4,10 @@ Start and stop the Colab runtime from the extension. Implemented per
 [ADR-006](./adr-006-colab-runtime-lifecycle.md); the gateway is the only component
 that talks to Google.
 
-**Manual mode is the default.** Every route below returns `403 lifecycle_disabled`
-unless the gateway is started with `GATEWAY_LIFECYCLE=1`.
+**Lifecycle routes are manual-mode by default.** The `/gateway/v1/runtime*` routes return
+`403 lifecycle_disabled` unless the gateway is started with `GATEWAY_LIFECYCLE=1`. The
+upstream route below is always available (control-token gated) because a manually started
+worker still needs to be published to the gateway.
 
 All routes live on the existing loopback control plane and require
 `Authorization: Bearer $GATEWAY_CONTROL_TOKEN`.
@@ -18,6 +20,32 @@ All routes live on the existing loopback control plane and require
 | `GET` | `/gateway/v1/runtime` | Status, adopted runtime, idle countdown |
 | `DELETE` | `/gateway/v1/runtime` | Stop: delete and **confirm** deletion |
 | `PUT` | `/gateway/v1/runtime/idle` | Set idle minutes (`0` disables) |
+| `PUT` | `/gateway/v1/upstream` | Adopt a worker URL (HTTPS + host allowlist) |
+| `GET` | `/gateway/v1/upstream` | Read the current upstream |
+
+## Adopting a worker URL
+
+The bootstrap returns a Funnel URL on every start. The Space hands it to the gateway so
+proxied generation reaches the new worker without editing a secret:
+
+```json
+PUT /gateway/v1/upstream
+{"url": "https://worker.tail00000.ts.net", "basic_auth": "user:password"}
+```
+
+- **HTTPS only.** `basic_auth` is optional; when present it replaces the upstream
+  `Authorization`, because the tunnel's Caddy password changes per deployment.
+- **Host allowlist.** The host must end in `.ts.net` or `.trycloudflare.com` (override
+  with `GATEWAY_UPSTREAM_ALLOW`, comma-separated). This keeps the gateway from becoming
+  an arbitrary-URL proxy.
+- **In memory only.** A gateway restart falls back to `GATEWAY_UPSTREAM` from the
+  environment, so a restart needs the secret or another adoption call.
+- **Tested:** adoption actually repoints the proxy (two mock workers with different
+  versions), wrong credentials surface `401`, malformed `basic_auth` is refused without
+  changing state, and disallowed hosts are rejected.
+
+Errors: `401 control_auth_required`, `400 url_invalid | https_required | basic_auth_invalid`,
+`403 host_not_allowed`.
 
 ## Credentials custody
 

@@ -36,6 +36,8 @@ if (upstreamUrl.protocol !== "http:" && upstreamUrl.protocol !== "https:") {
   throw new Error("GATEWAY_UPSTREAM must be http(s)");
 }
 var AUTHORIZATION = BASIC_AUTH.length > 0 ? `Basic ${Buffer.from(BASIC_AUTH, "utf8").toString("base64")}` : null;
+var UPSTREAM_ALLOW = (process.env.GATEWAY_UPSTREAM_ALLOW ?? ".ts.net,.trycloudflare.com").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+var ALLOW_HTTP_UPSTREAM = (process.env.GATEWAY_UPSTREAM_ALLOW_HTTP ?? "") === "1";
 var BODY_PROMPT = 1 * 1024 * 1024;
 var BODY_QUEUE = 64 * 1024;
 var BODY_UPLOAD = 100 * 1024 * 1024;
@@ -235,6 +237,47 @@ async function handleControl(req, path) {
       const detail = err instanceof HttpError ? err.detail : undefined;
       return Response.json(detail ? { error: code, detail } : { error: code }, { status });
     }
+  }
+  if (path === "/gateway/v1/upstream") {
+    if (req.method === "GET") {
+      return Response.json({ upstream: GATEWAY_UPSTREAM, auth: Boolean(AUTHORIZATION) });
+    }
+    if (req.method !== "PUT" && req.method !== "POST") {
+      return errJson(405, "method_not_allowed");
+    }
+    let body;
+    try {
+      body = JSON.parse(new TextDecoder().decode(await readBounded(req, 8192)));
+    } catch {
+      return errJson(400, "invalid_json");
+    }
+    const raw = String(body?.url ?? "").trim();
+    if (!raw)
+      return errJson(400, "url_required");
+    let parsed;
+    try {
+      parsed = new URL(raw);
+    } catch {
+      return errJson(400, "url_invalid");
+    }
+    if (parsed.protocol !== "https:" && !(ALLOW_HTTP_UPSTREAM && parsed.protocol === "http:")) {
+      return errJson(400, "https_required");
+    }
+    const host = parsed.hostname.toLowerCase();
+    if (!UPSTREAM_ALLOW.some((suffix) => host.endsWith(suffix))) {
+      return errJson(403, "host_not_allowed");
+    }
+    const basic = typeof body?.basic_auth === "string" ? body.basic_auth.trim() : "";
+    if (basic && !/^[^:\s]+:.+$/.test(basic)) {
+      return errJson(400, "basic_auth_invalid");
+    }
+    const previous = GATEWAY_UPSTREAM;
+    GATEWAY_UPSTREAM = parsed.origin;
+    if (basic) {
+      AUTHORIZATION = `Basic ${Buffer.from(basic, "utf8").toString("base64")}`;
+    }
+    console.log(`[rgm-gateway] upstream adopted: ${previous} -> ${GATEWAY_UPSTREAM} ` + `(auth: ${AUTHORIZATION ? "basic" : "NONE"})`);
+    return Response.json({ ok: true, upstream: GATEWAY_UPSTREAM, auth: Boolean(AUTHORIZATION) });
   }
   if (path === "/gateway/v1/status") {
     const probeStart = Date.now();

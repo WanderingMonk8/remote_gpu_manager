@@ -27,6 +27,8 @@ const EXECUTION_MS = Number(process.env.MOCK_EXECUTION_MS || 150);
 // Delay before the first /view byte. Used to reproduce slow tunnel transfers
 // (an 11-13 s image) without needing a multi-megabyte fixture.
 const VIEW_DELAY_MS = Number(process.env.MOCK_VIEW_DELAY_MS || 0);
+// Lets a test tell two mock workers apart after the gateway repoints at one.
+const MOCK_VERSION = process.env.MOCK_VERSION || "0.3.42-mock";
 // Non-zero makes GET /queue report that many running jobs, so the gateway's
 // idle timer must hold the runtime (PRD R-05). Default 0 keeps the queue empty.
 const QUEUE_DEPTH = Number(process.env.MOCK_QUEUE_DEPTH || 0);
@@ -206,7 +208,7 @@ const server = Bun.serve({
           os: "posix",
           python_version: "3.12.3",
           embedded: false,
-          comfyui_version: "0.3.42-mock",
+          comfyui_version: MOCK_VERSION,
         },
         devices: [
           {
