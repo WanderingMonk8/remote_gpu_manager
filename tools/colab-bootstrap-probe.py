@@ -157,7 +157,7 @@ def save_images(items, out_dir):
     return paths
 
 
-def execute_live(ws, session_id, code, timeout=CELL_TIMEOUT):
+def execute_live(ws, session_id, code, timeout=CELL_TIMEOUT, echo=True):
     """Run code on the kernel, printing output live. Returns (ok, status, output)."""
     msg_id = str(uuid.uuid4())
     ws.send(json.dumps({
@@ -185,13 +185,15 @@ def execute_live(ws, session_id, code, timeout=CELL_TIMEOUT):
         if kind == "stream":
             text = content.get("text", "")
             out.append(text)
-            sys.stdout.write(text)
-            sys.stdout.flush()
+            if echo:
+                sys.stdout.write(text)
+                sys.stdout.flush()
         elif kind in ("execute_result", "display_data"):
             text = content.get("data", {}).get("text/plain", "")
             if text:
                 out.append(text + "\n")
-                print(text)
+                if echo:
+                    print(text)
         elif kind == "error":
             trace = "\n".join(content.get("traceback", []))
             out.append(trace)
@@ -273,7 +275,7 @@ def dump_state(ws, session_id, state_dir):
         "            _out['certs/' + str(_p.relative_to(_c))] = base64.b64encode(_p.read_bytes()).decode()\n"
         "print('STATE_DUMP:' + json.dumps(_out))\n"
     )
-    ok, status, out = execute_live(ws, session_id, code, timeout=120)
+    ok, status, out = execute_live(ws, session_id, code, timeout=120, echo=False)
     if not ok:
         return 0
     m = re.search(r"STATE_DUMP:(\{.*\})", out or "", re.S)
