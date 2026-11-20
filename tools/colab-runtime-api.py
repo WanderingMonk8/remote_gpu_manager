@@ -138,6 +138,35 @@ def auth(offline: bool = False):
     return creds.token  # in memory only
 
 
+def saved_token():
+    """Mint an access token from tools/.colab-creds.json, with no browser.
+
+    Returns None when the file is absent or the token is unusable, so the caller
+    can fall back to interactive consent.
+    """
+    if not CREDS_PATH.is_file():
+        return None
+    try:
+        from google.auth.transport.requests import Request
+        from google.oauth2.credentials import Credentials
+    except ImportError:
+        return None
+    try:
+        saved = json.loads(CREDS_PATH.read_text(encoding="utf-8"))
+        creds = Credentials(
+            token=None,
+            refresh_token=saved["refresh_token"],
+            client_id=saved["client_id"],
+            client_secret=saved["client_secret"],
+            token_uri="https://oauth2.googleapis.com/token",
+            scopes=SCOPES,
+        )
+        creds.refresh(Request())
+        return creds.token
+    except Exception:
+        return None
+
+
 def specs(token):
     status, payload = call("GET", "/v1beta/runtimespecs", token)
     if status != 200:
@@ -310,7 +339,11 @@ def main():
         cmd_creds()
         return
 
-    token = auth()
+    token = saved_token()
+    if token:
+        print("Using saved credentials (no browser).")
+    else:
+        token = auth()
     if args.command in (None, "specs"):
         cmd_specs(token)
     elif args.command == "list":
