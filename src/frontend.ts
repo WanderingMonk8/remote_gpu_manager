@@ -1,6 +1,6 @@
 import type { SpindleFrontendContext } from "lumiverse-spindle-types";
 import { chooseDriveFiles } from "./drive-picker";
-import { driveSelectionIssue } from "./automation";
+import { driveSelectionIssue, validGpuPreference } from "./automation";
 
 const ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.5"/><rect x="2.5" y="9" width="2" height="6"/><rect x="19.5" y="9" width="2" height="6"/><path d="M9.5 2.5v2M12 2.5v2M14.5 2.5v2M9.5 19.5v2M12 19.5v2M14.5 19.5v2"/></svg>`;
 
@@ -95,6 +95,21 @@ export function setup(ctx: SpindleFrontendContext) {
   const pickerSettingsStatus = drawer.root.querySelector(".rgm-picker-settings-status") as HTMLParagraphElement | null;
   const gpuSelect = drawer.root.querySelector(".rgm-gpu") as HTMLSelectElement;
   const gpuStatus = drawer.root.querySelector(".rgm-gpu-status") as HTMLParagraphElement | null;
+  let gpuDirty = false;
+  let gpuSavePending = false;
+  let eligibleGpuValues: Set<string> | null = null;
+  function restoreGpu(value: string) {
+    let option = [...gpuSelect.options].find(item => item.value === value);
+    if (!option) {
+      option = document.createElement("option");
+      option.value = value;
+      const [accelerator, shape] = value.split("|");
+      option.textContent = `${accelerator} ? ${shape.replace(/^SHAPE_/, "").toLowerCase()} (saved${eligibleGpuValues ? "; not currently eligible" : "; eligibility not checked"})`;
+      option.disabled = eligibleGpuValues !== null;
+      gpuSelect.appendChild(option);
+    }
+    gpuSelect.value = value;
+  }
   let pollTimer: ReturnType<typeof setTimeout> | null = null;
   let pendingSecrets: Record<string, string> | null = null;
   let pickerDirty = false;
@@ -148,13 +163,25 @@ export function setup(ctx: SpindleFrontendContext) {
       if (driveStatus) driveStatus.textContent = "File selection did not complete. Please try again.";
     }
   });
+  gpuSelect.addEventListener("change", () => {
+    gpuDirty = true;
+    const [accelerator, shape] = gpuSelect.value.split("|");
+    gpuSavePending = true;
+    gpuSelect.disabled = true;
+    if (gpuStatus) gpuStatus.textContent = "Saving GPU preference?";
+    send("automation_gpu_choice_save", { choice: { accelerator, shape } });
+  });
   drawer.root.querySelector(".rgm-gpu-refresh")?.addEventListener("click", () => {
     if (gpuStatus) gpuStatus.textContent = "Checking eligible GPUs…";
     send("automation_gpu_specs");
   });
   drawer.root.querySelector(".rgm-start")?.addEventListener("click", () => {
     const [accelerator, shape] = gpuSelect.value.split("|");
-    if (!accelerator || !shape) {
+    if (gpuSavePending) {
+      if (gpuStatus) gpuStatus.textContent = "Wait for the GPU preference to finish saving.";
+      return;
+    }
+    if (!accelerator || !shape || gpuSelect.selectedOptions[0]?.disabled) {
       if (gpuStatus) gpuStatus.textContent = "Choose an eligible GPU first.";
       return;
     }
@@ -191,22 +218,42 @@ export function setup(ctx: SpindleFrontendContext) {
       if (payload.type === "automation_result") {
         const specs = Array.isArray(payload.result?.specs) ? payload.result.specs : [];
         const prior = gpuSelect.value;
+        eligibleGpuValues = new Set();
         gpuSelect.replaceChildren();
         for (const spec of specs) {
-          if (typeof spec?.accelerator !== "string" || !/^[A-Z0-9_]{1,40}$/.test(spec.accelerator) ||
-              typeof spec?.shape !== "string" || !/^SHAPE_[A-Z0-9_]{1,40}$/.test(spec.shape)) continue;
+          if (!validGpuPreference(spec)) continue;
           const option = document.createElement("option");
           option.value = `${spec.accelerator}|${spec.shape}`;
-          option.textContent = `${spec.accelerator} — ${spec.shape.replace(/^SHAPE_/, "").toLowerCase()}`;
+          option.textContent = `${spec.accelerator} ? ${spec.shape.replace(/^SHAPE_/, "").toLowerCase()}`;
+          eligibleGpuValues.add(option.value);
           gpuSelect.appendChild(option);
         }
-        if ([...gpuSelect.options].some(option => option.value === prior)) gpuSelect.value = prior;
-        else if ([...gpuSelect.options].some(option => option.value === "T4|SHAPE_STANDARD")) gpuSelect.value = "T4|SHAPE_STANDARD";
-        if (gpuStatus) gpuStatus.textContent = gpuSelect.options.length
+        restoreGpu(prior);
+        if (gpuStatus) gpuStatus.textContent = eligibleGpuValues.has(prior)
           ? "These GPUs are eligible for your account; availability is not guaranteed. Check your plan for compute-unit usage and costs."
-          : "Colab reports no eligible GPUs for this account right now.";
+          : "Your selected GPU is not currently eligible. Choose another eligible GPU or check again later.";
         return;
       }
+    }
+    if (payload?.action === "automation_gpu_choice_get") {
+      if (payload.type === "automation_result" && validGpuPreference(payload.result?.choice) && !gpuDirty) {
+        const choice = payload.result.choice;
+        restoreGpu(`${choice.accelerator}|${choice.shape}`);
+        if (gpuStatus) gpuStatus.textContent = gpuSelect.selectedOptions[0]?.disabled
+          ? "Your saved GPU is not currently eligible. Choose another eligible GPU or check again later."
+          : "Saved GPU preference loaded. Eligibility and availability depend on your Colab account.";
+      } else if (payload.type === "automation_error" && gpuStatus) {
+        gpuStatus.textContent = "Could not load the saved GPU preference.";
+      }
+      return;
+    }
+    if (payload?.action === "automation_gpu_choice_save") {
+      gpuSavePending = false;
+      gpuSelect.disabled = false;
+      if (gpuStatus) gpuStatus.textContent = payload.type === "automation_result"
+        ? "GPU preference saved. Eligibility and availability depend on your Colab account."
+        : "GPU preference could not be saved; this choice applies only to this session.";
+      return;
     }
     if (payload?.action === "automation_picker_config_get") {
       if (payload.type === "automation_result" && payload.result?.config && !pickerDirty) {
@@ -288,6 +335,7 @@ export function setup(ctx: SpindleFrontendContext) {
   });
 
   send("automation_picker_config_get");
+  send("automation_gpu_choice_get");
 
   return () => {
     if (pollTimer) clearTimeout(pollTimer);
