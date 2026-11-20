@@ -82,9 +82,10 @@ export function setup(ctx: SpindleFrontendContext) {
         <button class="rgm-runtime-status" type="button">Check runtime</button>
       </div>
       <label>Idle shutdown
-        <select class="rgm-idle"><option value="0">Disabled</option><option value="5">5 minutes</option><option value="10">10 minutes</option><option value="15">15 minutes</option><option value="30">30 minutes</option></select>
+        <select class="rgm-idle"><option value="0">Disabled</option><option value="5">5 minutes</option><option value="10" selected>10 minutes</option><option value="15">15 minutes</option><option value="30">30 minutes</option></select>
       </label>
       <button class="rgm-set-idle" type="button">Set idle timeout</button>
+      <p class="rgm-idle-status" role="status">Default: 10 minutes. Set a timeout to save it.</p>
       <div class="rgm-automation-status rgm-status" data-tone="unknown">Automation not checked.</div>
     </div>`;
 
@@ -97,6 +98,10 @@ export function setup(ctx: SpindleFrontendContext) {
   const pickerSettingsStatus = drawer.root.querySelector(".rgm-picker-settings-status") as HTMLParagraphElement | null;
   const gpuSelect = drawer.root.querySelector(".rgm-gpu") as HTMLSelectElement;
   const gpuStatus = drawer.root.querySelector(".rgm-gpu-status") as HTMLParagraphElement | null;
+  const idleSelect = drawer.root.querySelector(".rgm-idle") as HTMLSelectElement;
+  const idleStatus = drawer.root.querySelector(".rgm-idle-status") as HTMLParagraphElement;
+  let idleDirty = false;
+  idleSelect.addEventListener("change", () => { idleDirty = true; });
   let gpuDirty = false;
   let gpuSavePending = false;
   let eligibleGpuValues: Set<string> | null = null;
@@ -203,8 +208,8 @@ export function setup(ctx: SpindleFrontendContext) {
   });
   drawer.root.querySelector(".rgm-runtime-status")?.addEventListener("click", () => { send("automation_status"); poll(); });
   drawer.root.querySelector(".rgm-set-idle")?.addEventListener("click", () => {
-    const select = drawer.root.querySelector(".rgm-idle") as HTMLSelectElement;
-    send("automation_idle", { minutes: Number(select.value) });
+    idleDirty = true;
+    send("automation_idle", { minutes: Number(idleSelect.value) });
   });
 
   drawer.root.querySelector(".rgm-save-url")?.addEventListener("click", () => {
@@ -216,6 +221,18 @@ export function setup(ctx: SpindleFrontendContext) {
   });
 
   const unsub = ctx.onBackendMessage((payload: any) => {
+    if (payload?.action === "automation_idle_get") {
+      if (payload.type === "automation_result" && payload.result?.minutes !== null && !idleDirty) {
+        idleSelect.value = String(payload.result.minutes);
+        idleStatus.textContent = "Saved idle timeout loaded; it will be applied before starting Colab.";
+      } else if (payload.type === "automation_error") idleStatus.textContent = "Could not load the saved idle timeout.";
+      return;
+    }
+    if (payload?.action === "automation_idle") {
+      idleStatus.textContent = payload.type === "automation_result"
+        ? "Idle timeout applied and saved."
+        : `Idle timeout could not be saved or applied: ${payload.error}.`;
+    }
     if (payload?.action === "automation_gpu_specs") {
       if (payload.type === "automation_error") {
         if (gpuStatus) gpuStatus.textContent = `Could not load eligible GPUs: ${payload.error}.`;
@@ -361,6 +378,7 @@ export function setup(ctx: SpindleFrontendContext) {
   send("automation_gpu_choice_get");
   send("automation_drive_status");
   send("automation_credentials_status");
+  send("automation_idle_get");
 
   return () => {
     if (pollTimer) clearTimeout(pollTimer);

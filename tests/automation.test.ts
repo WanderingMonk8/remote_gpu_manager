@@ -47,6 +47,35 @@ describe("automation controller", () => {
     expect(calls).toEqual([]);
   });
 
+  test("saves the idle timeout per user and reapplies it before allocating", async () => {
+    const entries = new Map<string, string>();
+    const calls: Array<{ path: string; method: string; body: any }> = [];
+    const controller = new AutomationController({
+      async get(key, user) { return entries.get(`${user}:${key}`) ?? null; },
+      async put(key, value, user) { entries.set(`${user}:${key}`, value); },
+    }, async (path, method, _token, body) => {
+      calls.push({ path, method, body });
+      if (path.endsWith("/bootstrap") && method === "GET") return { status: "idle" };
+      return {};
+    });
+    await controller.save("owner", secrets);
+    await controller.saveDriveFiles("owner", [
+      { id: "a", name: "moss_image_sft_int8_convrot.safetensors" },
+      { id: "b", name: "qwen3.5_9b_w4a8_gptq.safetensors" },
+      { id: "c", name: "flux2-vae_small.safetensors" },
+    ]);
+    await controller.idle("owner", 15);
+    expect(await controller.getIdlePreference("owner")).toBe(15);
+    expect(await controller.getIdlePreference("other")).toBeNull();
+    await expect(controller.idle("owner", 99)).rejects.toThrow("idle_minutes_invalid");
+    calls.length = 0;
+    await controller.start("owner");
+    const idle = calls.findIndex(call => call.path.endsWith("/idle"));
+    const allocation = calls.findIndex(call => call.path === "/gateway/v1/runtime" && call.method === "POST");
+    expect(calls[idle].body).toEqual({ minutes: 15 });
+    expect(idle).toBeLessThan(allocation);
+  });
+
   test("distinguishes Picker selection problems without exposing file IDs", () => {
     expect(driveSelectionIssue([])).toBe("drive_selection_empty");
     expect(driveSelectionIssue([{ id: "valid-id", name: "wrong-file.safetensors" }])).toBe("drive_selection_unrecognized");
