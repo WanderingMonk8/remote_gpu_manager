@@ -79,8 +79,9 @@ The caller must persist the returned state securely before clearing the result
 with `DELETE /gateway/v1/runtime/bootstrap`. Only one result is held, in memory;
 it is lost on gateway restart. The extension does not yet store or send these
 credentials or persist the returned state, so this is not yet a complete or
-restart-safe automation flow. Allocation recovery is not durable, and a
-separate post-bootstrap authenticated worker health check is still needed.
+restart-safe automation flow. Allocation recovery is not durable. The result
+includes `workerHealthy`, an authenticated gateway-to-worker health check;
+the caller must save state even when this check fails.
 Keep this feature disabled until those gaps are addressed. No production
 Space deployment is implied by its presence in the repository.
 

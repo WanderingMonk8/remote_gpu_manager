@@ -372,7 +372,9 @@ def bootstrap_runtime(args, cells, name, runtime, hooks=None):
     print(f"    injected: {', '.join(injected)}")
 
     if hooks is not None:
-        restore_state_data(ws, session_id, hooks.get("state", {}))
+        state = hooks.get("state", {})
+        if state and restore_state_data(ws, session_id, state) != len(state):
+            raise RuntimeError("failed to restore Tailscale state")
     elif not args.no_state:
         restored = restore_state(ws, session_id, Path(args.state_dir))
         print(f"    state: restored {restored} file(s)" if restored
