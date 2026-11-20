@@ -15,7 +15,7 @@ dist/
 # Personal working artifact with user prompts/outputs; derived, sanitized
 # profiles and workflows DO belong in this repo.
 *.ipynb
-*.ipynb.bak
+*.ipynb.bak*
 !Unified_MOSS_Anima_Colab_Studio_Tailscale.ipynb
 # Colab eligibility probe secrets/results (never commit, at any path)
 **/client_secret.json
