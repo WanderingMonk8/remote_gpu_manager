@@ -33,19 +33,39 @@ all. No secret edit, no Factory restart, no copy/paste.
 Do these before running the cell. The cell cannot do them and will fail with a TLS/Funnel error if
 they are missing.
 
-1. **Enable HTTPS certificates** — admin console → **DNS** → *HTTPS Certificates* → **Enable**.
-   Funnel terminates TLS with `tailscale cert` material; without this, `tailscale funnel` fails.
-2. **Enable Funnel in the policy file** — admin console → **Access controls** → expand **Funnel** →
-   **Add Funnel to policy**. That writes:
+1. **Enable HTTPS certificates** — admin console → **Network → DNS** → *HTTPS Certificates* →
+   **Enable**. Funnel terminates TLS with `tailscale cert` material; without this, `tailscale funnel`
+   fails. MagicDNS must be on for the same reason.
+2. **Enable Funnel in the policy file** — admin console → **Access controls → JSON editor**.
+   The current console has no dedicated Funnel section (the *Policies* page only shows General
+   access rules / Tailscale SSH / Auto approvers), so the attribute is added by hand. Append this
+   alongside whatever is already in the file — do not replace existing keys:
 
    ```json
    "nodeAttrs": [
-     { "target": ["autogroup:member"], "attr": ["funnel"] }
-   ]
+     {
+       "target": ["autogroup:member"],
+       "attr":   ["funnel"],
+     },
+   ],
    ```
 
-   Enabling Funnel from the CLI normally opens a browser approval page, which Colab cannot show.
-   Pre-approving it here is what makes the headless path work.
+   A minimal policy file that works is:
+
+   ```json
+   {
+     "grants": [
+       { "src": ["*"], "dst": ["*"], "ip": ["*"] }
+     ],
+     "nodeAttrs": [
+       { "target": ["autogroup:member"], "attr": ["funnel"] }
+     ]
+   }
+   ```
+
+   If `nodeAttrs` already exists, add the object to the existing array instead of adding a second
+   `nodeAttrs` key. Then **Save**. Enabling Funnel from the CLI normally opens a browser approval
+   page, which Colab cannot show; pre-approving it here is what makes the headless path work.
 3. **Create an auth key** — admin console → **Settings** → **Keys** → *Generate auth key*.
    - **Reusable** (not single-use).
    - **Not ephemeral** — an ephemeral node is deleted when it disconnects, which discards the TLS
