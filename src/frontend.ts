@@ -18,6 +18,8 @@ export function setup(ctx: SpindleFrontendContext) {
     .rgm-status[data-tone="bad"] { color: var(--lumiverse-error, #e57373); }
     .rgm-status[data-tone="unknown"] { color: var(--lumiverse-text-muted); }
     .rgm-out { margin: 0; max-height: 220px; overflow: auto; white-space: pre-wrap; font-size: 11px; color: var(--lumiverse-text-muted); }
+    .rgm-panel label { display: grid; gap: 4px; font-size: 12px; }
+    .rgm-panel select { padding: 7px; }
   `;
   const removeStyle = ctx.dom.addStyle(STYLES);
 
@@ -42,11 +44,52 @@ export function setup(ctx: SpindleFrontendContext) {
       </div>
       <div class="rgm-status" data-tone="unknown">Not checked yet.</div>
       <pre class="rgm-out"></pre>
+      <h3>Colab automation</h3>
+      <p>Credentials are saved in your encrypted enclave. Starting allocates a Colab runtime; stop it when finished.</p>
+      <details><summary>Automation credentials</summary>
+        <label>Gateway control token<input data-secret="controlToken" type="password" autocomplete="off" /></label>
+        <label>Google OAuth client ID<input data-secret="clientId" type="password" autocomplete="off" /></label>
+        <label>Google OAuth client secret<input data-secret="clientSecret" type="password" autocomplete="off" /></label>
+        <label>Google refresh token<input data-secret="refreshToken" type="password" autocomplete="off" /></label>
+        <label>Tailscale auth key<input data-secret="tailnetKey" type="password" autocomplete="off" /></label>
+        <label>Tunnel Basic Auth username<input data-secret="basicUser" type="text" autocomplete="off" /></label>
+        <label>Tunnel Basic Auth password<input data-secret="basicPass" type="password" autocomplete="off" /></label>
+        <button class="rgm-save-secrets" type="button">Save credentials</button>
+      </details>
+      <div class="rgm-actions">
+        <button class="rgm-start" type="button">Start Colab</button>
+        <button class="rgm-stop" type="button">Stop Colab</button>
+        <button class="rgm-runtime-status" type="button">Check runtime</button>
+      </div>
+      <label>Idle shutdown
+        <select class="rgm-idle"><option value="0">Disabled</option><option value="5">5 minutes</option><option value="10">10 minutes</option><option value="15">15 minutes</option><option value="30">30 minutes</option></select>
+      </label>
+      <button class="rgm-set-idle" type="button">Set idle timeout</button>
+      <div class="rgm-automation-status rgm-status" data-tone="unknown">Automation not checked.</div>
     </div>`;
 
   const out = drawer.root.querySelector(".rgm-out") as HTMLPreElement | null;
   const statusBox = drawer.root.querySelector(".rgm-status") as HTMLDivElement | null;
   const urlInput = drawer.root.querySelector(".rgm-gw-url") as HTMLInputElement | null;
+  const automationStatus = drawer.root.querySelector(".rgm-automation-status") as HTMLDivElement | null;
+  let pollTimer: ReturnType<typeof setTimeout> | null = null;
+  const send = (type: string, extra: object = {}) => ctx.sendToBackend({ type, ...extra });
+  const poll = () => send("automation_poll");
+  drawer.root.querySelector(".rgm-save-secrets")?.addEventListener("click", () => {
+    const secrets: Record<string, string> = {};
+    drawer.root.querySelectorAll<HTMLInputElement>("[data-secret]").forEach(input => {
+      secrets[input.dataset.secret!] = input.value;
+      input.value = "";
+    });
+    send("automation_save", { secrets });
+  });
+  drawer.root.querySelector(".rgm-start")?.addEventListener("click", () => send("automation_start"));
+  drawer.root.querySelector(".rgm-stop")?.addEventListener("click", () => send("automation_stop"));
+  drawer.root.querySelector(".rgm-runtime-status")?.addEventListener("click", () => { send("automation_status"); poll(); });
+  drawer.root.querySelector(".rgm-set-idle")?.addEventListener("click", () => {
+    const select = drawer.root.querySelector(".rgm-idle") as HTMLSelectElement;
+    send("automation_idle", { minutes: Number(select.value) });
+  });
 
   drawer.root.querySelector(".rgm-save-url")?.addEventListener("click", () => {
     if (urlInput?.value.trim()) ctx.sendToBackend({ type: "set_gateway_url", url: urlInput.value.trim() });
@@ -57,6 +100,19 @@ export function setup(ctx: SpindleFrontendContext) {
   });
 
   const unsub = ctx.onBackendMessage((payload: any) => {
+    if (automationStatus && payload?.type === "automation_error") {
+      automationStatus.dataset.tone = "bad";
+      automationStatus.textContent = `${payload.action}: ${payload.error}`;
+    }
+    if (automationStatus && payload?.type === "automation_result") {
+      const result = payload.result ?? {};
+      automationStatus.dataset.tone = result.status === "failed" || result.workerHealthy === false ? "bad" : "unknown";
+      automationStatus.textContent = `${payload.action}: ${result.status ?? (result.saved ? "saved" : result.confirmed ? "stopped" : "updated")}${result.error ? ` (${result.error})` : ""}${result.workerHealthy === false ? " — worker health check failed" : ""}`;
+      if (payload.action === "automation_start" || (payload.action === "automation_poll" && result.status === "running")) {
+        if (pollTimer) clearTimeout(pollTimer);
+        pollTimer = setTimeout(poll, 3000);
+      }
+    }
     if (!statusBox || !out) return;
     if (payload?.type === "status") {
       const gwOk = payload.gateway?.ok;
@@ -78,6 +134,7 @@ export function setup(ctx: SpindleFrontendContext) {
   });
 
   return () => {
+    if (pollTimer) clearTimeout(pollTimer);
     unsub();
     removeStyle();
     drawer.destroy();

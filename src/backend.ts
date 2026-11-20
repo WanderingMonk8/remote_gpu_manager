@@ -8,9 +8,28 @@
  * credentials. No provisioning calls, no token-guarded endpoints.
  */
 
+import { AutomationController } from "./automation";
 declare const spindle: import("lumiverse-spindle-types").SpindleAPI;
 
 const DEFAULT_GATEWAY_URL = "http://127.0.0.1:8189";
+
+const automation = new AutomationController(
+  { get: (key, user) => spindle.enclave.get(key, user), put: (key, value, user) => spindle.enclave.put(key, value, user) },
+  async (path, method, token, body) => {
+    // Never send credentials to the configurable status-probe URL.
+    const res = await spindle.cors(`${DEFAULT_GATEWAY_URL}${path}`, {
+      method, headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+    let data: any;
+    try { data = JSON.parse(res.body); } catch { throw new Error("gateway_invalid_response"); }
+    if (res.status < 200 || res.status >= 300) {
+      const code = typeof data?.error === "string" && /^[a-z_]+$/.test(data.error) ? data.error : "gateway_error";
+      throw new Error(code);
+    }
+    return data;
+  },
+);
 
 async function getGatewayUrl(): Promise<string> {
   const saved = await spindle.storage.getJson<{ url?: string }>("gateway-url.json", { fallback: {} });
@@ -33,6 +52,33 @@ function hintForStatus(status: number): string | undefined {
 }
 
 spindle.onFrontendMessage(async (payload: any, userId?: string) => {
+  if (typeof payload?.type === "string" && payload.type.startsWith("automation_")) {
+    try {
+      if (!userId) throw new Error("user_required");
+      let result: unknown;
+      switch (payload.type) {
+        case "automation_save":
+          await automation.save(userId, payload.secrets);
+          result = { saved: true };
+          break;
+        case "automation_start":
+          await automation.start(userId);
+          result = { status: "running" };
+          break;
+        case "automation_poll": result = await automation.poll(userId); break;
+        case "automation_status": result = await automation.status(userId); break;
+        case "automation_stop": result = await automation.stop(userId); break;
+        case "automation_idle": result = await automation.idle(userId, payload.minutes); break;
+        default: throw new Error("unsupported_action");
+      }
+      spindle.sendToFrontend({ type: "automation_result", action: payload.type, result }, userId);
+    } catch (err) {
+      const message = (err as Error)?.message ?? "automation_failed";
+      spindle.sendToFrontend({ type: "automation_error", action: payload.type,
+        error: /^[a-z_]+$/.test(message) ? message : "automation_failed" }, userId);
+    }
+    return;
+  }
   if (payload?.type === "set_gateway_url" && typeof payload.url === "string") {
     const url = payload.url.trim().replace(/\/+$/, "");
     if (!/^https?:\/\/[A-Za-z0-9._:[\]-]+$/.test(url)) {
