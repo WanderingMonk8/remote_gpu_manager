@@ -51,7 +51,8 @@ the controller adopts the new endpoint after bootstrap.
    refresh token, Tailscale auth key, and desired tunnel Basic Auth credentials.
    These values are stored in the user's enclave. Enter the web client ID, API
    key and project number in the Picker form, then select the MOSS SFT checkpoint,
-   Qwen encoder and VAE files from the existing Drive cache.
+   Qwen encoder and VAE files from the existing Drive cache. Files may be selected
+   in separate Picker visits; the extension reports which required files remain.
 
 The web and desktop OAuth clients must belong to the same project, and the
 Picker must use the same Google account as the refresh token. `drive.file`

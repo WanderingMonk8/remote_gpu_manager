@@ -59,7 +59,7 @@ export function setup(ctx: SpindleFrontendContext) {
         <button class="rgm-save-secrets" type="button">Save credentials</button>
       </details>
       <details><summary>Drive model cache</summary>
-        <p>Use a web OAuth client, browser API key, and project number from the same Google Cloud project as the Colab OAuth client. Select the three MOSS SFT model files.</p>
+        <p>Use a web OAuth client, browser API key, and project number from the same Google Cloud project as the Colab OAuth client. Select the three MOSS SFT model files, together or one at a time.</p>
         <label>Google web OAuth client ID<input class="rgm-picker-client" type="text" autocomplete="off" /></label>
         <label>Google Picker API key<input class="rgm-picker-key" type="text" autocomplete="off" /></label>
         <label>Google Cloud project number<input class="rgm-picker-project" type="text" autocomplete="off" /></label>
@@ -149,15 +149,17 @@ export function setup(ctx: SpindleFrontendContext) {
       automationStatus.textContent = messages[payload.error] ?? `${payload.action}: ${payload.error}`;
       if (payload.action === "automation_save") pendingSecrets = null;
       if (payload.action === "automation_save_drive" && driveStatus) {
-        driveStatus.textContent = payload.error === "drive_selection_incomplete"
-          ? "Selection not saved. Select the MOSS SFT checkpoint, Qwen encoder, and VAE together."
+        driveStatus.textContent = payload.error === "drive_selection_invalid"
+          ? "Selection not saved. Choose only supported model files, without duplicate names."
           : "Selection not saved. Check the status message below.";
       }
     }
     if (automationStatus && payload?.type === "automation_result") {
       const result = payload.result ?? {};
       if (payload.action === "automation_save_drive" && result.saved && driveStatus) {
-        driveStatus.textContent = "Cache file selection saved. You can now start Colab.";
+        driveStatus.textContent = result.complete
+          ? "All three cache files are saved. You can now start Colab."
+          : `Selection saved. Still needed: ${(result.missing ?? []).join(", ")}. Select the remaining files.`;
       }
       if (payload.action === "automation_save" && result.saved && pendingSecrets) {
         const submitted = pendingSecrets;
