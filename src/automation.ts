@@ -196,6 +196,13 @@ export class AutomationController {
       ...(typeof job.result.error === "string" && /^[a-z_]+$/.test(job.result.error) ? { error: job.result.error } : {}) };
   }
 
+  async recover(user: string): Promise<any> {
+    const s = await this.secrets(user);
+    await this.call("/gateway/v1/runtime/credentials", "POST", s.controlToken,
+      { client_id: s.clientId, client_secret: s.clientSecret, refresh_token: s.refreshToken });
+    return this.call("/gateway/v1/runtime/recover", "POST", s.controlToken, { confirmed: true });
+  }
+
   async stop(user: string, force = false): Promise<any> {
     const s = await this.secrets(user);
     await this.call("/gateway/v1/runtime/credentials", "POST", s.controlToken,

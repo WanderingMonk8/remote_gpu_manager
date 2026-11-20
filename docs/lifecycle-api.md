@@ -120,7 +120,12 @@ POST /gateway/v1/runtime  ->  200
   in that process fail with `allocation_uncertain`. Inspect Colab before recovery.
   Configure `RUNTIME_INTENT_FILE` on persistent storage to preserve allocation
   intent across restarts and fence competing controllers. A stale intent blocks
-  allocation until the operator verifies Colab state and removes the file.
+  allocation. After verifying the previous runtime was terminated and no creation
+  remains in flight, the operator may explicitly choose Recover allocation. The
+  gateway verifies both the runtime list and the recorded runtime, then archives
+  the intent rather than deleting its contents. A delayed Colab create can appear
+  after a negative check, so confirmation is essential. This recovery requires an
+  intent file and a single controller; it never stops a runtime.
 - After a successful create, the gateway retains the runtime handle even when
   connection polling fails, allowing status and stop to find it.
 - Only runtimes named `rgm-gw-*` are ever created, adopted or deleted. Another
