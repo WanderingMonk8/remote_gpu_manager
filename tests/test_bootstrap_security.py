@@ -14,6 +14,20 @@ bootstrap = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(bootstrap)
 
 
+class FinalNotebookTests(unittest.TestCase):
+    def test_final_notebook_supports_headless_bootstrap_without_saved_outputs(self):
+        notebook_path = path.parent.parent / "Unified_MOSS_Anima_Colab_Studio_Tailscale_Final.ipynb"
+        notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
+        cells = bootstrap.load_cells(notebook_path)
+        for index in (2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 25):
+            self.assertTrue(cells[index].strip(), f"missing bootstrap cell {index}")
+        self.assertEqual(cells[4].count('USE_DRIVE = True # @param {type:"boolean"}'), 1)
+        for cell in notebook["cells"]:
+            if cell["cell_type"] == "code":
+                self.assertEqual(cell.get("outputs", []), [])
+                self.assertIsNone(cell.get("execution_count"))
+
+
 class FakeSocket:
     def __init__(self, error=False):
         self.error = error

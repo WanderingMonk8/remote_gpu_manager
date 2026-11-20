@@ -454,7 +454,7 @@ def main():
     parser.add_argument("--timeout", type=int, default=CELL_TIMEOUT, help="per-cell seconds")
     parser.add_argument("--stub", action="store_true",
                         help="replace section 3 with a no-weights stub (reduced profile)")
-    parser.add_argument("--notebook", default=str(HERE.parent / "Unified_MOSS_Anima_Colab_Studio_Tailscale.ipynb"),
+    parser.add_argument("--notebook", default=str(HERE.parent / "Unified_MOSS_Anima_Colab_Studio_Tailscale_Final.ipynb"),
                         help="path to the .ipynb to execute")
     parser.add_argument("--list-cells", action="store_true",
                         help="print the notebook's cells and exit (no allocation)")
