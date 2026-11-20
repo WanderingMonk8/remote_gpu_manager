@@ -786,7 +786,11 @@ async function bootstrapRuntime(req: Request): Promise<Response> {
       method: "PUT", headers: { Authorization: `Bearer ${CONTROL_TOKEN}`, "Content-Type": "application/json" },
       body: JSON.stringify({ url: result.funnel, basic_auth: `${basic_user}:${basic_pass}` }),
     }), "/gateway/v1/upstream");
-    if (!adopted.ok) return errJson(502, "bootstrap_endpoint_invalid");
+    if (!adopted.ok) {
+      // The node identity must remain recoverable even if URL adoption fails.
+      return Response.json({ ok: true, workerHealthy: false, error: "bootstrap_endpoint_invalid", state: result.state },
+        { headers: { "Cache-Control": "no-store" } });
+    }
     let workerHealthy = false;
     try {
       const rule = ROUTES.find((r) => r.method === "GET" && r.pattern.test("/system_stats"));

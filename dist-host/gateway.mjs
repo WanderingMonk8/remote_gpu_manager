@@ -701,8 +701,9 @@ async function bootstrapRuntime(req) {
       headers: { Authorization: `Bearer ${CONTROL_TOKEN}`, "Content-Type": "application/json" },
       body: JSON.stringify({ url: result.funnel, basic_auth: `${basic_user}:${basic_pass}` })
     }), "/gateway/v1/upstream");
-    if (!adopted.ok)
-      return errJson(502, "bootstrap_endpoint_invalid");
+    if (!adopted.ok) {
+      return Response.json({ ok: true, workerHealthy: false, error: "bootstrap_endpoint_invalid", state: result.state }, { headers: { "Cache-Control": "no-store" } });
+    }
     let workerHealthy = false;
     try {
       const rule = ROUTES.find((r) => r.method === "GET" && r.pattern.test("/system_stats"));
