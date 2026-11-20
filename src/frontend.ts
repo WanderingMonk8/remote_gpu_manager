@@ -64,6 +64,7 @@ export function setup(ctx: SpindleFrontendContext) {
         <label>Google Picker API key<input class="rgm-picker-key" type="text" autocomplete="off" /></label>
         <label>Google Cloud project number<input class="rgm-picker-project" type="text" autocomplete="off" /></label>
         <button class="rgm-picker" type="button">Select cache files</button>
+        <p class="rgm-drive-status" role="status">No selection made in this session.</p>
       </details>
       <div class="rgm-actions">
         <button class="rgm-start" type="button">Start Colab</button>
@@ -82,6 +83,7 @@ export function setup(ctx: SpindleFrontendContext) {
   const statusBox = drawer.root.querySelector(".rgm-status") as HTMLDivElement | null;
   const urlInput = drawer.root.querySelector(".rgm-gw-url") as HTMLInputElement | null;
   const automationStatus = drawer.root.querySelector(".rgm-automation-status") as HTMLDivElement | null;
+  const driveStatus = drawer.root.querySelector(".rgm-drive-status") as HTMLParagraphElement | null;
   let pollTimer: ReturnType<typeof setTimeout> | null = null;
   let pendingSecrets: Record<string, string> | null = null;
   const send = (type: string, extra: object = {}) => ctx.sendToBackend({ type, ...extra });
@@ -98,6 +100,7 @@ export function setup(ctx: SpindleFrontendContext) {
     const field = (selector: string) => (drawer.root.querySelector(selector) as HTMLInputElement).value.trim();
     try {
       const files = await chooseDriveFiles({ clientId: field(".rgm-picker-client"), apiKey: field(".rgm-picker-key"), projectNumber: field(".rgm-picker-project") });
+      if (driveStatus) driveStatus.textContent = `Saving ${files.length} selected file${files.length === 1 ? "" : "s"}…`;
       send("automation_save_drive", { files });
     } catch (error) {
       if (automationStatus) {
@@ -105,6 +108,7 @@ export function setup(ctx: SpindleFrontendContext) {
         const message = (error as Error)?.message ?? "picker_failed";
         automationStatus.textContent = /^[a-z_]+$/.test(message) ? message : "picker_failed";
       }
+      if (driveStatus) driveStatus.textContent = "File selection did not complete. Please try again.";
     }
   });
   drawer.root.querySelector(".rgm-start")?.addEventListener("click", () => send("automation_start"));
@@ -144,9 +148,17 @@ export function setup(ctx: SpindleFrontendContext) {
       };
       automationStatus.textContent = messages[payload.error] ?? `${payload.action}: ${payload.error}`;
       if (payload.action === "automation_save") pendingSecrets = null;
+      if (payload.action === "automation_save_drive" && driveStatus) {
+        driveStatus.textContent = payload.error === "drive_selection_incomplete"
+          ? "Selection not saved. Select the MOSS SFT checkpoint, Qwen encoder, and VAE together."
+          : "Selection not saved. Check the status message below.";
+      }
     }
     if (automationStatus && payload?.type === "automation_result") {
       const result = payload.result ?? {};
+      if (payload.action === "automation_save_drive" && result.saved && driveStatus) {
+        driveStatus.textContent = "Cache file selection saved. You can now start Colab.";
+      }
       if (payload.action === "automation_save" && result.saved && pendingSecrets) {
         const submitted = pendingSecrets;
         drawer.root.querySelectorAll<HTMLInputElement>("[data-secret]").forEach(input => {
