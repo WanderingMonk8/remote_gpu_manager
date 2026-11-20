@@ -37,6 +37,12 @@ Bun.serve({
       return json({ access_token: "mock-access-token", expires_in: 3600, token_type: "Bearer" });
     }
 
+    if (req.method === "GET" && path.startsWith("/drive/v3/files/")) {
+      const id = path.split("/").pop()!;
+      const names: Record<string, string> = { a: "moss_image_sft_int8_convrot.safetensors", b: "qwen3.5_9b_w4a8_gptq.safetensors", c: "flux2-vae_small.safetensors" };
+      return names[id] ? json({ id, name: names[id], size: "123456", md5Checksum: "a".repeat(32) }) : json({ error: "forbidden" }, 403);
+    }
+
     if (req.method === "GET" && path === "/v1beta/runtimespecs") {
       return json({
         runtimeSpecs: [

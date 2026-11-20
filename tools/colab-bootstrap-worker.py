@@ -35,7 +35,15 @@ def main():
         args = SimpleNamespace(cells="2,4,6,8,10,12,14,16,18,20,25", timeout=900,
                                no_state=True, stub=False, fetch_images=False)
         cells = module.load_cells(HERE.parent / "Unified_MOSS_Anima_Colab_Studio_Tailscale.ipynb")
+        # Interactive drive.mount() cannot run headlessly. Cache restoration is
+        # performed through the Drive API before the model-selection cell.
+        marker = "USE_DRIVE = True # @param {type:\"boolean\"}"
+        if cells[4].count(marker) != 1:
+            raise ValueError("notebook storage configuration changed")
+        cells[4] = cells[4].replace(marker, "USE_DRIVE = False # automation: Drive API cache", 1)
         hooks = {"credentials": credentials, "state": state}
+        if request.get("drive"):
+            hooks["drive"] = request["drive"]
         # Notebook output is untrusted and may contain secrets; do not log it.
         with open(os.devnull, "w", encoding="utf-8") as null:
             with contextlib.redirect_stdout(null), contextlib.redirect_stderr(null):
