@@ -19,6 +19,8 @@ const STATE = "automation-tailnet-state-v1";
 const DRIVE = "automation-drive-cache-v1";
 const PICKER = "automation-picker-config-v1";
 const GPU = "automation-gpu-preference-v1";
+const IDLE = "automation-idle-preference-v1";
+const IDLE_CHOICES = new Set([0, 5, 10, 15, 30]);
 export type DriveFile = { id: string; name: string };
 export type PickerConfig = { clientId: string; apiKey: string; projectNumber: string };
 export type GpuPreference = { accelerator: string; shape: string };
@@ -159,6 +161,8 @@ export class AutomationController {
     await this.call("/gateway/v1/runtime/credentials", "POST", s.controlToken,
       { client_id: s.clientId, client_secret: s.clientSecret, refresh_token: s.refreshToken });
     await this.call("/gateway/v1/runtime/cache-check", "POST", s.controlToken, { files: driveFiles });
+    const idleMinutes = await this.getIdlePreference(user);
+    if (idleMinutes !== null) await this.call("/gateway/v1/runtime/idle", "PUT", s.controlToken, { minutes: idleMinutes });
     const allocation = await this.call("/gateway/v1/runtime", "POST", s.controlToken, choice ? {
       accelerator: choice.accelerator, shape: choice.shape, confirm_non_default: choice.confirmNonDefault,
     } : undefined);
@@ -197,8 +201,20 @@ export class AutomationController {
     return this.call(`/gateway/v1/runtime${force ? "?force=1" : ""}`, "DELETE", s.controlToken);
   }
 
+  async getIdlePreference(user: string): Promise<number | null> {
+    if (!user) throw new Error("user_required");
+    const saved = await this.store.get(IDLE, user);
+    if (saved === null) return null;
+    const minutes = JSON.parse(saved);
+    if (typeof minutes !== "number" || !IDLE_CHOICES.has(minutes)) throw new Error("idle_minutes_invalid");
+    return minutes;
+  }
+
   async idle(user: string, minutes: number): Promise<any> {
+    if (!IDLE_CHOICES.has(minutes)) throw new Error("idle_minutes_invalid");
     const { controlToken } = await this.secrets(user);
-    return this.call("/gateway/v1/runtime/idle", "PUT", controlToken, { minutes });
+    const result = await this.call("/gateway/v1/runtime/idle", "PUT", controlToken, { minutes });
+    await this.store.put(IDLE, JSON.stringify(minutes), user);
+    return result;
   }
 }
