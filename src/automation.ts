@@ -74,13 +74,13 @@ export class AutomationController {
     return { status: "finished", workerHealthy: job.result.workerHealthy === true };
   }
 
-  async stop(user: string): Promise<any> {
+  async stop(user: string, force = false): Promise<any> {
     const s = await this.secrets(user);
     await this.call("/gateway/v1/runtime/credentials", "POST", s.controlToken,
       { client_id: s.clientId, client_secret: s.clientSecret, refresh_token: s.refreshToken });
     // A restarted gateway discovers its owned runtime before deletion.
     await this.call("/gateway/v1/runtime", "GET", s.controlToken);
-    return this.call("/gateway/v1/runtime", "DELETE", s.controlToken);
+    return this.call(`/gateway/v1/runtime${force ? "?force=1" : ""}`, "DELETE", s.controlToken);
   }
 
   async idle(user: string, minutes: number): Promise<any> {

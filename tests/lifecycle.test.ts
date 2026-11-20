@@ -187,6 +187,21 @@ describe("credentials custody (ADR-006)", () => {
 });
 
 describe("start / status / stop", () => {
+  test("unreadable queue prevents normal stop", async () => {
+    const port = PORT_BASE + 10;
+    const gateway = spawnGateway(port, COLAB_PORT, `http://127.0.0.1:${MOCK_PORT}`, { GATEWAY_BASIC_AUTH: "wrong:wrong" });
+    const url = `http://127.0.0.1:${port}`;
+    try {
+      await waitFor(async () => (await fetch(`${url}/system_stats`)).status === 401);
+      await ensureCreds(url);
+      expect((await fetch(`${url}/gateway/v1/runtime`, { method: "POST", headers: auth })).status).toBe(200);
+      const response = await fetch(`${url}/gateway/v1/runtime`, { method: "DELETE", headers: auth });
+      expect(response.status).toBe(409);
+      expect((await response.json()).error).toBe("queue_unavailable");
+      expect((await fetch(`${url}/gateway/v1/runtime?force=1`, { method: "DELETE", headers: auth })).status).toBe(200);
+    } finally { gateway.kill("SIGKILL"); }
+  });
+
   test("bootstrap passes the owned connection privately and adopts the returned endpoint", async () => {
     const port = PORT_BASE + 9;
     const gateway = spawnGateway(port, COLAB_PORT, `http://127.0.0.1:${MOCK_PORT}`, {
@@ -327,7 +342,7 @@ describe("idle shutdown (PRD R-05 / R-06)", () => {
     const st = await (await fetch(`${baseBusy()}/gateway/v1/runtime`, { headers: auth })).json();
     expect(st.state).toBe("ready"); // held by real queue activity
 
-    // Disabled timer must never delete, and an explicit stop still works.
+    // Disabled timer must never delete; normal stop must not interrupt work.
     await fetch(`${baseBusy()}/gateway/v1/runtime/idle`, {
       method: "PUT",
       headers: { ...auth, "Content-Type": "application/json" },
@@ -338,7 +353,10 @@ describe("idle shutdown (PRD R-05 / R-06)", () => {
     expect(still.state).toBe("ready");
 
     const del = await fetch(`${baseBusy()}/gateway/v1/runtime`, { method: "DELETE", headers: auth });
-    expect((await del.json()).confirmed).toBe(true);
+    expect(del.status).toBe(409);
+    expect((await del.json()).error).toBe("runtime_busy");
+    const forced = await fetch(`${baseBusy()}/gateway/v1/runtime?force=1`, { method: "DELETE", headers: auth });
+    expect((await forced.json()).confirmed).toBe(true);
   }, 30_000);
 
   test("idle minutes are validated (R-06 set, or sub-minute for tests)", async () => {

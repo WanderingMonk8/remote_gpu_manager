@@ -36,7 +36,7 @@ export function setup(ctx: SpindleFrontendContext) {
   drawer.root.innerHTML = `
     <div class="rgm-panel">
       <h3>Remote GPU Manager</h3>
-      <p>Warm-worker probe (M1). The Colab worker is started manually from your notebook; Lumiverse never starts it.</p>
+      <p>Check connectivity to the configured worker or manage an enabled Colab runtime below.</p>
       <input class="rgm-gw-url" type="text" spellcheck="false" placeholder="Gateway URL, e.g. http://127.0.0.1:8189" />
       <div class="rgm-actions">
         <button class="rgm-save-url" type="button">Save URL</button>
@@ -59,6 +59,7 @@ export function setup(ctx: SpindleFrontendContext) {
       <div class="rgm-actions">
         <button class="rgm-start" type="button">Start Colab</button>
         <button class="rgm-stop" type="button">Stop Colab</button>
+        <button class="rgm-force-stop" type="button">Force stop</button>
         <button class="rgm-runtime-status" type="button">Check runtime</button>
       </div>
       <label>Idle shutdown
@@ -85,6 +86,11 @@ export function setup(ctx: SpindleFrontendContext) {
   });
   drawer.root.querySelector(".rgm-start")?.addEventListener("click", () => send("automation_start"));
   drawer.root.querySelector(".rgm-stop")?.addEventListener("click", () => send("automation_stop"));
+  drawer.root.querySelector(".rgm-force-stop")?.addEventListener("click", () => {
+    if (window.confirm("Force stop this Colab runtime even if work is active or its status is unknown?")) {
+      send("automation_stop", { force: true });
+    }
+  });
   drawer.root.querySelector(".rgm-runtime-status")?.addEventListener("click", () => { send("automation_status"); poll(); });
   drawer.root.querySelector(".rgm-set-idle")?.addEventListener("click", () => {
     const select = drawer.root.querySelector(".rgm-idle") as HTMLSelectElement;
