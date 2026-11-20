@@ -307,10 +307,14 @@ def cmd_creds(drive_file=False):
                  "https://myaccount.google.com/permissions and run it again.")
     client = json.loads(CLIENT_SECRET.read_text(encoding="utf-8"))
     key = next(iter(client))
+    existing = {}
+    if CREDS_PATH.is_file():
+        existing = json.loads(CREDS_PATH.read_text(encoding="utf-8"))
     payload = {
         "client_id": client[key]["client_id"],
         "client_secret": client[key]["client_secret"],
         "refresh_token": creds.refresh_token,
+        **{name: existing[name] for name in ("TS_AUTHKEY", "BASIC_AUTH_USER", "BASIC_AUTH_PASS") if name in existing},
     }
     CREDS_PATH.parent.mkdir(parents=True, exist_ok=True)
     CREDS_PATH.write_text(json.dumps(payload, indent=2), encoding="utf-8")
