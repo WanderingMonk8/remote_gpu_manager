@@ -49,7 +49,8 @@ export function setup(ctx: SpindleFrontendContext) {
       <h3>Colab automation</h3>
       <p>Credentials are saved in your encrypted enclave. Starting allocates a Colab runtime; stop it when finished.</p>
       <details><summary>Automation credentials</summary>
-        <p>All fields are required the first time. On later updates, leave a field blank to keep its saved value.</p>
+        <p>Credential fields stay blank for security even when saved. Leave a field blank to keep its saved value.</p>
+        <p class="rgm-credentials-status" role="status">Checking for saved credentials...</p>
         <label>Gateway control token<input data-secret="controlToken" type="password" autocomplete="off" /></label>
         <label>Google OAuth client ID<input data-secret="clientId" type="password" autocomplete="off" /></label>
         <label>Google OAuth client secret<input data-secret="clientSecret" type="password" autocomplete="off" /></label>
@@ -91,6 +92,7 @@ export function setup(ctx: SpindleFrontendContext) {
   const statusBox = drawer.root.querySelector(".rgm-status") as HTMLDivElement | null;
   const urlInput = drawer.root.querySelector(".rgm-gw-url") as HTMLInputElement | null;
   const automationStatus = drawer.root.querySelector(".rgm-automation-status") as HTMLDivElement | null;
+  const credentialsStatus = drawer.root.querySelector(".rgm-credentials-status") as HTMLParagraphElement | null;
   const driveStatus = drawer.root.querySelector(".rgm-drive-status") as HTMLParagraphElement | null;
   const pickerSettingsStatus = drawer.root.querySelector(".rgm-picker-settings-status") as HTMLParagraphElement | null;
   const gpuSelect = drawer.root.querySelector(".rgm-gpu") as HTMLSelectElement;
@@ -259,6 +261,13 @@ export function setup(ctx: SpindleFrontendContext) {
         : "GPU preference could not be saved; this choice applies only to this session.";
       return;
     }
+    if (payload?.action === "automation_credentials_status") {
+      if (credentialsStatus) credentialsStatus.textContent = payload.type === "automation_error"
+        ? `Could not check saved credentials: ${payload.error}.`
+        : payload.result?.saved ? "Credentials are saved for this account."
+        : "No credentials are saved for this account.";
+      return;
+    }
     if (payload?.action === "automation_drive_status") {
       if (driveStatus) {
         if (payload.type === "automation_error") driveStatus.textContent = `Could not load saved cache selection: ${payload.error}.`;
@@ -312,6 +321,7 @@ export function setup(ctx: SpindleFrontendContext) {
           ? "All three cache files are saved. You can now start Colab."
           : `Selection saved. Still needed: ${(result.missing ?? []).join(", ")}. Select the remaining files.`;
       }
+      if (payload.action === "automation_save" && result.saved && credentialsStatus) credentialsStatus.textContent = "Credentials are saved for this account.";
       if (payload.action === "automation_save" && result.saved && pendingSecrets) {
         const submitted = pendingSecrets;
         drawer.root.querySelectorAll<HTMLInputElement>("[data-secret]").forEach(input => {
@@ -350,6 +360,7 @@ export function setup(ctx: SpindleFrontendContext) {
   send("automation_picker_config_get");
   send("automation_gpu_choice_get");
   send("automation_drive_status");
+  send("automation_credentials_status");
 
   return () => {
     if (pollTimer) clearTimeout(pollTimer);
