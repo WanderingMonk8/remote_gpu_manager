@@ -1,5 +1,6 @@
 import type { SpindleFrontendContext } from "lumiverse-spindle-types";
 import { chooseDriveFiles } from "./drive-picker";
+import { driveSelectionIssue } from "./automation";
 
 const ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.5"/><rect x="2.5" y="9" width="2" height="6"/><rect x="19.5" y="9" width="2" height="6"/><path d="M9.5 2.5v2M12 2.5v2M14.5 2.5v2M9.5 19.5v2M12 19.5v2M14.5 19.5v2"/></svg>`;
 
@@ -114,6 +115,21 @@ export function setup(ctx: SpindleFrontendContext) {
       const config = pickerConfig();
       send("automation_picker_config_save", { config });
       const files = await chooseDriveFiles(config);
+      const issue = driveSelectionIssue(files);
+      if (issue) {
+        if (driveStatus) {
+          const selected = files.map(file => typeof file?.name === "string" ? file.name : "(name not provided)").join(", ");
+          const guidance: Record<string, string> = {
+            drive_selection_empty: "No files were returned by Google Picker.",
+            drive_selection_too_many: "Select no more than 16 files at once.",
+            drive_selection_metadata_missing: "Google Picker did not provide valid file information.",
+            drive_selection_unrecognized: "At least one selected filename does not match a supported model file.",
+            drive_selection_duplicate: "Two selected files have the same name. Select only one copy of each file.",
+          };
+          driveStatus.textContent = `${guidance[issue] ?? "Selection not saved."} Selected: ${selected || "none"}.`;
+        }
+        return;
+      }
       if (driveStatus) driveStatus.textContent = `Saving ${files.length} selected file${files.length === 1 ? "" : "s"}…`;
       send("automation_save_drive", { files });
     } catch (error) {
@@ -181,9 +197,7 @@ export function setup(ctx: SpindleFrontendContext) {
       automationStatus.textContent = messages[payload.error] ?? `${payload.action}: ${payload.error}`;
       if (payload.action === "automation_save") pendingSecrets = null;
       if (payload.action === "automation_save_drive" && driveStatus) {
-        driveStatus.textContent = payload.error === "drive_selection_invalid"
-          ? "Selection not saved. Choose only supported model files, without duplicate names."
-          : "Selection not saved. Check the status message below.";
+        driveStatus.textContent = "Selection not saved. Check the status message below.";
       }
     }
     if (automationStatus && payload?.type === "automation_result") {
