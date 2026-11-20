@@ -347,7 +347,13 @@ def main():
 
     verdict, detail, funnel = "INCONCLUSIVE", "", None
     try:
-        scheme, status, body, err = probe.discover_scheme(host, ptoken)
+        scheme, status, body, err = None, None, "", ""
+        for attempt in range(1, 25):
+            scheme, status, body, err = probe.discover_scheme(host, ptoken)
+            if scheme is not None and status == 200:
+                break
+            print(f"[1] attempt {attempt}: Jupyter not ready ({scheme} HTTP {status})")
+            time.sleep(5)
         print(f"[1] Jupyter API via {scheme} -> HTTP {status}")
         if scheme is None or status != 200:
             verdict, detail = "NO_JUPYTER", f"HTTP {status} {err}"
