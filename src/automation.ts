@@ -26,10 +26,20 @@ export class AutomationController {
   constructor(private store: AutomationStore, private call: GatewayCall) {}
 
   async save(user: string, secrets: AutomationSecrets): Promise<void> {
-    if (!user || !secrets || [secrets.controlToken, secrets.clientId, secrets.clientSecret, secrets.refreshToken,
-        secrets.tailnetKey, secrets.basicUser, secrets.basicPass].some(v => typeof v !== "string" || !v.trim()) ||
-        !/^[^:\s]+$/.test(secrets.basicUser)) throw new Error("invalid_credentials");
-    await this.store.put(SECRETS, JSON.stringify(secrets), user);
+    if (!user || !secrets || typeof secrets !== "object") throw new Error("invalid_credentials");
+    const saved = await this.store.get(SECRETS, user);
+    const previous: Partial<AutomationSecrets> = saved ? JSON.parse(saved) : {};
+    const keys: (keyof AutomationSecrets)[] = ["controlToken", "clientId", "clientSecret", "refreshToken", "tailnetKey", "basicUser", "basicPass"];
+    const merged = {} as AutomationSecrets;
+    for (const key of keys) {
+      const incoming = secrets[key];
+      if (incoming !== undefined && typeof incoming !== "string") throw new Error("invalid_credentials");
+      const value = incoming?.trim() ? incoming : previous[key];
+      if (!value || !value.trim()) throw new Error(`missing_${key.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`)}`);
+      merged[key] = value;
+    }
+    if (!/^[^:\s]+$/.test(merged.basicUser)) throw new Error("invalid_basic_user");
+    await this.store.put(SECRETS, JSON.stringify(merged), user);
   }
 
   async saveDriveFiles(user: string, files: DriveFile[]): Promise<void> {

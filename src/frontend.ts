@@ -48,6 +48,7 @@ export function setup(ctx: SpindleFrontendContext) {
       <h3>Colab automation</h3>
       <p>Credentials are saved in your encrypted enclave. Starting allocates a Colab runtime; stop it when finished.</p>
       <details><summary>Automation credentials</summary>
+        <p>All fields are required the first time. On later updates, leave a field blank to keep its saved value.</p>
         <label>Gateway control token<input data-secret="controlToken" type="password" autocomplete="off" /></label>
         <label>Google OAuth client ID<input data-secret="clientId" type="password" autocomplete="off" /></label>
         <label>Google OAuth client secret<input data-secret="clientSecret" type="password" autocomplete="off" /></label>
@@ -82,14 +83,15 @@ export function setup(ctx: SpindleFrontendContext) {
   const urlInput = drawer.root.querySelector(".rgm-gw-url") as HTMLInputElement | null;
   const automationStatus = drawer.root.querySelector(".rgm-automation-status") as HTMLDivElement | null;
   let pollTimer: ReturnType<typeof setTimeout> | null = null;
+  let pendingSecrets: Record<string, string> | null = null;
   const send = (type: string, extra: object = {}) => ctx.sendToBackend({ type, ...extra });
   const poll = () => send("automation_poll");
   drawer.root.querySelector(".rgm-save-secrets")?.addEventListener("click", () => {
     const secrets: Record<string, string> = {};
     drawer.root.querySelectorAll<HTMLInputElement>("[data-secret]").forEach(input => {
       secrets[input.dataset.secret!] = input.value;
-      input.value = "";
     });
+    pendingSecrets = secrets;
     send("automation_save", { secrets });
   });
   drawer.root.querySelector(".rgm-picker")?.addEventListener("click", async () => {
@@ -129,10 +131,29 @@ export function setup(ctx: SpindleFrontendContext) {
   const unsub = ctx.onBackendMessage((payload: any) => {
     if (automationStatus && payload?.type === "automation_error") {
       automationStatus.dataset.tone = "bad";
-      automationStatus.textContent = `${payload.action}: ${payload.error}`;
+      const messages: Record<string, string> = {
+        missing_control_token: "Enter the gateway control token.",
+        missing_client_id: "Enter the Google OAuth client ID.",
+        missing_client_secret: "Enter the Google OAuth client secret.",
+        missing_refresh_token: "Enter the Google refresh token.",
+        missing_tailnet_key: "Enter the Tailscale auth key.",
+        missing_basic_user: "Enter the tunnel Basic Auth username.",
+        missing_basic_pass: "Enter the tunnel Basic Auth password.",
+        invalid_basic_user: "The tunnel Basic Auth username cannot contain spaces or a colon.",
+        invalid_credentials: "Check the credential fields and try again.",
+      };
+      automationStatus.textContent = messages[payload.error] ?? `${payload.action}: ${payload.error}`;
+      if (payload.action === "automation_save") pendingSecrets = null;
     }
     if (automationStatus && payload?.type === "automation_result") {
       const result = payload.result ?? {};
+      if (payload.action === "automation_save" && result.saved && pendingSecrets) {
+        const submitted = pendingSecrets;
+        drawer.root.querySelectorAll<HTMLInputElement>("[data-secret]").forEach(input => {
+          if (input.value === submitted[input.dataset.secret!]) input.value = "";
+        });
+        pendingSecrets = null;
+      }
       automationStatus.dataset.tone = result.status === "failed" || result.workerHealthy === false ? "bad" : "unknown";
       const display = result.status ?? result.state ?? (result.saved ? "saved" : result.confirmed ? "stopped" : "updated");
       automationStatus.textContent = `${payload.action}: ${display}${result.error ? ` (${result.error})` : ""}${result.workerHealthy === true ? " — worker healthy" : result.workerHealthy === false ? " — worker health check failed" : ""}`;
