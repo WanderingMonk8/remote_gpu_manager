@@ -13,6 +13,7 @@
  */
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import type { Subprocess } from "bun";
+import { bundledWorkbook } from "../src/workbook";
 import { existsSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -283,9 +284,20 @@ describe("start / status / stop", () => {
       await waitFor(async () => (await fetch(`${url}/system_stats`)).ok);
       await ensureCreds(url);
       expect((await fetch(`${url}/gateway/v1/runtime`, { method: "POST", headers: auth })).status).toBe(200);
+      const workbook = await bundledWorkbook();
+      const headers = { ...auth, "Content-Type": "application/json" };
+      expect((await fetch(`${url}/gateway/v1/runtime/workbook-check`, {
+        method: "POST", headers, body: JSON.stringify({ workbook }),
+      })).status).toBe(200);
+      expect((await fetch(`${url}/gateway/v1/runtime/workbook-check`, {
+        method: "POST", headers, body: JSON.stringify({ workbook: { ...workbook, sha256: "0".repeat(64) } }),
+      })).status).toBe(400);
+      expect((await fetch(`${url}/gateway/v1/runtime/workbook-check`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ workbook }),
+      })).status).toBe(401);
       const response = await fetch(`${url}/gateway/v1/runtime/bootstrap`, {
         method: "POST", headers: { ...auth, "Content-Type": "application/json" },
-        body: JSON.stringify({ ts_authkey: "key", basic_user: "lumiverse", basic_pass: "test-secret", state: {} }),
+        body: JSON.stringify({ ts_authkey: "key", basic_user: "lumiverse", basic_pass: "test-secret", state: {}, workbook }),
       });
       expect(response.status).toBe(202);
       await waitFor(async () => {

@@ -765,6 +765,24 @@ async function stopRuntime(force = false): Promise<Response> {
   }
 }
 
+async function validateWorkbook(workbook: any): Promise<boolean> {
+  if (!workbook || typeof workbook.content !== "string" ||
+      new TextEncoder().encode(workbook.content).byteLength > 1024 * 1024 ||
+      typeof workbook.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(workbook.sha256)) return false;
+  const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(workbook.content));
+  const actual = Array.from(new Uint8Array(hash), byte => byte.toString(16).padStart(2, "0")).join("");
+  if (actual !== workbook.sha256) return false;
+  try {
+    const notebook = JSON.parse(workbook.content);
+    if (!Array.isArray(notebook?.cells) || notebook.cells.length > 100 ||
+        ![2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 25].every(i =>
+          notebook.cells[i]?.cell_type === "code" && Array.isArray(notebook.cells[i].source) &&
+          notebook.cells[i].source.every((line: unknown) => typeof line === "string"))) return false;
+    const marker = 'USE_DRIVE = True # @param {type:"boolean"}';
+    return notebook.cells[4].source.join("").split(marker).length === 2;
+  } catch { return false; }
+}
+
 async function bootstrapRuntime(req: Request): Promise<Response> {
   if (!BOOTSTRAP_ENABLED) return errJson(403, "bootstrap_disabled");
   if (provisioning) return errJson(409, "provisioning_in_progress");
@@ -775,7 +793,8 @@ async function bootstrapRuntime(req: Request): Promise<Response> {
   } catch {
     return errJson(400, "invalid_json");
   }
-  const { ts_authkey, basic_user, basic_pass, state, drive_files } = body ?? {};
+  const { ts_authkey, basic_user, basic_pass, state, drive_files, workbook } = body ?? {};
+  if (!await validateWorkbook(workbook)) return errJson(400, "workbook_invalid");
   if (typeof ts_authkey !== "string" || typeof basic_user !== "string" ||
       !/^[^:\s]+$/.test(basic_user) || typeof basic_pass !== "string" || !basic_pass ||
       !state || typeof state !== "object" || Array.isArray(state) ||
@@ -792,6 +811,7 @@ async function bootstrapRuntime(req: Request): Promise<Response> {
     }
     const result = await runBootstrap([BOOTSTRAP_PYTHON, BOOTSTRAP_SCRIPT], {
       runtime: { name: owned.name, connectionInfo: { url: connection.url, token: connection.token } },
+      workbook,
       credentials: { TS_AUTHKEY: ts_authkey, BASIC_AUTH_USER: basic_user, BASIC_AUTH_PASS: basic_pass },
       state,
       ...(Array.isArray(drive_files) && drive_files.length
@@ -834,7 +854,7 @@ async function bootstrapControl(req: Request): Promise<Response> {
   if (!BOOTSTRAP_ENABLED) return errJson(403, "bootstrap_disabled");
   const headers = { "Cache-Control": "no-store" };
   if (req.method === "GET") {
-    return Response.json(bootstrapJob ?? { status: "idle" }, { headers });
+    return Response.json({ ...(bootstrapJob ?? { status: "idle" }), workbook_transfer: 1 }, { headers });
   }
   if (req.method === "DELETE") {
     if (bootstrapJob?.status === "running") return errJson(409, "provisioning_in_progress");
@@ -904,6 +924,12 @@ function setIdle(body: any): Response {
 }
 
 async function handleRuntime(req: Request, path: string): Promise<Response> {
+  if (path === "/gateway/v1/runtime/workbook-check" && req.method === "POST") {
+    try {
+      const body = JSON.parse(new TextDecoder().decode(await readBounded(req, 2 * 1024 * 1024)));
+      return await validateWorkbook(body?.workbook) ? Response.json({ ok: true }) : errJson(400, "workbook_invalid");
+    } catch { return errJson(400, "workbook_invalid"); }
+  }
   if (path === "/gateway/v1/runtime/bootstrap") return bootstrapControl(req);
   if (path === "/gateway/v1/runtime/specs" && req.method === "GET") {
     return Response.json({ specs: await eligibleGpuSpecs() });

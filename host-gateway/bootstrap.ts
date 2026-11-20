@@ -4,6 +4,7 @@ export interface BootstrapRequest {
   credentials: { TS_AUTHKEY: string; BASIC_AUTH_USER: string; BASIC_AUTH_PASS: string };
   state: Record<string, string>;
   drive?: { token: string; files: Array<{ id: string; name: string }> };
+  workbook: { content: string; sha256: string };
 }
 
 export interface BootstrapResult {

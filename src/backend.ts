@@ -9,6 +9,7 @@
  */
 
 import { AutomationController } from "./automation";
+import { bundledWorkbook } from "./workbook";
 declare const spindle: import("lumiverse-spindle-types").SpindleAPI;
 
 const DEFAULT_GATEWAY_URL = "http://127.0.0.1:8189";
@@ -80,6 +81,9 @@ spindle.onFrontendMessage(async (payload: any, userId?: string) => {
         case "automation_start":
           await automation.start(userId, payload.choice);
           result = { status: "running" };
+          break;
+        case "automation_workbook_info":
+          result = { sha256: (await bundledWorkbook()).sha256 };
           break;
         case "automation_gpu_specs": result = await automation.gpuSpecs(userId); break;
         case "automation_gpu_choice_get": result = { choice: await automation.getGpuPreference(userId) }; break;
