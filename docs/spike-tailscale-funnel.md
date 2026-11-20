@@ -94,7 +94,7 @@ TS_HOSTNAME = "moss-comfy"  # @param {type:"string"}
 TS_VERSION = "1.104.7"
 PERSIST_TS_STATE = True     # @param {type:"boolean"}
 
-import os, json, re, time, subprocess
+import os, json, re, time, shutil, subprocess
 from getpass import getpass
 from pathlib import Path
 import requests
@@ -174,22 +174,46 @@ else:
                 check=True,
             )
 
-        # Persisted state keeps the node identity AND its TLS certificate across
-        # sessions. Without it every session is a new node with a new certificate,
-        # and Let's Encrypt allows only ~5 duplicate certificates per week per name.
-        state_dir = Path("/content/ts-state")
-        persisted = False
+        # tailscaled keeps its node key (identity) and its TLS certificates in
+        # --statedir, but it also creates a unix socket there. A unix socket
+        # cannot be created on the Drive FUSE mount, and a state file on FUSE is
+        # unreliable (flock, atomic rename). So it runs entirely on local disk,
+        # and the identity files are mirrored to Drive once they are good.
+        run_dir = Path("/content/ts-run")
+        run_dir.mkdir(parents=True, exist_ok=True)
+        sock = run_dir / "tailscaled.sock"
+
+        persist_dir = None
         if PERSIST_TS_STATE and Path("/content/drive/MyDrive").is_dir():
-            state_dir = Path("/content/drive/MyDrive/rgm-tailnet")
-            persisted = True
-        state_dir.mkdir(parents=True, exist_ok=True)
-        sock = state_dir / "tailscaled.sock"
-        print(f"Tailscale state: {state_dir} "
-              f"({'persisted' if persisted else 'EPHEMERAL'})")
-        if not persisted:
+            persist_dir = Path("/content/drive/MyDrive/rgm-tailnet")
+            persist_dir.mkdir(parents=True, exist_ok=True)
+            restored = []
+            src_state = persist_dir / "tailscaled.state"
+            if src_state.is_file() and src_state.stat().st_size > 0:
+                shutil.copy2(src_state, run_dir / "tailscaled.state")
+                restored.append("node identity")
+            if (persist_dir / "certs").is_dir():
+                shutil.copytree(persist_dir / "certs", run_dir / "certs", dirs_exist_ok=True)
+                restored.append("TLS certificate")
+            tail = f" - restored {', '.join(restored)}" if restored else " - first run, nothing to restore"
+            print(f"Tailscale state: {persist_dir} (persisted){tail}")
+        else:
+            print("Tailscale state: EPHEMERAL (local disk only)")
             print("  WARNING: new node + new TLS certificate every session.")
             print("  Let's Encrypt allows ~5 duplicate certs/week per hostname;")
             print("  mount Drive (USE_DRIVE in section 2) to persist state instead.")
+
+        def persist_ts_state(why):
+            if persist_dir is None:
+                return
+            src = run_dir / "tailscaled.state"
+            if src.is_file() and src.stat().st_size > 0:
+                tmp = persist_dir / "tailscaled.state.tmp"
+                shutil.copy2(src, tmp)
+                os.replace(tmp, persist_dir / "tailscaled.state")
+            if (run_dir / "certs").is_dir():
+                shutil.copytree(run_dir / "certs", persist_dir / "certs", dirs_exist_ok=True)
+            print(f"  persisted to Drive after {why}")
 
         _key = os.environ.get("TS_AUTHKEY", "").strip()
         if not _key:
@@ -207,20 +231,27 @@ else:
         ts_proc = subprocess.Popen(
             [str(TSD),
              "--tun=userspace-networking",          # Colab has no /dev/net/tun
-             f"--state={state_dir / 'tailscaled.state'}",
-             f"--statedir={state_dir}",
+             f"--state={run_dir / 'tailscaled.state'}",
+             f"--statedir={run_dir}",
              f"--socket={sock}",
              "--socks5-server=127.0.0.1:1055"],
             stdout=_log, stderr=subprocess.STDOUT,
         )
+
+        def ts_log_tail(n=3000):
+            try:
+                return Path("/content/tailscaled.log").read_text(errors="replace")[-n:]
+            except Exception:
+                return "(no log)"
+
         for _ in range(60):
             if sock.exists():
                 break
             if ts_proc.poll() is not None:
-                raise RuntimeError("tailscaled exited; see /content/tailscaled.log")
+                raise RuntimeError("tailscaled exited\n" + ts_log_tail())
             time.sleep(0.5)
         else:
-            raise RuntimeError("tailscaled never created its control socket")
+            raise RuntimeError("tailscaled never created its control socket\n" + ts_log_tail())
 
         def tails(*args, check=True):
             r = subprocess.run([str(TS), "--socket", str(sock), *args],
@@ -255,8 +286,7 @@ else:
             time.sleep(1)
         else:
             raise RuntimeError(f"Tailscale never reached Running "
-                               f"(state={status.get('BackendState')}); "
-                               "see /content/tailscaled.log")
+                               f"(state={status.get('BackendState')})\n" + ts_log_tail())
 
         r = tails("funnel", "--bg", "--https=443", "--yes",
                   f"http://127.0.0.1:{UPSTREAM_PORT}", check=False)
@@ -273,6 +303,14 @@ else:
             dns = ((json.loads(_st.stdout or "{}").get("Self") or {}).get("DNSName") or "").rstrip(".")
         if not dns:
             raise RuntimeError("Could not read the node DNS name from tailscale status")
+
+        # Force certificate issuance now, so a missing HTTPS setting fails here
+        # with a readable error instead of silently after the Space connects.
+        cert = tails("cert", "--cert-file", str(run_dir / "probe.crt"),
+                     "--key-file", str(run_dir / "probe.key"), dns, check=False)
+        if cert.returncode != 0:
+            print("Certificate warning:", (cert.stderr or cert.stdout).strip()[:800])
+        persist_ts_state("certificate issued")
 
         URL = f"https://{dns}"
         print()
@@ -385,6 +423,13 @@ Record these. The ADR only gets updated with numbers, not impressions.
    compare it against what you expect.
 5. **Egress filtering.** Colab may block `controlplane.tailscale.com` or DERP. If so, this is dead
    on Colab and the answer is T4 (named tunnel) after all.
+6. **The state directory is mirrored, not mounted.** `tailscaled` creates a unix socket inside its
+   state directory, and Google Drive's FUSE mount cannot host sockets — a socket there makes the
+   daemon exit within a second of starting. It is also a poor home for the state file itself, which
+   relies on `flock` and atomic rename. The cell therefore runs `tailscaled` entirely on
+   `/content/ts-run` and copies the node key and the TLS certificate to Drive once they are good.
+   Consequence: if the runtime dies abruptly *before* the cell finishes, the last saved identity is
+   from the previous run — harmless, but the funnel may need to re-register.
 
 ---
 
