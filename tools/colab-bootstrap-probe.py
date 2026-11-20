@@ -227,6 +227,69 @@ def execute_live(ws, session_id, code, timeout=CELL_TIMEOUT):
     return False, "timeout", "".join(out)
 
 
+def restore_state(ws, session_id, state_dir):
+    """Copy a saved tailnet identity into /content/ts-run before the tunnel cell.
+
+    With it present, the notebook's `restored_login` is true, so it reuses the
+    existing node instead of registering a new one (no hostname drift, no new cert).
+    """
+    if not state_dir.is_dir():
+        return 0
+    files = {}
+    for p in state_dir.rglob("*"):
+        if p.is_file():
+            rel = str(p.relative_to(state_dir)).replace("\\", "/")
+            files[rel] = base64.b64encode(p.read_bytes()).decode("ascii")
+    if not files:
+        return 0
+    payload = base64.b64encode(json.dumps(files).encode()).decode("ascii")
+    code = (
+        "import base64, json\n"
+        "from pathlib import Path\n"
+        "_run = Path('/content/ts-run'); _run.mkdir(parents=True, exist_ok=True)\n"
+        f"_files = json.loads(base64.b64decode('{payload}').decode())\n"
+        "for _rel, _b64 in _files.items():\n"
+        "    _p = _run / _rel; _p.parent.mkdir(parents=True, exist_ok=True)\n"
+        "    _p.write_bytes(base64.b64decode(_b64))\n"
+        "print('STATE_RESTORED', len(_files))\n"
+    )
+    ok, status, _ = execute_live(ws, session_id, code, timeout=120)
+    return len(files) if ok else 0
+
+
+def dump_state(ws, session_id, state_dir):
+    """Save the runtime's tailnet identity locally before the runtime is deleted."""
+    code = (
+        "import base64, json\n"
+        "from pathlib import Path\n"
+        "_run = Path('/content/ts-run'); _out = {}\n"
+        "_s = _run / 'tailscaled.state'\n"
+        "if _s.is_file():\n"
+        "    _out['tailscaled.state'] = base64.b64encode(_s.read_bytes()).decode()\n"
+        "_c = _run / 'certs'\n"
+        "if _c.is_dir():\n"
+        "    for _p in _c.rglob('*'):\n"
+        "        if _p.is_file():\n"
+        "            _out['certs/' + str(_p.relative_to(_c))] = base64.b64encode(_p.read_bytes()).decode()\n"
+        "print('STATE_DUMP:' + json.dumps(_out))\n"
+    )
+    ok, status, out = execute_live(ws, session_id, code, timeout=120)
+    if not ok:
+        return 0
+    m = re.search(r"STATE_DUMP:(\{.*\})", out or "", re.S)
+    if not m:
+        return 0
+    data = json.loads(m.group(1))
+    if not data:
+        return 0
+    state_dir.mkdir(parents=True, exist_ok=True)
+    for rel, b64 in data.items():
+        p = state_dir / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(base64.b64decode(b64))
+    return len(data)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Bootstrap a Colab runtime from the notebook.")
     parser.add_argument("--keep", action="store_true", help="leave the runtime running")
@@ -246,6 +309,10 @@ def main():
                         help="after the cells run, save images the notebook produced")
     parser.add_argument("--out-dir", default=str(HERE.parent / "bootstrap-out"),
                         help="where fetched images are written")
+    parser.add_argument("--state-dir", default=str(HERE / ".tailnet-state"),
+                        help="persist tailscaled state here so the Funnel hostname stays stable")
+    parser.add_argument("--no-state", action="store_true",
+                        help="do not restore or save tailnet state")
     args = parser.parse_args()
     indices = [int(x) for x in args.cells.split(",") if x.strip()]
 
@@ -311,6 +378,11 @@ def main():
             return 1
         print(f"    injected: {', '.join(injected)}")
 
+        if not args.no_state:
+            restored = restore_state(ws, session_id, Path(args.state_dir))
+            print(f"    state: restored {restored} file(s)" if restored
+                  else "    state: none saved yet (first run)")
+
         if args.stub:
             print("[4] stubbing section 3")
             ok, st, _ = execute_live(ws, session_id, STUB, timeout=120)
@@ -329,6 +401,10 @@ def main():
                 m = re.search(pattern, out or "")
                 if m:
                     funnel = m.group(1).rstrip(".,)")
+
+        if not args.no_state:
+            saved = dump_state(ws, session_id, Path(args.state_dir))
+            print(f"\n[5c] tailnet state: saved {saved} file(s) to {args.state_dir}")
 
         if args.fetch_images:
             print("\n[5b] fetching generated images")
