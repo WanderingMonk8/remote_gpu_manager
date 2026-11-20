@@ -32,3 +32,6 @@ __pycache__/
 
 # Local OAuth credentials for lifecycle testing (never commit)
 tools/.colab-creds.json
+
+# Images fetched from a bootstrapped runtime
+bootstrap-out/

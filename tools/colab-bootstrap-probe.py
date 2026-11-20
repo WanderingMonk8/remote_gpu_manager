@@ -75,6 +75,22 @@ r = requests.get('http://127.0.0.1:8188/system_stats', timeout=15)
 print('COMFY', r.status_code, r.text[:200])
 """
 
+FETCH_IMAGES = """
+import base64, json, requests
+_out = []
+if 'images' in globals():
+    for _it in images:
+        _r = requests.get(BASE_URL + '/view', params={
+            'filename': _it['filename'],
+            'subfolder': _it.get('subfolder', ''),
+            'type': _it.get('type', 'output'),
+        }, timeout=120)
+        _r.raise_for_status()
+        _out.append({'filename': _it['filename'],
+                     'b64': base64.b64encode(_r.content).decode('ascii')})
+print('RGM_IMAGES:' + json.dumps(_out))
+"""
+
 ENV_KEYS = ("TS_AUTHKEY", "BASIC_AUTH_USER", "BASIC_AUTH_PASS")
 
 
@@ -106,6 +122,16 @@ def env_preamble():
 def load_cells(path):
     nb = json.loads(path.read_text(encoding="utf-8"))
     return ["".join(c["source"]) for c in nb["cells"]]
+
+
+def save_images(items, out_dir):
+    out_dir.mkdir(parents=True, exist_ok=True)
+    paths = []
+    for it in items:
+        dest = out_dir / Path(it.get("filename", "image.png")).name
+        dest.write_bytes(base64.b64decode(it["b64"]))
+        paths.append(dest)
+    return paths
 
 
 def execute_live(ws, session_id, code, timeout=CELL_TIMEOUT):
@@ -149,7 +175,32 @@ def execute_live(ws, session_id, code, timeout=CELL_TIMEOUT):
             print(trace)
             return False, content.get("ename", "error"), "".join(out)
         elif kind == "execute_reply":
-            return content.get("status") == "ok", content.get("status"), "".join(out)
+            status = content.get("status")
+            # iopub messages (stream/display) can arrive just after execute_reply.
+            # Draining briefly is what makes "Saved: <file>" visible.
+            prev = ws.gettimeout()
+            try:
+                ws.settimeout(2.0)
+                while True:
+                    try:
+                        late = json.loads(ws.recv())
+                    except Exception:
+                        break
+                    lk = late.get("header", {}).get("msg_type")
+                    lc = late.get("content", {})
+                    if lk == "stream":
+                        t = lc.get("text", "")
+                        out.append(t)
+                        sys.stdout.write(t)
+                        sys.stdout.flush()
+                    elif lk in ("execute_result", "display_data"):
+                        t = lc.get("data", {}).get("text/plain", "")
+                        if t:
+                            out.append(t + "\n")
+                            print(t)
+            finally:
+                ws.settimeout(prev)
+            return status == "ok", status, "".join(out)
     return False, "timeout", "".join(out)
 
 
@@ -168,6 +219,10 @@ def main():
     parser.add_argument("--override", nargs=3, action="append",
                         metavar=("CELL", "OLD", "NEW"),
                         help="replace OLD with NEW in CELL's source, in memory only")
+    parser.add_argument("--fetch-images", action="store_true",
+                        help="after the cells run, save images the notebook produced")
+    parser.add_argument("--out-dir", default=str(HERE.parent / "bootstrap-out"),
+                        help="where fetched images are written")
     args = parser.parse_args()
     indices = [int(x) for x in args.cells.split(",") if x.strip()]
 
@@ -251,6 +306,19 @@ def main():
                 m = re.search(pattern, out or "")
                 if m:
                     funnel = m.group(1).rstrip(".,)")
+
+        if args.fetch_images:
+            print("\n[5b] fetching generated images")
+            ok_f, st_f, out_f = execute_live(ws, session_id, FETCH_IMAGES, timeout=180)
+            m = re.search(r"RGM_IMAGES:(\[.*\])", out_f or "", re.S)
+            if m:
+                try:
+                    paths = save_images(json.loads(m.group(1)), Path(args.out_dir))
+                    print(f"    saved {len(paths)} image(s): " + ", ".join(p.name for p in paths))
+                except Exception as exc:
+                    print(f"    could not save images: {exc}")
+            else:
+                print(f"    no images reported ({st_f})")
 
         print("\n[6] verifying ComfyUI")
         ok, st, out = execute_live(ws, session_id, VERIFY, timeout=120)
