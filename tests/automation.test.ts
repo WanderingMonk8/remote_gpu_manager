@@ -1,10 +1,17 @@
 import { describe, expect, test } from "bun:test";
-import { AutomationController, type AutomationSecrets } from "../src/automation";
+import { AutomationController, driveSelectionIssue, type AutomationSecrets } from "../src/automation";
 
 const secrets: AutomationSecrets = { controlToken: "control", clientId: "id", clientSecret: "oauth-secret",
   refreshToken: "refresh", tailnetKey: "ts-secret", basicUser: "user", basicPass: "password" };
 
 describe("automation controller", () => {
+  test("distinguishes Picker selection problems without exposing file IDs", () => {
+    expect(driveSelectionIssue([])).toBe("drive_selection_empty");
+    expect(driveSelectionIssue([{ id: "valid-id", name: "wrong-file.safetensors" }])).toBe("drive_selection_unrecognized");
+    expect(driveSelectionIssue([{ id: "bad id", name: "flux2-vae_small.safetensors" }])).toBe("drive_selection_metadata_missing");
+    expect(driveSelectionIssue([{ id: "one", name: "flux2-vae_small.safetensors" }, { id: "two", name: "flux2-vae_small.safetensors" }])).toBe("drive_selection_duplicate");
+    expect(driveSelectionIssue([{ id: "one", name: "flux2-vae_small.safetensors" }])).toBeNull();
+  });
   test("saves and restores Picker settings separately for each user", async () => {
     const entries = new Map<string, string>();
     const controller = new AutomationController({

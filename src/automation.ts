@@ -24,6 +24,17 @@ const DEFAULT_FILES = ["moss_image_sft_int8_convrot.safetensors", "qwen3.5_9b_w4
 const MODEL_FILES = new Set([...DEFAULT_FILES, "moss_image_base_int8_convrot.safetensors", "qwen_3_06b_base.safetensors", "qwen_image_vae.safetensors",
   ...["base-v1.0", "turbo-v1.0", "turbo-v1.1", "aesthetic-v1.0", "aesthetic-v1.0b", "aesthetic-v1.1"].map(name => `anima-${name}.safetensors`)]);
 
+export function driveSelectionIssue(files: DriveFile[]): string | null {
+  if (!Array.isArray(files) || files.length === 0) return "drive_selection_empty";
+  if (files.length > 16) return "drive_selection_too_many";
+  if (files.some(f => !f || typeof f.id !== "string" || !/^[A-Za-z0-9_-]{1,256}$/.test(f.id) || typeof f.name !== "string")) {
+    return "drive_selection_metadata_missing";
+  }
+  if (files.some(f => !MODEL_FILES.has(f.name))) return "drive_selection_unrecognized";
+  if (new Set(files.map(f => f.name)).size !== files.length) return "drive_selection_duplicate";
+  return null;
+}
+
 export class AutomationController {
   constructor(private store: AutomationStore, private call: GatewayCall) {}
 
@@ -63,11 +74,9 @@ export class AutomationController {
   }
 
   async saveDriveFiles(user: string, files: DriveFile[]): Promise<{ saved: true; complete: boolean; missing: string[] }> {
-    if (!user || !Array.isArray(files) || files.length === 0 || files.length > 16 ||
-        files.some(f => !f || typeof f.id !== "string" || !/^[A-Za-z0-9_-]{1,256}$/.test(f.id) || !MODEL_FILES.has(f.name)) ||
-        new Set(files.map(f => f.name)).size !== files.length) {
-      throw new Error("drive_selection_invalid");
-    }
+    if (!user) throw new Error("user_required");
+    const issue = driveSelectionIssue(files);
+    if (issue) throw new Error(issue);
     const saved = await this.store.get(DRIVE, user);
     const previous = saved ? JSON.parse(saved) as DriveFile[] : [];
     const merged = new Map(previous.map(file => [file.name, file]));
