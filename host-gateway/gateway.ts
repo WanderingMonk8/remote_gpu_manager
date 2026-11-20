@@ -21,7 +21,7 @@
  */
 
 import { timingSafeEqual } from "node:crypto";
-import { open, readFile, unlink } from "node:fs/promises";
+import { open, readFile, rename, unlink } from "node:fs/promises";
 import { runBootstrap } from "./bootstrap";
 
 const VERSION = "0.2.0-m4";
@@ -707,6 +707,40 @@ async function statusRuntime(): Promise<Response> {
   });
 }
 
+// Explicit recovery is only for an operator-confirmed, externally terminated runtime.
+// Keep the intent as an archive; a missing listing alone cannot prove an ambiguous create failed.
+async function recoverAllocation(req: Request): Promise<Response> {
+  if (provisioning || stopping || bootstrapJob?.status === "running") return errJson(409, "provisioning_in_progress");
+  if (!creds) return errJson(401, "auth_required");
+  if (!INTENT_FILE) return errJson(409, "recovery_intent_required");
+  let input: any;
+  try { input = JSON.parse(new TextDecoder().decode(await readBounded(req, 4096))); }
+  catch { return errJson(400, "recovery_confirmation_required"); }
+  if (input?.confirmed !== true) return errJson(400, "recovery_confirmation_required");
+  provisioning = true;
+  try {
+    let raw: string;
+    try { raw = await readFile(INTENT_FILE, "utf8"); }
+    catch { return errJson(409, "recovery_intent_required"); }
+    let name: unknown;
+    try { name = JSON.parse(raw).name; } catch { return errJson(409, "recovery_intent_invalid"); }
+    if (typeof name !== "string" || !/^runtimes\/rgm-gw-[a-zA-Z0-9-]+$/.test(name)) return errJson(409, "recovery_intent_invalid");
+    const listed = await colabRequest("GET", "/v1beta/runtimes");
+    if (listed.status !== 200) throw colabError(listed.status, listed.json);
+    if (!Array.isArray(listed.json?.runtimes)) return errJson(502, "colab_invalid_response");
+    if (listed.json.runtimes.some((r: any) => r?.name?.startsWith(`runtimes/${RUNTIME_PREFIX}`))) return errJson(409, "recovery_runtime_present");
+    const exact = await colabRequest("GET", `/v1beta/${name}`);
+    if (exact.status === 200) return errJson(409, "recovery_runtime_present");
+    if (exact.status !== 404) throw colabError(exact.status, exact.json);
+    // Fail closed if anything replaced the intent during the checks.
+    if (await readFile(INTENT_FILE, "utf8") !== raw) return errJson(409, "recovery_intent_changed");
+    await rename(INTENT_FILE, `${INTENT_FILE}.resolved-${crypto.randomUUID()}`);
+    owned = null;
+    uncertainCreate = false;
+    return Response.json({ recovered: true });
+  } finally { provisioning = false; }
+}
+
 async function queueIsIdle(): Promise<boolean> {
   const rule = ROUTES.find((r) => r.method === "GET" && r.pattern.test("/queue"));
   if (!rule) throw new Error("queue_unavailable");
@@ -957,6 +991,7 @@ async function handleRuntime(req: Request, path: string): Promise<Response> {
     }
     return Response.json({ ok: true, count: files.length });
   }
+  if (path === "/gateway/v1/runtime/recover" && req.method === "POST") return recoverAllocation(req);
   if (path === "/gateway/v1/runtime/credentials") {
     if (req.method === "POST") return putCredentials(req);
     if (req.method === "DELETE") {

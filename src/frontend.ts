@@ -82,6 +82,7 @@ export function setup(ctx: SpindleFrontendContext) {
         <button class="rgm-stop" type="button">Stop Colab</button>
         <button class="rgm-force-stop" type="button">Force stop</button>
         <button class="rgm-runtime-status" type="button">Check runtime</button>
+        <button class="rgm-recover" type="button">Recover allocation</button>
       </div>
       <label>Idle shutdown
         <select class="rgm-idle"><option value="0">Disabled</option><option value="5">5 minutes</option><option value="10" selected>10 minutes</option><option value="15">15 minutes</option><option value="30">30 minutes</option></select>
@@ -208,6 +209,9 @@ export function setup(ctx: SpindleFrontendContext) {
       send("automation_stop", { force: true });
     }
   });
+  drawer.root.querySelector(".rgm-recover")?.addEventListener("click", () => {
+    if (window.confirm("Only continue if you verified in Google Colab that the previous runtime was terminated and no allocation is still in progress. A delayed allocation could still appear and incur charges. Recover the allocation safeguard?")) send("automation_recover");
+  });
   drawer.root.querySelector(".rgm-runtime-status")?.addEventListener("click", () => { send("automation_status"); poll(); });
   drawer.root.querySelector(".rgm-set-idle")?.addEventListener("click", () => {
     idleDirty = true;
@@ -333,6 +337,8 @@ export function setup(ctx: SpindleFrontendContext) {
         missing_basic_pass: "Enter the tunnel Basic Auth password.",
         invalid_basic_user: "The tunnel Basic Auth username cannot contain spaces or a colon.",
         invalid_credentials: "Check the credential fields and try again.",
+        recovery_runtime_present: "A manager runtime is still present. Stop it before recovery.",
+        recovery_intent_required: "No recoverable allocation record was found.",
         gateway_workbook_update_required: "The gateway must support extension-supplied workbooks before Colab can start. No runtime was allocated.",
       };
       automationStatus.textContent = messages[payload.error] ?? `${payload.action}: ${payload.error}`;
@@ -357,7 +363,7 @@ export function setup(ctx: SpindleFrontendContext) {
         pendingSecrets = null;
       }
       automationStatus.dataset.tone = result.status === "failed" || result.workerHealthy === false ? "bad" : "unknown";
-      const display = result.status ?? result.state ?? (result.saved ? "saved" : result.confirmed ? "stopped" : "updated");
+      const display = result.status ?? result.state ?? (result.recovered ? "allocation recovered" : result.saved ? "saved" : result.confirmed ? "stopped" : "updated");
       automationStatus.textContent = `${payload.action}: ${display}${result.error ? ` (${result.error})` : ""}${result.workerHealthy === true ? " — worker healthy" : result.workerHealthy === false ? " — worker health check failed" : ""}`;
       if (payload.action === "automation_start" || (payload.action === "automation_poll" && result.status === "running")) {
         if (pollTimer) clearTimeout(pollTimer);

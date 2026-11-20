@@ -14,7 +14,7 @@
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import type { Subprocess } from "bun";
 import { bundledWorkbook } from "../src/workbook";
-import { existsSync, unlinkSync } from "node:fs";
+import { existsSync, unlinkSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -253,6 +253,42 @@ describe("start / status / stop", () => {
     } finally {
       gateway.kill("SIGKILL");
       if (existsSync(file)) unlinkSync(file);
+    }
+  });
+
+  test("recovers a manually deleted runtime only after checks and preserves the intent", async () => {
+    const file = join(tmpdir(), `rgm-recover-${crypto.randomUUID()}.json`);
+    const port = PORT_BASE + 12;
+    const gateway = spawnGateway(port, COLAB_PORT, `http://127.0.0.1:${MOCK_PORT}`, { RUNTIME_INTENT_FILE: file });
+    const url = `http://127.0.0.1:${port}`;
+    const recover = (confirmed: boolean) => fetch(`${url}/gateway/v1/runtime/recover`, {
+      method: "POST", headers: { ...auth, "Content-Type": "application/json" }, body: JSON.stringify({ confirmed }),
+    });
+    let name = "";
+    try {
+      await waitFor(async () => (await fetch(`${url}/system_stats`)).ok);
+      await ensureCreds(url);
+      const started = await (await fetch(`${url}/gateway/v1/runtime`, { method: "POST", headers: auth })).json();
+      name = started.runtime.name;
+      const original = readFileSync(file, "utf8");
+      expect((await recover(false)).status).toBe(400);
+      expect((await recover(true)).status).toBe(409);
+      expect(readFileSync(file, "utf8")).toBe(original);
+      await fetch(`${colabBase()}/v1beta/${name}`, { method: "DELETE" });
+      expect((await (await fetch(`${url}/gateway/v1/runtime`, { headers: auth })).json()).state).toBe("offline");
+      expect((await (await fetch(`${url}/gateway/v1/runtime`, { method: "POST", headers: auth })).json()).error).toBe("allocation_uncertain");
+      expect((await recover(true)).status).toBe(200);
+      expect(existsSync(file)).toBe(false);
+      const archive = readdirSync(tmpdir()).find(entry => entry.startsWith(file.split(/[\\/]/).pop()! + ".resolved-"));
+      expect(archive).toBeDefined();
+      expect(readFileSync(join(tmpdir(), archive!), "utf8")).toBe(original);
+      expect((await fetch(`${url}/gateway/v1/runtime`, { method: "POST", headers: auth })).status).toBe(200);
+      expect((await fetch(`${url}/gateway/v1/runtime?force=1`, { method: "DELETE", headers: auth })).status).toBe(200);
+    } finally {
+      if (name) await fetch(`${colabBase()}/v1beta/${name}`, { method: "DELETE" }).catch(() => {});
+      gateway.kill("SIGKILL");
+      if (existsSync(file)) unlinkSync(file);
+      for (const entry of readdirSync(tmpdir()).filter(entry => entry.startsWith(file.split(/[\\/]/).pop()! + ".resolved-"))) unlinkSync(join(tmpdir(), entry));
     }
   });
 
