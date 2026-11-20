@@ -186,6 +186,28 @@ describe("credentials custody (ADR-006)", () => {
 });
 
 describe("start / status / stop", () => {
+  test("a second gateway reconciles before start instead of allocating again", async () => {
+    await ensureCreds(base());
+    const first = await (await fetch(`${base()}/gateway/v1/runtime`, { method: "POST", headers: auth })).json();
+    const secondPort = PORT_BASE + 8;
+    const second = spawnGateway(secondPort, COLAB_PORT, `http://127.0.0.1:${MOCK_PORT}`);
+    const secondBase = `http://127.0.0.1:${secondPort}`;
+    try {
+      await waitFor(async () => (await fetch(`${secondBase}/system_stats`)).ok);
+      await ensureCreds(secondBase);
+      const response = await fetch(`${secondBase}/gateway/v1/runtime`, { method: "POST", headers: auth });
+      const adopted = await response.json();
+      expect(response.status).toBe(200);
+      expect(adopted.reused).toBe(true);
+      expect(adopted.runtime.name).toBe(first.runtime.name);
+      const state = await (await fetch(`${colabBase()}/__log`)).json();
+      expect(state.runtimes.filter((id: string) => id.startsWith("rgm-gw-"))).toHaveLength(1);
+    } finally {
+      second.kill("SIGKILL");
+      await fetch(`${base()}/gateway/v1/runtime`, { method: "DELETE", headers: auth });
+    }
+  });
+
   test("status refreshes the proxy token and reports the idle countdown", async () => {
     await ensureCreds(base());
     await fetch(`${base()}/gateway/v1/runtime`, { method: "POST", headers: auth }); // create (idempotent if reused)
