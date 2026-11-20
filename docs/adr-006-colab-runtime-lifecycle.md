@@ -35,6 +35,7 @@ changed: the Colab API v1beta is now public (discovery revision 20261118).
 | **Tunnel works headless (2026-11-20):** cells 2,4,8,10,25 with the stub → Caddy on 8189 + tailscaled + Funnel; returned `https://worker.tail00000.ts.net`, captured as `GATEWAY_UPSTREAM`, runtime deleted | `tools/colab-bootstrap-probe.py --stub` |
 | Ephemeral tailnet state ⇒ hostname gains a `-N` suffix (`moss-comfy` → `moss-comfy-1`) and a fresh TLS cert is issued every session | cell 25 output |
 | **State custody makes the endpoint stable (2026-11-20):** identity saved from run 1 was restored in run 2; both runs returned `https://worker.tail00000.ts.net` | two `--stub` runs sharing `tools/.tailnet-state` |
+| **Space → worker egress proven (2026-11-20):** the Lumiverse panel reported `Gateway OK (200) · Worker OK` with real `/system_stats` (T4, 13.6 GB RAM) fetched through the Funnel with Basic Auth | owner test in the Space |
 
 The spike holds OAuth tokens in memory only and writes nothing but the masked result file.
 
@@ -94,6 +95,10 @@ Lifecycle control is the gateway's job, called through the Colab API — not the
   `tools/.tailnet-state` stand-in makes the hostname stable across runtimes; in production
   the identity belongs in the enclave, and it must be treated as a secret (it authenticates
   as the node). Tooling must never echo the state payload.
+- **End-to-end reachability is proven.** The Space reached the worker through the Funnel
+  with Basic Auth (`Gateway OK (200) · Worker OK`). Because the hostname is stable,
+  `GATEWAY_UPSTREAM` is set once; the `PUT /gateway/v1/upstream` route lets a controller
+  re-point the gateway at runtime without a Space restart.
 
 ## 5. Alternatives considered
 
