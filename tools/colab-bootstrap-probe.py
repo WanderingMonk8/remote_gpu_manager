@@ -95,6 +95,23 @@ print('RGM_IMAGES:' + json.dumps(_out))
 ENV_KEYS = ("TS_AUTHKEY", "BASIC_AUTH_USER", "BASIC_AUTH_PASS")
 
 
+def user_env(name):
+    """Read a persistent Windows user env var (where `setx` writes).
+
+    A long-running process does not see variables set after it started, so the
+    registry is the reliable source on Windows. Returns '' if absent.
+    """
+    if os.name != "nt":
+        return ""
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment") as key:
+            value, _ = winreg.QueryValueEx(key, name)
+        return str(value).strip()
+    except OSError:
+        return ""
+
+
 def env_preamble():
     """Set RGM_AUTOMATION and inject the tunnel credentials into the kernel.
 
@@ -107,8 +124,10 @@ def env_preamble():
     if creds_path.is_file():
         saved = json.loads(creds_path.read_text(encoding="utf-8"))
     for key in ENV_KEYS:
-        # Host environment wins, matching the notebook's own precedence.
-        value = os.environ.get(key, "").strip() or str(saved.get(key, "")).strip()
+        # Process env wins, then the persistent user env (setx), then the file.
+        value = (os.environ.get(key, "").strip()
+                 or user_env(key)
+                 or str(saved.get(key, "")).strip())
         if value:
             values[key] = value
     blob = base64.b64encode(json.dumps(values).encode("utf-8")).decode("ascii")
