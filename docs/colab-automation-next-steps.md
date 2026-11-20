@@ -1,8 +1,10 @@
 # Colab automation: what's proven, and what it would take
 
-**Status:** paused 2026-11-20 by owner after a cost/value review. Manual Colab start/stop is
-the current operating mode. This file records what works, why automation was paused, and the
-concrete steps if it is resumed.
+**Status:** implementation resumed locally at the owner's request. The controller,
+enclave-backed controls, Drive Picker/cache path and idle-stop safeguards have local
+tests; the integrated path has not yet been deployed or verified against a real Space
+and Colab runtime. Manual Colab start/stop remains the current operating mode. See
+[automation deployment](./automation-deployment.md) for setup and the remaining live gate.
 
 Related: [ADR-006](./adr-006-colab-runtime-lifecycle.md),
 [ADR-005](./adr-005-worker-endpoint-resolution.md), [lifecycle API](./lifecycle-api.md).

@@ -108,7 +108,7 @@ def explain_error(status, payload):
 # --------------------------------------------------------------------------- #
 # Helpers
 # --------------------------------------------------------------------------- #
-def auth(offline: bool = False):
+def auth(offline: bool = False, drive_file: bool = False):
     try:
         from google_auth_oauthlib.flow import InstalledAppFlow
     except ImportError:
@@ -122,7 +122,8 @@ def auth(offline: bool = False):
             "Reuse the 'Desktop app' client from the eligibility probe, or download a new one.\n"
             "See the instructions at the top of tools/colab-eligibility-check.py."
         )
-    flow = InstalledAppFlow.from_client_secrets_file(str(CLIENT_SECRET), SCOPES)
+    scopes = SCOPES + (["https://www.googleapis.com/auth/drive.file"] if drive_file else [])
+    flow = InstalledAppFlow.from_client_secrets_file(str(CLIENT_SECRET), scopes)
     creds = flow.run_local_server(
         port=0,
         prompt="consent",
@@ -298,9 +299,9 @@ def cmd_create(token, accelerator, keep):
     return 0 if cmd_delete(token, created) else 4
 
 
-def cmd_creds():
+def cmd_creds(drive_file=False):
     """One-time consent, saving what the gateway needs to act unattended."""
-    creds = auth(offline=True)
+    creds = auth(offline=True, drive_file=drive_file)
     if not creds.refresh_token:
         sys.exit("Google did not return a refresh token. Revoke this app's access at "
                  "https://myaccount.google.com/permissions and run it again.")
@@ -327,7 +328,8 @@ def main():
     sub = parser.add_subparsers(dest="command")
     sub.add_parser("specs", help="list runtime specs and eligibility (read-only)")
     sub.add_parser("list", help="list assigned runtimes (read-only)")
-    sub.add_parser("creds", help="one-time consent; save creds for the gateway")
+    p_creds = sub.add_parser("creds", help="one-time consent; save creds for the gateway")
+    p_creds.add_argument("--drive-file", action="store_true", help="also request access to files selected with Google Picker")
     p_create = sub.add_parser("create", help="create a runtime, report, then delete it")
     p_create.add_argument("--keep", action="store_true", help="leave the runtime running")
     p_create.add_argument("--accelerator", default="T4", help="T4, L4, A100 (default T4)")
@@ -336,7 +338,7 @@ def main():
     args = parser.parse_args()
 
     if args.command == "creds":
-        cmd_creds()
+        cmd_creds(args.drive_file)
         return
 
     token = saved_token()

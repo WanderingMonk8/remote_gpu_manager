@@ -16,14 +16,30 @@ export interface AutomationStore {
 export type GatewayCall = (path: string, method: string, token: string, body?: unknown) => Promise<any>;
 const SECRETS = "automation-credentials-v1";
 const STATE = "automation-tailnet-state-v1";
+const DRIVE = "automation-drive-cache-v1";
+export type DriveFile = { id: string; name: string };
+const DEFAULT_FILES = ["moss_image_sft_int8_convrot.safetensors", "qwen3.5_9b_w4a8_gptq.safetensors", "flux2-vae_small.safetensors"];
+const MODEL_FILES = new Set([...DEFAULT_FILES, "moss_image_base_int8_convrot.safetensors", "qwen_3_06b_base.safetensors", "qwen_image_vae.safetensors",
+  ...["base-v1.0", "turbo-v1.0", "turbo-v1.1", "aesthetic-v1.0", "aesthetic-v1.0b", "aesthetic-v1.1"].map(name => `anima-${name}.safetensors`)]);
 
 export class AutomationController {
   constructor(private store: AutomationStore, private call: GatewayCall) {}
 
   async save(user: string, secrets: AutomationSecrets): Promise<void> {
-    if (!user || Object.values(secrets).some(v => typeof v !== "string" || !v.trim()) ||
+    if (!user || !secrets || [secrets.controlToken, secrets.clientId, secrets.clientSecret, secrets.refreshToken,
+        secrets.tailnetKey, secrets.basicUser, secrets.basicPass].some(v => typeof v !== "string" || !v.trim()) ||
         !/^[^:\s]+$/.test(secrets.basicUser)) throw new Error("invalid_credentials");
     await this.store.put(SECRETS, JSON.stringify(secrets), user);
+  }
+
+  async saveDriveFiles(user: string, files: DriveFile[]): Promise<void> {
+    if (!user || !Array.isArray(files) || files.length > 16 ||
+        files.some(f => !f || typeof f.id !== "string" || !/^[A-Za-z0-9_-]{1,256}$/.test(f.id) || !MODEL_FILES.has(f.name)) ||
+        new Set(files.map(f => f.name)).size !== files.length ||
+        !DEFAULT_FILES.every(name => files.filter(f => f.name === name).length === 1)) {
+      throw new Error("drive_selection_incomplete");
+    }
+    await this.store.put(DRIVE, JSON.stringify(files), user);
   }
 
   private async secrets(user: string): Promise<AutomationSecrets> {
@@ -44,15 +60,19 @@ export class AutomationController {
     const s = await this.secrets(user);
     const savedState = await this.store.get(STATE, user);
     const state = savedState ? JSON.parse(savedState) : {};
+    const savedDrive = await this.store.get(DRIVE, user);
+    if (!savedDrive) throw new Error("drive_selection_required");
+    const driveFiles = JSON.parse(savedDrive) as DriveFile[];
     const existing = await this.call("/gateway/v1/runtime/bootstrap", "GET", s.controlToken);
     if (existing.status !== "idle") throw new Error("bootstrap_result_pending");
     await this.call("/gateway/v1/runtime/credentials", "POST", s.controlToken,
       { client_id: s.clientId, client_secret: s.clientSecret, refresh_token: s.refreshToken });
+    await this.call("/gateway/v1/runtime/cache-check", "POST", s.controlToken, { files: driveFiles });
     const allocation = await this.call("/gateway/v1/runtime", "POST", s.controlToken);
     // Do not rerun notebook setup on a reused runtime that may contain work.
     if (allocation.reused) throw new Error("runtime_already_exists");
     await this.call("/gateway/v1/runtime/bootstrap", "POST", s.controlToken,
-      { ts_authkey: s.tailnetKey, basic_user: s.basicUser, basic_pass: s.basicPass, state });
+      { ts_authkey: s.tailnetKey, basic_user: s.basicUser, basic_pass: s.basicPass, state, drive_files: driveFiles });
   }
 
   async poll(user: string): Promise<{ status: string; workerHealthy?: boolean; error?: string }> {

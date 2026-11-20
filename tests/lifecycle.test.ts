@@ -82,6 +82,7 @@ function spawnGateway(port: number, colabPort: number | null, upstream: string, 
               GATEWAY_LIFECYCLE: "1",
               COLAB_BASE: `http://127.0.0.1:${colabPort}`,
               OAUTH_TOKEN_URL: `http://127.0.0.1:${colabPort}/token`,
+              DRIVE_BASE: `http://127.0.0.1:${colabPort}/drive/v3`,
               RUNTIME_IDLE_CHECK_MS: "500",
             }
           : {}),
@@ -190,6 +191,22 @@ describe("credentials custody (ADR-006)", () => {
 });
 
 describe("start / status / stop", () => {
+  test("Drive preflight checks selected files without allocating a runtime", async () => {
+    await ensureCreds(base());
+    const files = [
+      { id: "a", name: "moss_image_sft_int8_convrot.safetensors" },
+      { id: "b", name: "qwen3.5_9b_w4a8_gptq.safetensors" },
+      { id: "c", name: "flux2-vae_small.safetensors" },
+    ];
+    const request = (selected: unknown) => fetch(`${base()}/gateway/v1/runtime/cache-check`, {
+      method: "POST", headers: { ...auth, "Content-Type": "application/json" }, body: JSON.stringify({ files: selected }),
+    });
+    expect((await request(files)).status).toBe(200);
+    expect((await request([{ id: "missing", name: files[0].name }])).status).toBe(403);
+    const list = await (await fetch(`${colabBase()}/__log`)).json();
+    expect(list.runtimes.filter((id: string) => id.startsWith("rgm-gw-"))).toHaveLength(0);
+  });
+
   test("persistent allocation intent permits recovery and clears after confirmed stop", async () => {
     const file = join(tmpdir(), `rgm-intent-${crypto.randomUUID()}.json`);
     const port = PORT_BASE + 11;

@@ -388,6 +388,15 @@ def bootstrap_runtime(args, cells, name, runtime, hooks=None):
             return 1
 
     for idx in indices:
+        if idx == 6 and hooks is not None and hooks.get("drive"):
+            drive_spec = importlib.util.spec_from_file_location("drive_cache", HERE / "drive-cache.py")
+            drive_module = importlib.util.module_from_spec(drive_spec)
+            drive_spec.loader.exec_module(drive_module)
+            drive = hooks["drive"]
+            code = drive_module.build_restore_cell(drive["token"], drive["files"])
+            ok, _, _ = execute_live(ws, session_id, code, timeout=args.timeout, echo=False)
+            if not ok:
+                raise RuntimeError("Drive cache restore failed")
         print(f"\n[5] cell {idx}")
         ok, st, out = execute_live(ws, session_id, cells[idx], timeout=args.timeout)
         print(f"    -> {st}")

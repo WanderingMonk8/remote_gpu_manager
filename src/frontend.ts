@@ -1,4 +1,5 @@
 import type { SpindleFrontendContext } from "lumiverse-spindle-types";
+import { chooseDriveFiles } from "./drive-picker";
 
 const ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.5"/><rect x="2.5" y="9" width="2" height="6"/><rect x="19.5" y="9" width="2" height="6"/><path d="M9.5 2.5v2M12 2.5v2M14.5 2.5v2M9.5 19.5v2M12 19.5v2M14.5 19.5v2"/></svg>`;
 
@@ -56,6 +57,13 @@ export function setup(ctx: SpindleFrontendContext) {
         <label>Tunnel Basic Auth password<input data-secret="basicPass" type="password" autocomplete="off" /></label>
         <button class="rgm-save-secrets" type="button">Save credentials</button>
       </details>
+      <details><summary>Drive model cache</summary>
+        <p>Use a web OAuth client, browser API key, and project number from the same Google Cloud project as the Colab OAuth client. Select the three MOSS SFT model files.</p>
+        <label>Google web OAuth client ID<input class="rgm-picker-client" type="text" autocomplete="off" /></label>
+        <label>Google Picker API key<input class="rgm-picker-key" type="text" autocomplete="off" /></label>
+        <label>Google Cloud project number<input class="rgm-picker-project" type="text" autocomplete="off" /></label>
+        <button class="rgm-picker" type="button">Select cache files</button>
+      </details>
       <div class="rgm-actions">
         <button class="rgm-start" type="button">Start Colab</button>
         <button class="rgm-stop" type="button">Stop Colab</button>
@@ -83,6 +91,19 @@ export function setup(ctx: SpindleFrontendContext) {
       input.value = "";
     });
     send("automation_save", { secrets });
+  });
+  drawer.root.querySelector(".rgm-picker")?.addEventListener("click", async () => {
+    const field = (selector: string) => (drawer.root.querySelector(selector) as HTMLInputElement).value.trim();
+    try {
+      const files = await chooseDriveFiles({ clientId: field(".rgm-picker-client"), apiKey: field(".rgm-picker-key"), projectNumber: field(".rgm-picker-project") });
+      send("automation_save_drive", { files });
+    } catch (error) {
+      if (automationStatus) {
+        automationStatus.dataset.tone = "bad";
+        const message = (error as Error)?.message ?? "picker_failed";
+        automationStatus.textContent = /^[a-z_]+$/.test(message) ? message : "picker_failed";
+      }
+    }
   });
   drawer.root.querySelector(".rgm-start")?.addEventListener("click", () => send("automation_start"));
   drawer.root.querySelector(".rgm-stop")?.addEventListener("click", () => send("automation_stop"));
@@ -113,7 +134,8 @@ export function setup(ctx: SpindleFrontendContext) {
     if (automationStatus && payload?.type === "automation_result") {
       const result = payload.result ?? {};
       automationStatus.dataset.tone = result.status === "failed" || result.workerHealthy === false ? "bad" : "unknown";
-      automationStatus.textContent = `${payload.action}: ${result.status ?? (result.saved ? "saved" : result.confirmed ? "stopped" : "updated")}${result.error ? ` (${result.error})` : ""}${result.workerHealthy === false ? " — worker health check failed" : ""}`;
+      const display = result.status ?? result.state ?? (result.saved ? "saved" : result.confirmed ? "stopped" : "updated");
+      automationStatus.textContent = `${payload.action}: ${display}${result.error ? ` (${result.error})` : ""}${result.workerHealthy === true ? " — worker healthy" : result.workerHealthy === false ? " — worker health check failed" : ""}`;
       if (payload.action === "automation_start" || (payload.action === "automation_poll" && result.status === "running")) {
         if (pollTimer) clearTimeout(pollTimer);
         pollTimer = setTimeout(poll, 3000);

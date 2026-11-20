@@ -3,6 +3,7 @@ export interface BootstrapRequest {
   runtime: { name: string; connectionInfo: { url: string; token: string } };
   credentials: { TS_AUTHKEY: string; BASIC_AUTH_USER: string; BASIC_AUTH_PASS: string };
   state: Record<string, string>;
+  drive?: { token: string; files: Array<{ id: string; name: string }> };
 }
 
 export interface BootstrapResult {

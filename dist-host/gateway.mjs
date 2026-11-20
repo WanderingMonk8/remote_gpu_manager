@@ -67,6 +67,7 @@ var BOOTSTRAP_SCRIPT = process.env.GATEWAY_BOOTSTRAP_SCRIPT ?? "tools/colab-boot
 var INTENT_FILE = process.env.RUNTIME_INTENT_FILE ?? "";
 var COLAB_BASE = (process.env.COLAB_BASE ?? "https://colaboratory.googleapis.com").replace(/\/+$/, "");
 var OAUTH_TOKEN_URL = process.env.OAUTH_TOKEN_URL ?? "https://oauth2.googleapis.com/token";
+var DRIVE_BASE = (process.env.DRIVE_BASE ?? "https://www.googleapis.com/drive/v3").replace(/\/+$/, "");
 var RUNTIME_PREFIX = "rgm-gw-";
 var SPEC_ACCELERATOR = process.env.RUNTIME_ACCELERATOR ?? "T4";
 var SPEC_SHAPE = process.env.RUNTIME_SHAPE ?? "STANDARD";
@@ -676,7 +677,7 @@ async function bootstrapRuntime(req) {
   } catch {
     return errJson(400, "invalid_json");
   }
-  const { ts_authkey, basic_user, basic_pass, state } = body ?? {};
+  const { ts_authkey, basic_user, basic_pass, state, drive_files } = body ?? {};
   if (typeof ts_authkey !== "string" || typeof basic_user !== "string" || !/^[^:\s]+$/.test(basic_user) || typeof basic_pass !== "string" || !basic_pass || !state || typeof state !== "object" || Array.isArray(state) || Object.values(state).some((v) => typeof v !== "string")) {
     return errJson(400, "bootstrap_input_invalid");
   }
@@ -692,7 +693,8 @@ async function bootstrapRuntime(req) {
     const result = await runBootstrap([BOOTSTRAP_PYTHON, BOOTSTRAP_SCRIPT], {
       runtime: { name: owned.name, connectionInfo: { url: connection.url, token: connection.token } },
       credentials: { TS_AUTHKEY: ts_authkey, BASIC_AUTH_USER: basic_user, BASIC_AUTH_PASS: basic_pass },
-      state
+      state,
+      ...Array.isArray(drive_files) && drive_files.length ? { drive: { token: await ensureAccessToken(), files: drive_files } } : {}
     });
     const adopted = await handleControl(new Request("http://127.0.0.1/gateway/v1/upstream", {
       method: "PUT",
@@ -788,6 +790,39 @@ function setIdle(body) {
 async function handleRuntime(req, path) {
   if (path === "/gateway/v1/runtime/bootstrap")
     return bootstrapControl(req);
+  if (path === "/gateway/v1/runtime/cache-check" && req.method === "POST") {
+    let body;
+    try {
+      body = JSON.parse(new TextDecoder().decode(await readBounded(req, 16384)));
+    } catch {
+      return errJson(400, "invalid_json");
+    }
+    const files = body?.files;
+    if (!Array.isArray(files) || !files.length || files.length > 16 || files.some((f) => typeof f?.id !== "string" || !/^[A-Za-z0-9_-]{1,256}$/.test(f.id) || typeof f.name !== "string" || !/^[A-Za-z0-9._-]+\.safetensors$/.test(f.name))) {
+      return errJson(400, "drive_selection_invalid");
+    }
+    const token = await ensureAccessToken();
+    for (const file of files) {
+      const url = `${DRIVE_BASE}/files/${encodeURIComponent(file.id)}?fields=id,name,size,md5Checksum`;
+      let response;
+      try {
+        response = await fetch(url, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(15000) });
+      } catch {
+        return errJson(502, "drive_unreachable");
+      }
+      if (!response.ok)
+        return errJson(403, "drive_access_required");
+      let metadata;
+      try {
+        metadata = await response.json();
+      } catch {
+        return errJson(502, "drive_invalid_response");
+      }
+      if (metadata.name !== file.name || !metadata.size || !metadata.md5Checksum)
+        return errJson(409, "drive_file_mismatch");
+    }
+    return Response.json({ ok: true, count: files.length });
+  }
   if (path === "/gateway/v1/runtime/credentials") {
     if (req.method === "POST")
       return putCredentials(req);
