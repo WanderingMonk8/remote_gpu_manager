@@ -241,3 +241,35 @@ When `feat/vast-first` merges, that paragraph must be corrected rather than carr
 Vast worker itself (≥24 GB VRAM) is unaffected by this — but the lesson generalises: **any proxy on
 this path must have its idle timeout raised above the slowest transfer**, which applies equally to
 the instance-side Caddy on Vast.
+
+## 13. Selection (2026-11-19): T5 first, Colab first
+
+The owner selected **Tailscale Funnel (T5)** and asked for the Colab path to be proven before any
+work on Vast. Rationale: it is the only $0 option that passes §4.4 without new infrastructure, and
+if it holds, `GATEWAY_UPSTREAM` becomes a constant — which removes the per-session secret edit and
+Factory restart entirely, on both backends.
+
+The runnable spike is `docs/spike-tailscale-funnel.md` (prerequisites, the cell, the measurements,
+and the fail conditions). Nothing is committed to the notebook until it passes.
+
+Three findings from preparing the spike that change the risk profile and must not be lost:
+
+1. **Funnel does not require a kernel TUN.** `tailscaled --tun=userspace-networking` +
+   `tailscale funnel --bg` is the documented Docker/container pattern and is in use in the field.
+   Colab's missing `/dev/net/tun` is therefore not a blocker. Layers 1 and 2 of §5 are unchanged.
+2. **Certificate duplication is the hidden constraint.** Funnel issues a TLS certificate per node,
+   and Let's Encrypt allows roughly five duplicate certificates per week for one identifier set. A
+   fresh ephemeral node each Colab session would start failing within a week. Mitigation: persist
+   `tailscaled`'s state directory across sessions (Drive), which preserves both node identity and
+   the cached certificate. This also makes the hostname stable in the first place, so the mitigation
+   and the goal are the same action.
+3. **Throughput is the real risk, not connectivity.** Funnel is beta, is subject to
+   non-configurable bandwidth limits, and with userspace networking its inbound path runs through
+   gVisor's netstack — which Tailscale documents as roughly 5× slower than binding a server to a
+   tailnet IP. Public reports include relay transfers at tens of KB/s. Our `/view` bodies are
+   1.3–1.4 MB, so the spike must measure that transfer specifically; the idle-timeout fix means a
+   slow transfer succeeds, but not that it is acceptable.
+
+T5 stays "selected for trial", not "accepted", until measurements 1–7 in the spike document are
+recorded. If T5 fails, the fallback order in §4.3 stands: T4 (named tunnel, needs the ~$10/yr
+decision), then Layer 1 alone (one paste per session).
