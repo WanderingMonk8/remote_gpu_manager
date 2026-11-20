@@ -1,0 +1,140 @@
+# Lifecycle control API (gateway)
+
+Start and stop the Colab runtime from the extension. Implemented per
+[ADR-006](./adr-006-colab-runtime-lifecycle.md); the gateway is the only component
+that talks to Google.
+
+**Manual mode is the default.** Every route below returns `403 lifecycle_disabled`
+unless the gateway is started with `GATEWAY_LIFECYCLE=1`.
+
+All routes live on the existing loopback control plane and require
+`Authorization: Bearer $GATEWAY_CONTROL_TOKEN`.
+
+| Method | Path | Effect |
+|---|---|---|
+| `POST` | `/gateway/v1/runtime/credentials` | Store Colab OAuth credentials **in memory** |
+| `DELETE` | `/gateway/v1/runtime/credentials` | Wipe them (restart, rotation, shutdown) |
+| `POST` | `/gateway/v1/runtime` | Start: allocate a runtime, wait for `connectionInfo` |
+| `GET` | `/gateway/v1/runtime` | Status, adopted runtime, idle countdown |
+| `DELETE` | `/gateway/v1/runtime` | Stop: delete and **confirm** deletion |
+| `PUT` | `/gateway/v1/runtime/idle` | Set idle minutes (`0` disables) |
+
+## Credentials custody
+
+The extension reads the OAuth client id/secret and refresh token from the Spindle
+enclave and posts them once per gateway boot:
+
+```json
+POST /gateway/v1/runtime/credentials
+{"client_id": "...", "client_secret": "...", "refresh_token": "..."}
+```
+
+They are held in module memory only. They are never written to disk, never logged,
+and never echoed in a response. The short-lived Google access token is refreshed
+on demand and cached until 60 s before expiry.
+
+## Start
+
+```json
+POST /gateway/v1/runtime  ->  200
+{
+  "runtime": {
+    "name": "runtimes/rgm-gw-1a2b3c4d",
+    "url": "https://8080-gpu-t4-s-....colab.dev",
+    "spec": {"variant": "VARIANT_GPU", "accelerator": "T4", "shape": "SHAPE_STANDARD"},
+    "adoptedAt": "2026-11-20T08:00:00.000Z",
+    "tokenExpiresAt": "2026-11-20T09:00:00.000Z",
+    "tokenPresent": true
+  },
+  "state": "ready"
+}
+```
+
+- Single-flight: a second `POST` while one is in progress returns `409 provisioning_in_progress`.
+- A `POST` while already ready returns `200` with `"reused": true` — no second allocation.
+- Only runtimes named `rgm-gw-*` are ever created, adopted or deleted. Another
+  session's runtime is never touched.
+- `connectionInfo.token` is a short-lived credential and is deliberately **not**
+  returned. `GET` refreshes it inside the gateway.
+
+## Status
+
+```json
+GET /gateway/v1/runtime  ->  200
+{
+  "runtime": {...} | null,
+  "state": "starting" | "ready" | "offline",
+  "idle": {"minutes": 10, "lastWorkAt": "...", "remainingSeconds": 542}
+}
+```
+
+If the runtime was created by this gateway before a restart, `GET` adopts it from
+`GET /v1beta/runtimes` rather than allocating a second one. If Colab deleted it
+outside the gateway (idle reaping, quota), `state` becomes `offline`.
+
+## Stop
+
+```json
+DELETE /gateway/v1/runtime  ->  200
+{"deleted": true, "name": "runtimes/rgm-gw-1a2b3c4d", "confirmed": true}
+```
+
+Deletion is re-checked with `GET` before reporting success (PRD R-06: status must
+confirm deletion, not a stop request). If the delete is accepted but the runtime
+is still listed, the gateway returns `202` with `"confirmed": false` instead of
+claiming success.
+
+## Idle shutdown
+
+```json
+PUT /gateway/v1/runtime/idle   {"minutes": 10}
+```
+
+- `5`, `10`, `15`, `30` or `0` (disabled) — the PRD R-06 set. Sub-minute values are
+  accepted for tests and diagnostics.
+- "Real work" is submission (`POST /prompt`), result retrieval (`GET /view`,
+  `GET /history/{id}`), authorized asset installation (`POST /upload/image`), and
+  an active WS session. `GET /queue` polling is **not** work.
+- Before deleting, the timer re-reads `/queue` and holds the runtime if anything is
+  running or pending (PRD R-05).
+- If the queue cannot be read, the runtime is **kept**. Fail-safe, never fail-open.
+- No heartbeat traffic is generated to defeat Colab's own idle enforcement.
+
+## Configuration
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `GATEWAY_LIFECYCLE` | unset (off) | `1` enables every route above |
+| `COLAB_BASE` | `https://colaboratory.googleapis.com` | API base (tests point at a mock) |
+| `OAUTH_TOKEN_URL` | `https://oauth2.googleapis.com/token` | Token endpoint |
+| `RUNTIME_ACCELERATOR` | `T4` | Requested accelerator |
+| `RUNTIME_SHAPE` | `STANDARD` | Requested shape |
+| `RUNTIME_IDLE_MINUTES` | `10` | Initial idle timeout |
+| `RUNTIME_CREATE_TIMEOUT_MS` | `300000` | How long to wait for `connectionInfo` |
+| `RUNTIME_IDLE_CHECK_MS` | `30000` | Timer resolution |
+
+## Typed errors (PRD §5)
+
+| Code | Status | Cause |
+|---|---|---|
+| `lifecycle_disabled` | 403 | `GATEWAY_LIFECYCLE` not set |
+| `auth_required` | 401 | No credentials, or Google refused the refresh |
+| `policy_restricted` | 403 | `FAILED_PRECONDITION` — tier, quota or stock |
+| `quota_exceeded` | 429 | Google rate limit |
+| `offline` | 502/503 | Colab unreachable |
+| `timeout` | 504 | Created but `connectionInfo` never appeared |
+| `provisioning_in_progress` | 409 | Concurrent start |
+| `no_owned_runtime` | 404 | Stop with nothing owned |
+| `idle_minutes_invalid` | 400 | Not in the R-06 set |
+
+## Not done here
+
+- **Bootstrap.** Allocation gets a machine; it does not get *our* stack onto it.
+  How the notebook cells execute on an API-created runtime is unresolved
+  (ADR-006 §4). Until then, start/stop is proven for the machine, not for a
+  ready-to-generate worker.
+- **Publishing.** `connectionInfo.url` is the Jupyter proxy on port 8080, not
+  ComfyUI on 8188. Whether the proxy routes by port prefix is untested.
+- **Free-tier policy.** An API-created runtime driven through a web UI is the
+  shape Colab's FAQ reserves the right to terminate on the free tier. Allocation
+  works; continued availability is not guaranteed.

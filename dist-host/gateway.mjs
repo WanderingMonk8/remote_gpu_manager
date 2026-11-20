@@ -1,7 +1,7 @@
 // @bun
 // host-gateway/gateway.ts
 import { timingSafeEqual } from "crypto";
-var VERSION = "0.1.0-m1";
+var VERSION = "0.2.0-m4";
 var env = (name, fallback) => {
   const v = process.env[name];
   if (v && v.length > 0)
@@ -20,6 +20,17 @@ var BASIC_AUTH = process.env.GATEWAY_BASIC_AUTH ?? "";
 var SKIP_BROWSER_WARNING = (process.env.GATEWAY_SKIP_BROWSER_WARNING ?? "1") === "1";
 var CONTROL_TOKEN = process.env.GATEWAY_CONTROL_TOKEN ?? "";
 var STARTED_AT = Date.now();
+var LIFECYCLE_ENABLED = (process.env.GATEWAY_LIFECYCLE ?? "") === "1";
+var COLAB_BASE = (process.env.COLAB_BASE ?? "https://colaboratory.googleapis.com").replace(/\/+$/, "");
+var OAUTH_TOKEN_URL = process.env.OAUTH_TOKEN_URL ?? "https://oauth2.googleapis.com/token";
+var RUNTIME_PREFIX = "rgm-gw-";
+var SPEC_ACCELERATOR = process.env.RUNTIME_ACCELERATOR ?? "T4";
+var SPEC_SHAPE = process.env.RUNTIME_SHAPE ?? "STANDARD";
+var CREATE_TIMEOUT_MS = Number(process.env.RUNTIME_CREATE_TIMEOUT_MS ?? 300000);
+var IDLE_CHECK_MS = Math.max(1000, Number(process.env.RUNTIME_IDLE_CHECK_MS ?? 30000));
+var idleMinutes = Number(process.env.RUNTIME_IDLE_MINUTES ?? 10);
+if (!Number.isFinite(idleMinutes) || idleMinutes < 0)
+  idleMinutes = 10;
 var upstreamUrl = new URL(GATEWAY_UPSTREAM);
 if (upstreamUrl.protocol !== "http:" && upstreamUrl.protocol !== "https:") {
   throw new Error("GATEWAY_UPSTREAM must be http(s)");
@@ -152,10 +163,12 @@ async function readBounded(req, maxBytes) {
 class HttpError extends Error {
   status;
   code;
-  constructor(status, code) {
+  detail;
+  constructor(status, code, detail) {
     super(code);
     this.status = status;
     this.code = code;
+    this.detail = detail;
   }
 }
 var errJson = (status, code) => Response.json({ error: code }, { status, headers: { "Content-Type": "application/json" } });
@@ -211,6 +224,18 @@ async function handleControl(req, path) {
   const match = a.length === b.length && timingSafeEqual(a, b);
   if (!match)
     return errJson(401, "control_auth_required");
+  if (path.startsWith("/gateway/v1/runtime")) {
+    if (!LIFECYCLE_ENABLED)
+      return errJson(403, "lifecycle_disabled");
+    try {
+      return await handleRuntime(req, path);
+    } catch (err) {
+      const status = err instanceof HttpError ? err.status : 500;
+      const code = err instanceof HttpError ? err.code : "lifecycle_error";
+      const detail = err instanceof HttpError ? err.detail : undefined;
+      return Response.json(detail ? { error: code, detail } : { error: code }, { status });
+    }
+  }
   if (path === "/gateway/v1/status") {
     const probeStart = Date.now();
     try {
@@ -233,6 +258,312 @@ async function handleControl(req, path) {
     }
   }
   return errJson(404, "route_not_allowed");
+}
+var creds = null;
+var accessToken = null;
+var owned = null;
+var provisioning = false;
+var lastWorkAt = Date.now();
+function noteWork() {
+  lastWorkAt = Date.now();
+}
+function isWorkRoute(method, path) {
+  if (method === "POST")
+    return path === "/prompt" || path === "/upload/image";
+  if (method === "GET")
+    return path === "/view" || /^\/history\/[0-9a-fA-F-]{36}$/.test(path);
+  return false;
+}
+async function ensureAccessToken() {
+  if (accessToken && accessToken.expiresAt > Date.now() + 60000)
+    return accessToken.value;
+  if (!creds)
+    throw new HttpError(401, "auth_required", "POST /gateway/v1/runtime/credentials first");
+  const params = new URLSearchParams({
+    grant_type: "refresh_token",
+    client_id: creds.clientId,
+    client_secret: creds.clientSecret,
+    refresh_token: creds.refreshToken
+  });
+  const res = await fetch(OAUTH_TOKEN_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: params.toString()
+  });
+  if (!res.ok)
+    throw new HttpError(401, "auth_required", "token refresh refused");
+  const j = await res.json();
+  if (!j.access_token)
+    throw new HttpError(401, "auth_required", "token response had no access_token");
+  accessToken = { value: j.access_token, expiresAt: Date.now() + (j.expires_in ?? 3600) * 1000 - 60000 };
+  return accessToken.value;
+}
+async function colabRequest(method, path, body, timeoutMs = 30000) {
+  for (let attempt = 0;attempt < 2; attempt++) {
+    const token = await ensureAccessToken();
+    const controller = new AbortController;
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let res;
+    try {
+      res = await fetch(COLAB_BASE + path, {
+        method,
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: body === undefined ? undefined : JSON.stringify(body),
+        signal: controller.signal
+      });
+    } catch (err) {
+      clearTimeout(timer);
+      if (err?.name === "AbortError")
+        throw new HttpError(504, "timeout");
+      throw new HttpError(502, "offline");
+    }
+    clearTimeout(timer);
+    if (res.status !== 401) {
+      const text = await res.text();
+      let json = null;
+      try {
+        json = text ? JSON.parse(text) : null;
+      } catch {
+        json = null;
+      }
+      return { status: res.status, json };
+    }
+    accessToken = null;
+  }
+  throw new HttpError(401, "auth_required");
+}
+function colabError(status, json) {
+  const googleStatus = String(json?.error?.status ?? "");
+  const message = String(json?.error?.message ?? "").slice(0, 200);
+  if (status === 401 || status === 403)
+    return new HttpError(401, "auth_required", message);
+  if (status === 429)
+    return new HttpError(429, "quota_exceeded", message);
+  if (googleStatus === "FAILED_PRECONDITION")
+    return new HttpError(403, "policy_restricted", message);
+  if (status === 503 || googleStatus === "UNAVAILABLE")
+    return new HttpError(503, "offline", message);
+  return new HttpError(502, "colab_error", message);
+}
+async function pickEligibleSpec() {
+  const { status, json } = await colabRequest("GET", "/v1beta/runtimespecs");
+  if (status !== 200)
+    throw colabError(status, json);
+  const specs = json?.runtimeSpecs ?? [];
+  const hit = specs.find((e) => e?.eligible && e?.key?.variant === "VARIANT_GPU" && e?.key?.accelerator === SPEC_ACCELERATOR && e?.key?.shape === `SHAPE_${SPEC_SHAPE}`);
+  if (!hit) {
+    throw new HttpError(403, "policy_restricted", `${SPEC_ACCELERATOR} ${SPEC_SHAPE} is not eligible for this account right now`);
+  }
+  return hit.key;
+}
+function maskRuntime(r) {
+  return {
+    name: r.name,
+    url: r.url,
+    spec: r.spec,
+    adoptedAt: r.adoptedAt,
+    tokenExpiresAt: r.tokenExpireTime,
+    tokenPresent: true
+  };
+}
+async function reconcile() {
+  if (!creds)
+    return;
+  const { status, json } = await colabRequest("GET", "/v1beta/runtimes");
+  if (status !== 200)
+    throw colabError(status, json);
+  const mine = (json?.runtimes ?? []).filter((r) => r?.name?.startsWith(`runtimes/${RUNTIME_PREFIX}`));
+  if (mine.length > 1) {
+    console.warn("[rgm-gateway] lifecycle: multiple owned runtimes; adopting the first, delete the rest by hand");
+  }
+  if (mine.length > 0) {
+    const r = mine[0];
+    owned = {
+      name: r.name,
+      url: r.connectionInfo?.url ?? "",
+      spec: r.runtimeSpec ?? { variant: "VARIANT_GPU", accelerator: SPEC_ACCELERATOR, shape: `SHAPE_${SPEC_SHAPE}` },
+      adoptedAt: new Date().toISOString(),
+      tokenExpireTime: r.connectionInfo?.expireTime ?? ""
+    };
+    console.log(`[rgm-gateway] lifecycle: adopted existing runtime ${owned.name}`);
+  }
+}
+async function startRuntime() {
+  if (provisioning)
+    return errJson(409, "provisioning_in_progress");
+  if (owned)
+    return Response.json({ runtime: maskRuntime(owned), state: "ready", reused: true });
+  if (!creds)
+    return errJson(401, "auth_required");
+  provisioning = true;
+  try {
+    const spec = await pickEligibleSpec();
+    const runtimeId = RUNTIME_PREFIX + crypto.randomUUID().slice(0, 8);
+    const { status, json } = await colabRequest("POST", `/v1beta/runtimes?runtimeId=${runtimeId}`, { runtimeSpec: spec });
+    if (status !== 200 && status !== 201)
+      throw colabError(status, json);
+    const name = `runtimes/${runtimeId}`;
+    const deadline = Date.now() + CREATE_TIMEOUT_MS;
+    for (;; ) {
+      const got = await colabRequest("GET", `/v1beta/${name}`);
+      if (got.status === 200) {
+        const url = got.json?.connectionInfo?.url;
+        if (url) {
+          owned = {
+            name,
+            url,
+            spec: got.json?.runtimeSpec ?? spec,
+            adoptedAt: new Date().toISOString(),
+            tokenExpireTime: got.json?.connectionInfo?.expireTime ?? ""
+          };
+          console.log(`[rgm-gateway] lifecycle: runtime ready ${name} (${SPEC_ACCELERATOR} ${SPEC_SHAPE})`);
+          return Response.json({ runtime: maskRuntime(owned), state: "ready" });
+        }
+      } else if (got.status !== 404) {
+        throw colabError(got.status, got.json);
+      }
+      if (Date.now() > deadline) {
+        throw new HttpError(504, "timeout", "runtime created but connectionInfo never appeared");
+      }
+      await new Promise((r) => setTimeout(r, 5000));
+    }
+  } finally {
+    provisioning = false;
+  }
+}
+async function statusRuntime() {
+  if (owned) {
+    const got = await colabRequest("GET", `/v1beta/${owned.name}`);
+    if (got.status === 404) {
+      owned = null;
+    } else if (got.status !== 200) {
+      throw colabError(got.status, got.json);
+    } else {
+      owned = {
+        ...owned,
+        url: got.json?.connectionInfo?.url ?? owned.url,
+        tokenExpireTime: got.json?.connectionInfo?.expireTime ?? owned.tokenExpireTime
+      };
+    }
+  } else {
+    await reconcile();
+  }
+  const remaining = idleMinutes > 0 ? Math.max(0, idleMinutes * 60000 - (Date.now() - lastWorkAt)) : null;
+  return Response.json({
+    runtime: owned ? maskRuntime(owned) : null,
+    state: provisioning ? "starting" : owned ? "ready" : "offline",
+    idle: {
+      minutes: idleMinutes,
+      lastWorkAt: new Date(lastWorkAt).toISOString(),
+      remainingSeconds: remaining === null ? null : Math.round(remaining / 1000)
+    }
+  });
+}
+async function stopRuntime() {
+  if (!owned)
+    return errJson(404, "no_owned_runtime");
+  const name = owned.name;
+  const { status, json } = await colabRequest("DELETE", `/v1beta/${name}`);
+  if (status !== 200 && status !== 204 && status !== 404)
+    throw colabError(status, json);
+  const check = await colabRequest("GET", `/v1beta/${name}`);
+  if (check.status === 404) {
+    owned = null;
+    console.log(`[rgm-gateway] lifecycle: deleted ${name} (confirmed)`);
+    return Response.json({ deleted: true, name, confirmed: true });
+  }
+  return Response.json({
+    deleted: false,
+    name,
+    confirmed: false,
+    detail: "delete accepted but runtime still listed; recheck GET /gateway/v1/runtime"
+  }, { status: 202 });
+}
+async function putCredentials(req) {
+  let body;
+  try {
+    body = JSON.parse(new TextDecoder().decode(await readBounded(req, 8192)));
+  } catch {
+    return errJson(400, "invalid_json");
+  }
+  const { client_id, client_secret, refresh_token } = body ?? {};
+  if (![client_id, client_secret, refresh_token].every((v) => typeof v === "string" && v.length > 0)) {
+    return errJson(400, "credentials_invalid");
+  }
+  creds = { clientId: client_id, clientSecret: client_secret, refreshToken: refresh_token };
+  accessToken = null;
+  console.log("[rgm-gateway] lifecycle: Colab credentials stored in memory (enclave custody per ADR-006)");
+  return Response.json({ ok: true });
+}
+var PRD_IDLE_CHOICES = new Set([5, 10, 15, 30]);
+function setIdle(body) {
+  const minutes = body?.minutes;
+  if (minutes === null || minutes === 0) {
+    idleMinutes = 0;
+    return Response.json({ idleMinutes: 0, idle: "disabled" });
+  }
+  if (typeof minutes !== "number" || !Number.isFinite(minutes) || minutes < 0.01 || minutes > 1440 || minutes >= 1 && !PRD_IDLE_CHOICES.has(minutes)) {
+    return errJson(400, "idle_minutes_invalid");
+  }
+  idleMinutes = minutes;
+  noteWork();
+  return Response.json({ idleMinutes });
+}
+async function handleRuntime(req, path) {
+  if (path === "/gateway/v1/runtime/credentials") {
+    if (req.method === "POST")
+      return putCredentials(req);
+    if (req.method === "DELETE") {
+      creds = null;
+      accessToken = null;
+      console.log("[rgm-gateway] lifecycle: credentials cleared from memory");
+      return Response.json({ ok: true, cleared: true });
+    }
+  }
+  if (path === "/gateway/v1/runtime") {
+    if (req.method === "POST")
+      return startRuntime();
+    if (req.method === "GET")
+      return statusRuntime();
+    if (req.method === "DELETE")
+      return stopRuntime();
+  }
+  if (path === "/gateway/v1/runtime/idle" && req.method === "PUT") {
+    let body;
+    try {
+      body = JSON.parse(new TextDecoder().decode(await readBounded(req, 4096)));
+    } catch {
+      return errJson(400, "invalid_json");
+    }
+    return setIdle(body);
+  }
+  return errJson(404, "route_not_allowed");
+}
+if (LIFECYCLE_ENABLED) {
+  setInterval(() => {
+    (async () => {
+      try {
+        if (!owned || idleMinutes <= 0 || provisioning)
+          return;
+        if (Date.now() - lastWorkAt < idleMinutes * 60000)
+          return;
+        const queueRule = ROUTES.find((r) => r.method === "GET" && r.pattern.test("/queue"));
+        if (!queueRule)
+          return;
+        const q = await fetchUpstream("/queue", { method: "GET", headers: upstreamHeaders() }, queueRule);
+        const j = JSON.parse(new TextDecoder().decode(q.body));
+        const depth = (j.queue_running?.length ?? 0) + (j.queue_pending?.length ?? 0);
+        if (depth > 0) {
+          noteWork();
+          return;
+        }
+        console.log(`[rgm-gateway] lifecycle: idle ${idleMinutes} min without work; deleting ${owned.name}`);
+        await stopRuntime();
+      } catch (err) {
+        console.warn(`[rgm-gateway] lifecycle idle check skipped: ${String(err?.message ?? err).slice(0, 120)}`);
+      }
+    })();
+  }, IDLE_CHECK_MS);
 }
 var server = Bun.serve({
   hostname: "127.0.0.1",
@@ -280,10 +611,15 @@ var server = Bun.serve({
       };
       if (path === "/view") {
         const res = await proxyStreamingView(path + url.search, upstreamInit, rule);
+        if (res.ok)
+          noteWork();
         audit(req.method, path, res.status, ms());
         return res;
       }
       const upstream = await fetchUpstream(path + (req.method === "GET" ? url.search : ""), upstreamInit, rule);
+      if (upstream.status >= 200 && upstream.status < 300 && isWorkRoute(req.method, path)) {
+        noteWork();
+      }
       if (rule.expectJson && upstream.status >= 200 && upstream.status < 300) {
         try {
           JSON.parse(new TextDecoder().decode(upstream.body));
@@ -348,6 +684,7 @@ var server = Bun.serve({
       });
     },
     message(ws, message) {
+      noteWork();
       const upstream = ws.data.upstream;
       if (upstream && upstream.readyState === WebSocket.OPEN) {
         try {
@@ -366,4 +703,4 @@ var server = Bun.serve({
     }
   }
 });
-console.log(`remote-gpu-manager gateway ${VERSION} on 127.0.0.1:${GATEWAY_PORT} -> ${GATEWAY_UPSTREAM} (auth: ${AUTHORIZATION ? "basic" : "NONE"})`);
+console.log(`remote-gpu-manager gateway ${VERSION} on 127.0.0.1:${GATEWAY_PORT} -> ${GATEWAY_UPSTREAM} ` + `(auth: ${AUTHORIZATION ? "basic" : "NONE"}; lifecycle: ${LIFECYCLE_ENABLED ? "on" : "off (manual mode)"})`);

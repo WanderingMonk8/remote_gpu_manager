@@ -15,14 +15,14 @@
  *     Lumiverse/extension requests, never logged.
  *   - Never logs prompts, image data, or query strings. One audit line per
  *     request: timestamp method path-without-query status latency.
- *   - Discovery/health requests never allocate a GPU — the gateway contains no
- *     provisioning logic (M4+ will add an authorized-host lifecycle adapter
- *     behind an explicit capability flag; manual mode is the default).
+ *   - Discovery/health requests never allocate a GPU. Provisioning exists only
+ *     behind the explicit capability flag GATEWAY_LIFECYCLE=1 (ADR-006); manual
+ *     mode is the default, and the Colab lifecycle adapter never runs without it.
  */
 
 import { timingSafeEqual } from "node:crypto";
 
-const VERSION = "0.1.0-m1";
+const VERSION = "0.2.0-m4";
 
 const env = (name: string, fallback?: string): string => {
   const v = process.env[name];
@@ -43,6 +43,27 @@ const BASIC_AUTH = process.env.GATEWAY_BASIC_AUTH ?? ""; // "user:password"
 const SKIP_BROWSER_WARNING = (process.env.GATEWAY_SKIP_BROWSER_WARNING ?? "1") === "1";
 const CONTROL_TOKEN = process.env.GATEWAY_CONTROL_TOKEN ?? "";
 const STARTED_AT = Date.now();
+
+/* ---------------- lifecycle adapter (ADR-006) ---------------- */
+/* Colab start/stop for the extension. Opt-in via GATEWAY_LIFECYCLE=1; manual
+ * mode is the default. Custody per ADR-006: the extension reads the refresh
+ * token from the Spindle enclave and hands it to this control channel once per
+ * boot. It lives in memory only - never on disk, never in a log, never in a
+ * response. */
+
+const LIFECYCLE_ENABLED = (process.env.GATEWAY_LIFECYCLE ?? "") === "1";
+const COLAB_BASE = (process.env.COLAB_BASE ?? "https://colaboratory.googleapis.com").replace(/\/+$/, "");
+const OAUTH_TOKEN_URL = process.env.OAUTH_TOKEN_URL ?? "https://oauth2.googleapis.com/token";
+const RUNTIME_PREFIX = "rgm-gw-";
+const SPEC_ACCELERATOR = process.env.RUNTIME_ACCELERATOR ?? "T4";
+const SPEC_SHAPE = process.env.RUNTIME_SHAPE ?? "STANDARD";
+const CREATE_TIMEOUT_MS = Number(process.env.RUNTIME_CREATE_TIMEOUT_MS ?? 300_000);
+const IDLE_CHECK_MS = Math.max(1_000, Number(process.env.RUNTIME_IDLE_CHECK_MS ?? 30_000));
+
+// PRD R-06 default: 10 min after last real work; 0 disables. The dashboard
+// offers 5/10/15/30; PUT accepts those, plus sub-minute values for tests.
+let idleMinutes = Number(process.env.RUNTIME_IDLE_MINUTES ?? 10);
+if (!Number.isFinite(idleMinutes) || idleMinutes < 0) idleMinutes = 10;
 
 const upstreamUrl = new URL(GATEWAY_UPSTREAM);
 if (upstreamUrl.protocol !== "http:" && upstreamUrl.protocol !== "https:") {
@@ -219,6 +240,7 @@ class HttpError extends Error {
   constructor(
     public status: number,
     public code: string,
+    public detail?: string,
   ) {
     super(code);
   }
@@ -292,6 +314,18 @@ async function handleControl(req: Request, path: string): Promise<Response> {
   const match = a.length === b.length && timingSafeEqual(a, b);
   if (!match) return errJson(401, "control_auth_required");
 
+  if (path.startsWith("/gateway/v1/runtime")) {
+    if (!LIFECYCLE_ENABLED) return errJson(403, "lifecycle_disabled");
+    try {
+      return await handleRuntime(req, path);
+    } catch (err) {
+      const status = err instanceof HttpError ? err.status : 500;
+      const code = err instanceof HttpError ? err.code : "lifecycle_error";
+      const detail = err instanceof HttpError ? err.detail : undefined;
+      return Response.json(detail ? { error: code, detail } : { error: code }, { status });
+    }
+  }
+
   if (path === "/gateway/v1/status") {
     const probeStart = Date.now();
     try {
@@ -317,6 +351,349 @@ async function handleControl(req: Request, path: string): Promise<Response> {
     }
   }
   return errJson(404, "route_not_allowed");
+}
+
+/* ---------------- lifecycle adapter (ADR-006) ---------------- */
+
+interface ColabCreds {
+  clientId: string;
+  clientSecret: string;
+  refreshToken: string;
+}
+let creds: ColabCreds | null = null;
+
+let accessToken: { value: string; expiresAt: number } | null = null;
+
+interface OwnedRuntime {
+  name: string; // runtimes/xxx — the only handle DELETE accepts
+  url: string; // connectionInfo.url (proxy host; the token is separate)
+  spec: { variant: string; accelerator: string; shape: string };
+  adoptedAt: string;
+  tokenExpireTime: string;
+}
+let owned: OwnedRuntime | null = null;
+let provisioning = false;
+let lastWorkAt = Date.now();
+
+function noteWork(): void {
+  lastWorkAt = Date.now();
+}
+
+// PRD R-05: submission, result retrieval, authorized asset installation.
+// GET /queue polling is deliberately NOT work — the timer rechecks the queue.
+function isWorkRoute(method: string, path: string): boolean {
+  if (method === "POST") return path === "/prompt" || path === "/upload/image";
+  if (method === "GET") return path === "/view" || /^\/history\/[0-9a-fA-F-]{36}$/.test(path);
+  return false;
+}
+
+async function ensureAccessToken(): Promise<string> {
+  if (accessToken && accessToken.expiresAt > Date.now() + 60_000) return accessToken.value;
+  if (!creds) throw new HttpError(401, "auth_required", "POST /gateway/v1/runtime/credentials first");
+  const params = new URLSearchParams({
+    grant_type: "refresh_token",
+    client_id: creds.clientId,
+    client_secret: creds.clientSecret,
+    refresh_token: creds.refreshToken,
+  });
+  const res = await fetch(OAUTH_TOKEN_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: params.toString(),
+  });
+  if (!res.ok) throw new HttpError(401, "auth_required", "token refresh refused");
+  const j = (await res.json()) as { access_token?: string; expires_in?: number };
+  if (!j.access_token) throw new HttpError(401, "auth_required", "token response had no access_token");
+  accessToken = { value: j.access_token, expiresAt: Date.now() + (j.expires_in ?? 3600) * 1000 - 60_000 };
+  return accessToken.value;
+}
+
+async function colabRequest(
+  method: string,
+  path: string,
+  body?: unknown,
+  timeoutMs = 30_000,
+): Promise<{ status: number; json: any }> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const token = await ensureAccessToken();
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let res: Response;
+    try {
+      res = await fetch(COLAB_BASE + path, {
+        method,
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: body === undefined ? undefined : JSON.stringify(body),
+        signal: controller.signal,
+      });
+    } catch (err) {
+      clearTimeout(timer);
+      if ((err as Error)?.name === "AbortError") throw new HttpError(504, "timeout");
+      throw new HttpError(502, "offline");
+    }
+    clearTimeout(timer);
+    if (res.status !== 401) {
+      const text = await res.text();
+      let json: any = null;
+      try {
+        json = text ? JSON.parse(text) : null;
+      } catch {
+        json = null;
+      }
+      return { status: res.status, json };
+    }
+    accessToken = null; // stale — refresh once, then retry
+  }
+  throw new HttpError(401, "auth_required");
+}
+
+function colabError(status: number, json: any): HttpError {
+  const googleStatus = String(json?.error?.status ?? "");
+  const message = String(json?.error?.message ?? "").slice(0, 200);
+  if (status === 401 || status === 403) return new HttpError(401, "auth_required", message);
+  if (status === 429) return new HttpError(429, "quota_exceeded", message);
+  if (googleStatus === "FAILED_PRECONDITION") return new HttpError(403, "policy_restricted", message);
+  if (status === 503 || googleStatus === "UNAVAILABLE") return new HttpError(503, "offline", message);
+  return new HttpError(502, "colab_error", message);
+}
+
+async function pickEligibleSpec(): Promise<{ variant: string; accelerator: string; shape: string }> {
+  const { status, json } = await colabRequest("GET", "/v1beta/runtimespecs");
+  if (status !== 200) throw colabError(status, json);
+  const specs: any[] = json?.runtimeSpecs ?? [];
+  const hit = specs.find(
+    (e: any) =>
+      e?.eligible &&
+      e?.key?.variant === "VARIANT_GPU" &&
+      e?.key?.accelerator === SPEC_ACCELERATOR &&
+      e?.key?.shape === `SHAPE_${SPEC_SHAPE}`,
+  );
+  if (!hit) {
+    throw new HttpError(403, "policy_restricted", `${SPEC_ACCELERATOR} ${SPEC_SHAPE} is not eligible for this account right now`);
+  }
+  return hit.key;
+}
+
+function maskRuntime(r: OwnedRuntime) {
+  return {
+    name: r.name,
+    url: r.url,
+    spec: r.spec,
+    adoptedAt: r.adoptedAt,
+    tokenExpiresAt: r.tokenExpireTime,
+    tokenPresent: true, // the token itself never leaves this process
+  };
+}
+
+// Adopt a runtime this gateway created before a restart. Only names carrying
+// our prefix are ever touched; another session's runtime is never managed.
+async function reconcile(): Promise<void> {
+  if (!creds) return;
+  const { status, json } = await colabRequest("GET", "/v1beta/runtimes");
+  if (status !== 200) throw colabError(status, json);
+  const mine: any[] = (json?.runtimes ?? []).filter((r: any) => r?.name?.startsWith(`runtimes/${RUNTIME_PREFIX}`));
+  if (mine.length > 1) {
+    console.warn("[rgm-gateway] lifecycle: multiple owned runtimes; adopting the first, delete the rest by hand");
+  }
+  if (mine.length > 0) {
+    const r = mine[0];
+    owned = {
+      name: r.name,
+      url: r.connectionInfo?.url ?? "",
+      spec: r.runtimeSpec ?? { variant: "VARIANT_GPU", accelerator: SPEC_ACCELERATOR, shape: `SHAPE_${SPEC_SHAPE}` },
+      adoptedAt: new Date().toISOString(),
+      tokenExpireTime: r.connectionInfo?.expireTime ?? "",
+    };
+    console.log(`[rgm-gateway] lifecycle: adopted existing runtime ${owned.name}`);
+  }
+}
+
+async function startRuntime(): Promise<Response> {
+  if (provisioning) return errJson(409, "provisioning_in_progress");
+  if (owned) return Response.json({ runtime: maskRuntime(owned), state: "ready", reused: true });
+  if (!creds) return errJson(401, "auth_required");
+  provisioning = true;
+  try {
+    const spec = await pickEligibleSpec();
+    const runtimeId = RUNTIME_PREFIX + crypto.randomUUID().slice(0, 8);
+    const { status, json } = await colabRequest("POST", `/v1beta/runtimes?runtimeId=${runtimeId}`, { runtimeSpec: spec });
+    if (status !== 200 && status !== 201) throw colabError(status, json);
+    const name = `runtimes/${runtimeId}`;
+    const deadline = Date.now() + CREATE_TIMEOUT_MS;
+    for (;;) {
+      const got = await colabRequest("GET", `/v1beta/${name}`);
+      if (got.status === 200) {
+        const url = got.json?.connectionInfo?.url;
+        if (url) {
+          owned = {
+            name,
+            url,
+            spec: got.json?.runtimeSpec ?? spec,
+            adoptedAt: new Date().toISOString(),
+            tokenExpireTime: got.json?.connectionInfo?.expireTime ?? "",
+          };
+          console.log(`[rgm-gateway] lifecycle: runtime ready ${name} (${SPEC_ACCELERATOR} ${SPEC_SHAPE})`);
+          return Response.json({ runtime: maskRuntime(owned), state: "ready" });
+        }
+      } else if (got.status !== 404) {
+        throw colabError(got.status, got.json);
+      }
+      if (Date.now() > deadline) {
+        throw new HttpError(504, "timeout", "runtime created but connectionInfo never appeared");
+      }
+      await new Promise((r) => setTimeout(r, 5_000));
+    }
+  } finally {
+    provisioning = false;
+  }
+}
+
+async function statusRuntime(): Promise<Response> {
+  if (owned) {
+    // Refresh the short-lived proxy token and catch external deletion.
+    const got = await colabRequest("GET", `/v1beta/${owned.name}`);
+    if (got.status === 404) {
+      owned = null; // deleted outside the gateway (e.g. Colab-side idle reaping)
+    } else if (got.status !== 200) {
+      throw colabError(got.status, got.json);
+    } else {
+      owned = {
+        ...owned,
+        url: got.json?.connectionInfo?.url ?? owned.url,
+        tokenExpireTime: got.json?.connectionInfo?.expireTime ?? owned.tokenExpireTime,
+      };
+    }
+  } else {
+    await reconcile(); // adopt a runtime this gateway created before a restart
+  }
+  const remaining = idleMinutes > 0 ? Math.max(0, idleMinutes * 60_000 - (Date.now() - lastWorkAt)) : null;
+  return Response.json({
+    runtime: owned ? maskRuntime(owned) : null,
+    state: provisioning ? "starting" : owned ? "ready" : "offline",
+    idle: {
+      minutes: idleMinutes,
+      lastWorkAt: new Date(lastWorkAt).toISOString(),
+      remainingSeconds: remaining === null ? null : Math.round(remaining / 1000),
+    },
+  });
+}
+
+async function stopRuntime(): Promise<Response> {
+  if (!owned) return errJson(404, "no_owned_runtime");
+  const name = owned.name;
+  const { status, json } = await colabRequest("DELETE", `/v1beta/${name}`);
+  if (status !== 200 && status !== 204 && status !== 404) throw colabError(status, json);
+  // PRD R-06: status must confirm deletion, not merely a stop request.
+  const check = await colabRequest("GET", `/v1beta/${name}`);
+  if (check.status === 404) {
+    owned = null;
+    console.log(`[rgm-gateway] lifecycle: deleted ${name} (confirmed)`);
+    return Response.json({ deleted: true, name, confirmed: true });
+  }
+  return Response.json(
+    {
+      deleted: false,
+      name,
+      confirmed: false,
+      detail: "delete accepted but runtime still listed; recheck GET /gateway/v1/runtime",
+    },
+    { status: 202 },
+  );
+}
+
+async function putCredentials(req: Request): Promise<Response> {
+  let body: any;
+  try {
+    body = JSON.parse(new TextDecoder().decode(await readBounded(req, 8192)));
+  } catch {
+    return errJson(400, "invalid_json");
+  }
+  const { client_id, client_secret, refresh_token } = body ?? {};
+  if (![client_id, client_secret, refresh_token].every((v) => typeof v === "string" && v.length > 0)) {
+    return errJson(400, "credentials_invalid");
+  }
+  creds = { clientId: client_id, clientSecret: client_secret, refreshToken: refresh_token };
+  accessToken = null;
+  console.log("[rgm-gateway] lifecycle: Colab credentials stored in memory (enclave custody per ADR-006)");
+  return Response.json({ ok: true });
+}
+
+// PRD R-06 fixes the dashboard choices at 5/10/15/30 min or disabled. Values
+// under one minute exist for tests and diagnostics; anything else is refused.
+const PRD_IDLE_CHOICES = new Set([5, 10, 15, 30]);
+function setIdle(body: any): Response {
+  const minutes = body?.minutes;
+  if (minutes === null || minutes === 0) {
+    idleMinutes = 0;
+    return Response.json({ idleMinutes: 0, idle: "disabled" });
+  }
+  if (
+    typeof minutes !== "number" ||
+    !Number.isFinite(minutes) ||
+    minutes < 0.01 ||
+    minutes > 1440 ||
+    (minutes >= 1 && !PRD_IDLE_CHOICES.has(minutes))
+  ) {
+    return errJson(400, "idle_minutes_invalid");
+  }
+  idleMinutes = minutes;
+  noteWork(); // a configuration change is operator intent, not idleness
+  return Response.json({ idleMinutes });
+}
+
+async function handleRuntime(req: Request, path: string): Promise<Response> {
+  if (path === "/gateway/v1/runtime/credentials") {
+    if (req.method === "POST") return putCredentials(req);
+    if (req.method === "DELETE") {
+      creds = null;
+      accessToken = null;
+      console.log("[rgm-gateway] lifecycle: credentials cleared from memory");
+      return Response.json({ ok: true, cleared: true });
+    }
+  }
+  if (path === "/gateway/v1/runtime") {
+    if (req.method === "POST") return startRuntime();
+    if (req.method === "GET") return statusRuntime();
+    if (req.method === "DELETE") return stopRuntime();
+  }
+  if (path === "/gateway/v1/runtime/idle" && req.method === "PUT") {
+    let body: any;
+    try {
+      body = JSON.parse(new TextDecoder().decode(await readBounded(req, 4096)));
+    } catch {
+      return errJson(400, "invalid_json");
+    }
+    return setIdle(body);
+  }
+  return errJson(404, "route_not_allowed");
+}
+
+// Idle shutdown (PRD R-06): after N minutes without real work, release the
+// owned runtime via the supported API. The queue is rechecked under the lock so
+// a queued or running job always holds the runtime. Failure to verify keeps it.
+if (LIFECYCLE_ENABLED) {
+  setInterval(() => {
+    void (async () => {
+      try {
+        if (!owned || idleMinutes <= 0 || provisioning) return;
+        if (Date.now() - lastWorkAt < idleMinutes * 60_000) return;
+        const queueRule = ROUTES.find((r) => r.method === "GET" && r.pattern.test("/queue"));
+        if (!queueRule) return;
+        // Same injected auth as the proxy path — a bare GET here returns 401.
+        const q = await fetchUpstream("/queue", { method: "GET", headers: upstreamHeaders() }, queueRule);
+        const j = JSON.parse(new TextDecoder().decode(q.body));
+        const depth = (j.queue_running?.length ?? 0) + (j.queue_pending?.length ?? 0);
+        if (depth > 0) {
+          noteWork();
+          return;
+        }
+        console.log(`[rgm-gateway] lifecycle: idle ${idleMinutes} min without work; deleting ${owned.name}`);
+        await stopRuntime();
+      } catch (err) {
+        console.warn(`[rgm-gateway] lifecycle idle check skipped: ${String((err as Error)?.message ?? err).slice(0, 120)}`);
+      }
+    })();
+  }, IDLE_CHECK_MS);
 }
 
 /* ---------------- server ---------------- */
@@ -394,11 +771,16 @@ const server = Bun.serve<WsData>({
       // than waiting out the whole 10-15 s tunnel transfer.
       if (path === "/view") {
         const res = await proxyStreamingView(path + url.search, upstreamInit, rule);
+        if (res.ok) noteWork(); // result retrieval is real work (PRD R-05)
         audit(req.method, path, res.status, ms());
         return res;
       }
 
       const upstream = await fetchUpstream(path + (req.method === "GET" ? url.search : ""), upstreamInit, rule);
+
+      if (upstream.status >= 200 && upstream.status < 300 && isWorkRoute(req.method, path)) {
+        noteWork(); // submission / result retrieval / authorized asset install
+      }
 
       if (rule.expectJson && upstream.status >= 200 && upstream.status < 300) {
         try {
@@ -463,6 +845,7 @@ const server = Bun.serve<WsData>({
       });
     },
     message(ws, message) {
+      noteWork(); // an active execution session is real work (PRD R-05)
       const upstream = ws.data.upstream;
       if (upstream && upstream.readyState === WebSocket.OPEN) {
         try {
@@ -487,5 +870,6 @@ const server = Bun.serve<WsData>({
 });
 
 console.log(
-  `remote-gpu-manager gateway ${VERSION} on 127.0.0.1:${GATEWAY_PORT} -> ${GATEWAY_UPSTREAM} (auth: ${AUTHORIZATION ? "basic" : "NONE"})`,
+  `remote-gpu-manager gateway ${VERSION} on 127.0.0.1:${GATEWAY_PORT} -> ${GATEWAY_UPSTREAM} ` +
+    `(auth: ${AUTHORIZATION ? "basic" : "NONE"}; lifecycle: ${LIFECYCLE_ENABLED ? "on" : "off (manual mode)"})`,
 );

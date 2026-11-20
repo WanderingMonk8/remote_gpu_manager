@@ -27,6 +27,9 @@ const EXECUTION_MS = Number(process.env.MOCK_EXECUTION_MS || 150);
 // Delay before the first /view byte. Used to reproduce slow tunnel transfers
 // (an 11-13 s image) without needing a multi-megabyte fixture.
 const VIEW_DELAY_MS = Number(process.env.MOCK_VIEW_DELAY_MS || 0);
+// Non-zero makes GET /queue report that many running jobs, so the gateway's
+// idle timer must hold the runtime (PRD R-05). Default 0 keeps the queue empty.
+const QUEUE_DEPTH = Number(process.env.MOCK_QUEUE_DEPTH || 0);
 
 // 1x1 transparent PNG
 const TINY_PNG = Buffer.from(
@@ -282,7 +285,10 @@ const server = Bun.serve({
     }
 
     if (req.method === "GET" && path === "/queue") {
-      return json({ queue_running: [], queue_pending: [] });
+      return json({
+        queue_running: QUEUE_DEPTH > 0 ? Array.from({ length: QUEUE_DEPTH }, () => ({})) : [],
+        queue_pending: [],
+      });
     }
 
     if (req.method === "POST" && path === "/queue") {
