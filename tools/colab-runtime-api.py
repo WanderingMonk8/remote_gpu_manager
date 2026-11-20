@@ -56,6 +56,8 @@ SCOPES = ["https://www.googleapis.com/auth/colaboratory"]
 BASE = "https://colaboratory.googleapis.com"
 CLIENT_SECRET = Path(__file__).with_name("client_secret.json")
 RESULT_PATH = Path(__file__).resolve().parent.parent / "docs" / "colab-runtime-api-result.json"
+# Local testing only. In production the gateway receives these from the enclave.
+CREDS_PATH = Path(__file__).with_name(".colab-creds.json")
 
 CREATE_TIMEOUT = 300        # seconds to wait for allocation
 POLL_SECONDS = 5
@@ -106,7 +108,7 @@ def explain_error(status, payload):
 # --------------------------------------------------------------------------- #
 # Helpers
 # --------------------------------------------------------------------------- #
-def auth():
+def auth(offline: bool = False):
     try:
         from google_auth_oauthlib.flow import InstalledAppFlow
     except ImportError:
@@ -124,10 +126,15 @@ def auth():
     creds = flow.run_local_server(
         port=0,
         prompt="consent",
+        # access_type=offline is what makes Google return a refresh token, which
+        # is what the gateway needs to act unattended later.
+        access_type="offline" if offline else None,
         authorization_prompt_message="Authorize runtime create/delete on your Colab account: "
                                   "{url}",
         success_message="Authorized. You can close this tab.",
     )
+    if offline:
+        return creds
     return creds.token  # in memory only
 
 
@@ -262,17 +269,46 @@ def cmd_create(token, accelerator, keep):
     return 0 if cmd_delete(token, created) else 4
 
 
+def cmd_creds():
+    """One-time consent, saving what the gateway needs to act unattended."""
+    creds = auth(offline=True)
+    if not creds.refresh_token:
+        sys.exit("Google did not return a refresh token. Revoke this app's access at "
+                 "https://myaccount.google.com/permissions and run it again.")
+    client = json.loads(CLIENT_SECRET.read_text(encoding="utf-8"))
+    key = next(iter(client))
+    payload = {
+        "client_id": client[key]["client_id"],
+        "client_secret": client[key]["client_secret"],
+        "refresh_token": creds.refresh_token,
+    }
+    CREDS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    CREDS_PATH.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    try:
+        CREDS_PATH.chmod(0o600)
+    except OSError:
+        pass
+    print(f"\nSaved credentials to {CREDS_PATH} (gitignored).")
+    print("The gateway reads these through the enclave in production; this file is")
+    print("for local testing only. Delete it when you are done testing.")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Colab runtime create/delete spike.")
     sub = parser.add_subparsers(dest="command")
     sub.add_parser("specs", help="list runtime specs and eligibility (read-only)")
     sub.add_parser("list", help="list assigned runtimes (read-only)")
+    sub.add_parser("creds", help="one-time consent; save creds for the gateway")
     p_create = sub.add_parser("create", help="create a runtime, report, then delete it")
     p_create.add_argument("--keep", action="store_true", help="leave the runtime running")
     p_create.add_argument("--accelerator", default="T4", help="T4, L4, A100 (default T4)")
     p_delete = sub.add_parser("delete", help="delete a runtime by name")
     p_delete.add_argument("name", help="runtimes/xxxx")
     args = parser.parse_args()
+
+    if args.command == "creds":
+        cmd_creds()
+        return
 
     token = auth()
     if args.command in (None, "specs"):

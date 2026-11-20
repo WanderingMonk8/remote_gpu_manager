@@ -27,3 +27,6 @@ docs/colab-eligibility-result.json
 __pycache__/
 *.pyc
 
+
+# Local OAuth credentials for lifecycle testing (never commit)
+tools/.colab-creds.json
