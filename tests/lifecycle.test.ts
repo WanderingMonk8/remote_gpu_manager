@@ -120,7 +120,7 @@ beforeAll(async () => {
   await waitFor(async () => (await fetch(`${baseBusy()}/system_stats`)).ok);
   await waitFor(async () => (await fetch(`${colabBase()}/v1beta/runtimespecs`)).ok);
   await waitFor(async () => (await fetch(`http://127.0.0.1:${COLAB_FAIL_PORT}/v1beta/runtimespecs`)).ok);
-});
+}, 30_000);
 
 afterAll(() => {
   gw?.kill("SIGKILL");

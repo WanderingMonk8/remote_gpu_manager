@@ -110,7 +110,7 @@ beforeAll(async () => {
     stderr: "ignore",
   });
   await waitFor(async () => (await fetch(`${gwSlow()}/system_stats`)).ok);
-});
+}, 30_000);
 
 afterAll(() => {
   mock?.kill("SIGKILL");
