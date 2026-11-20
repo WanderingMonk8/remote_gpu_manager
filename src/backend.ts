@@ -76,6 +76,11 @@ spindle.onFrontendMessage(async (payload: any, userId?: string) => {
           result = { status: "running" };
           break;
         case "automation_gpu_specs": result = await automation.gpuSpecs(userId); break;
+        case "automation_gpu_choice_get": result = { choice: await automation.getGpuPreference(userId) }; break;
+        case "automation_gpu_choice_save":
+          await automation.saveGpuPreference(userId, payload.choice);
+          result = { saved: true };
+          break;
         case "automation_poll": result = await automation.poll(userId); break;
         case "automation_status": result = await automation.status(userId); break;
         case "automation_stop": result = await automation.stop(userId, payload.force === true); break;

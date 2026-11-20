@@ -18,9 +18,15 @@ const SECRETS = "automation-credentials-v1";
 const STATE = "automation-tailnet-state-v1";
 const DRIVE = "automation-drive-cache-v1";
 const PICKER = "automation-picker-config-v1";
+const GPU = "automation-gpu-preference-v1";
 export type DriveFile = { id: string; name: string };
 export type PickerConfig = { clientId: string; apiKey: string; projectNumber: string };
-export type GpuChoice = { accelerator: string; shape: string; confirmNonDefault: boolean };
+export type GpuPreference = { accelerator: string; shape: string };
+export type GpuChoice = GpuPreference & { confirmNonDefault: boolean };
+export function validGpuPreference(choice: any): choice is GpuPreference {
+  return typeof choice?.accelerator === "string" && /^[A-Z0-9_]{1,40}$/.test(choice.accelerator) &&
+    typeof choice?.shape === "string" && /^SHAPE_[A-Z0-9_]{1,40}$/.test(choice.shape);
+}
 const DEFAULT_FILES = ["moss_image_sft_int8_convrot.safetensors", "qwen3.5_9b_w4a8_gptq.safetensors", "flux2-vae_small.safetensors"];
 const MODEL_FILES = new Set([...DEFAULT_FILES, "moss_image_base_int8_convrot.safetensors", "qwen_3_06b_base.safetensors", "qwen_image_vae.safetensors",
   ...["base-v1.0", "turbo-v1.0", "turbo-v1.1", "aesthetic-v1.0", "aesthetic-v1.0b", "aesthetic-v1.1"].map(name => `anima-${name}.safetensors`)]);
@@ -38,6 +44,21 @@ export function driveSelectionIssue(files: DriveFile[]): string | null {
 
 export class AutomationController {
   constructor(private store: AutomationStore, private call: GatewayCall) {}
+
+  async saveGpuPreference(user: string, choice: GpuPreference): Promise<void> {
+    if (!user) throw new Error("user_required");
+    if (!validGpuPreference(choice)) throw new Error("gpu_preference_invalid");
+    await this.store.put(GPU, JSON.stringify({ accelerator: choice.accelerator, shape: choice.shape }), user);
+  }
+
+  async getGpuPreference(user: string): Promise<GpuPreference | null> {
+    if (!user) throw new Error("user_required");
+    const saved = await this.store.get(GPU, user);
+    if (!saved) return null;
+    const choice = JSON.parse(saved);
+    if (!validGpuPreference(choice)) throw new Error("gpu_preference_invalid");
+    return { accelerator: choice.accelerator, shape: choice.shape };
+  }
 
   async savePickerConfig(user: string, config: PickerConfig): Promise<void> {
     if (!user || !config || typeof config.clientId !== "string" || !config.clientId.trim() ||
@@ -111,6 +132,7 @@ export class AutomationController {
 
   async start(user: string, choice?: GpuChoice): Promise<void> {
     const s = await this.secrets(user);
+    if (choice) await this.saveGpuPreference(user, choice);
     const savedState = await this.store.get(STATE, user);
     const state = savedState ? JSON.parse(savedState) : {};
     const savedDrive = await this.store.get(DRIVE, user);

@@ -30,6 +30,23 @@ describe("automation controller", () => {
       .toEqual({ accelerator: "L4", shape: "SHAPE_STANDARD", confirm_non_default: true });
   });
 
+  test("saves and changes the GPU preference per user without allocating or saving confirmation", async () => {
+    const entries = new Map<string, string>();
+    const calls: string[] = [];
+    const controller = new AutomationController({
+      async get(key, user) { return entries.get(`${user}:${key}`) ?? null; },
+      async put(key, value, user) { entries.set(`${user}:${key}`, value); },
+    }, async path => { calls.push(path); return {}; });
+    await controller.saveGpuPreference("owner", { accelerator: "L4", shape: "SHAPE_STANDARD", confirmNonDefault: true } as any);
+    expect(await controller.getGpuPreference("owner")).toEqual({ accelerator: "L4", shape: "SHAPE_STANDARD" });
+    expect(await controller.getGpuPreference("other")).toBeNull();
+    await expect(controller.saveGpuPreference("owner", { accelerator: "invalid gpu", shape: "SHAPE_STANDARD" })).rejects.toThrow("gpu_preference_invalid");
+    expect((await controller.getGpuPreference("owner"))?.accelerator).toBe("L4");
+    await controller.saveGpuPreference("owner", { accelerator: "T4", shape: "SHAPE_STANDARD" });
+    expect((await controller.getGpuPreference("owner"))?.accelerator).toBe("T4");
+    expect(calls).toEqual([]);
+  });
+
   test("distinguishes Picker selection problems without exposing file IDs", () => {
     expect(driveSelectionIssue([])).toBe("drive_selection_empty");
     expect(driveSelectionIssue([{ id: "valid-id", name: "wrong-file.safetensors" }])).toBe("drive_selection_unrecognized");
