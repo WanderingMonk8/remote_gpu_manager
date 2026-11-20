@@ -273,31 +273,3 @@ Three findings from preparing the spike that change the risk profile and must no
 T5 stays "selected for trial", not "accepted", until measurements 1–7 in the spike document are
 recorded. If T5 fails, the fallback order in §4.3 stands: T4 (named tunnel, needs the ~$10/yr
 decision), then Layer 1 alone (one paste per session).
-
-### 13.1 Colab trial, 2026-11-19: functional pass
-
-The spike was run on Colab and the owner reports the Funnel path working end to end: multiple
-1024 px generations went through it, and the worker kept working across a Colab disconnect and
-reconnect. Two of the risks that could have disqualified T5 outright are therefore settled:
-
-- **Egress (risk 5) is not blocked.** `tailscaled` reached the control plane and DERP from a Colab
-  runtime with `--tun=userspace-networking`.
-- **The relay carries a real session, not just a health check.** Generations completed through
-  `funnel` → Caddy → ComfyUI on 443.
-
-A fifth finding that belongs with the three above, because it is a constraint on any future
-implementation rather than a detail of this cell:
-
-4. **`tailscaled`'s state directory cannot live on Drive.** It creates a unix socket inside
-   `--statedir`, and the Drive FUSE mount cannot host sockets — the daemon exits in under a second.
-   The state file itself is also a poor fit for FUSE (`flock`, atomic rename). The working shape is
-   the one now in the notebook: run on `/content/ts-run`, mirror `tailscaled.state` and `certs/` to
-   Drive after the certificate is issued, restore on the next start. The first run of the spike
-   failed exactly here, which is why the design is recorded rather than left implicit.
-
-T5 is "selected and working", still not "accepted". What remains before acceptance is evidence, not
-opinion: proof that the post-reconnect run was a *fresh VM* restoring state from Drive (otherwise the
-tunnel never restarted and the premise is untested), the §5 throughput numbers — especially a
-1.3–1.4 MB `/view` body — and a `/ws` → `101` through the Funnel. See
-`docs/spike-tailscale-funnel.md` §8.
-
