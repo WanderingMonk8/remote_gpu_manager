@@ -431,6 +431,7 @@ interface OwnedRuntime {
 }
 let owned: OwnedRuntime | null = null;
 let provisioning = false;
+let bootstrapJob: { status: "running" | "finished"; httpStatus?: number; result?: unknown } | null = null;
 // An interrupted create may still succeed at Google. Never issue another create
 // in this process until the ambiguous operation is resolved by an operator.
 let uncertainCreate = false;
@@ -570,7 +571,7 @@ async function reconcile(): Promise<void> {
 }
 
 async function startRuntime(): Promise<Response> {
-  if (provisioning) return errJson(409, "provisioning_in_progress");
+  if (provisioning || bootstrapJob?.status === "running") return errJson(409, "provisioning_in_progress");
   if (owned) return Response.json({ runtime: maskRuntime(owned), state: owned.url ? "ready" : "starting", reused: true });
   if (!creds) return errJson(401, "auth_required");
   if (uncertainCreate) return errJson(409, "allocation_uncertain");
@@ -656,7 +657,7 @@ async function statusRuntime(): Promise<Response> {
 }
 
 async function stopRuntime(): Promise<Response> {
-  if (provisioning) return errJson(409, "provisioning_in_progress");
+  if (provisioning || bootstrapJob?.status === "running") return errJson(409, "provisioning_in_progress");
   if (!owned) return errJson(404, "no_owned_runtime");
   const name = owned.name;
   const { status, json } = await colabRequest("DELETE", `/v1beta/${name}`);
@@ -727,6 +728,39 @@ async function bootstrapRuntime(req: Request): Promise<Response> {
   }
 }
 
+async function bootstrapControl(req: Request): Promise<Response> {
+  if (!BOOTSTRAP_ENABLED) return errJson(403, "bootstrap_disabled");
+  const headers = { "Cache-Control": "no-store" };
+  if (req.method === "GET") {
+    return Response.json(bootstrapJob ?? { status: "idle" }, { headers });
+  }
+  if (req.method === "DELETE") {
+    if (bootstrapJob?.status === "running") return errJson(409, "provisioning_in_progress");
+    bootstrapJob = null;
+    return Response.json({ ok: true }, { headers });
+  }
+  if (req.method !== "POST") return errJson(405, "method_not_allowed");
+  if (bootstrapJob) return errJson(409, "bootstrap_result_pending");
+  bootstrapJob = { status: "running" };
+  let input: ArrayBuffer;
+  try {
+    input = await readBounded(req, 8 * 1024 * 1024);
+  } catch {
+    bootstrapJob = null;
+    return errJson(400, "bootstrap_input_invalid");
+  }
+  const privateRequest = new Request("http://127.0.0.1/", { method: "POST", body: input });
+  void (async () => {
+    try {
+      const response = await bootstrapRuntime(privateRequest);
+      bootstrapJob = { status: "finished", httpStatus: response.status, result: await response.json() };
+    } catch {
+      bootstrapJob = { status: "finished", httpStatus: 500, result: { error: "bootstrap_failed" } };
+    }
+  })();
+  return Response.json({ status: "running" }, { status: 202, headers });
+}
+
 async function putCredentials(req: Request): Promise<Response> {
   let body: any;
   try {
@@ -768,7 +802,7 @@ function setIdle(body: any): Response {
 }
 
 async function handleRuntime(req: Request, path: string): Promise<Response> {
-  if (path === "/gateway/v1/runtime/bootstrap" && req.method === "POST") return bootstrapRuntime(req);
+  if (path === "/gateway/v1/runtime/bootstrap") return bootstrapControl(req);
   if (path === "/gateway/v1/runtime/credentials") {
     if (req.method === "POST") return putCredentials(req);
     if (req.method === "DELETE") {
@@ -802,7 +836,7 @@ if (LIFECYCLE_ENABLED) {
   setInterval(() => {
     void (async () => {
       try {
-        if (!owned || idleMinutes <= 0 || provisioning) return;
+        if (!owned || idleMinutes <= 0 || provisioning || bootstrapJob?.status === "running") return;
         if (Date.now() - lastWorkAt < idleMinutes * 60_000) return;
         const queueRule = ROUTES.find((r) => r.method === "GET" && r.pattern.test("/queue"));
         if (!queueRule) return;

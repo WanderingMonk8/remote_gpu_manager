@@ -202,11 +202,18 @@ describe("start / status / stop", () => {
         method: "POST", headers: { ...auth, "Content-Type": "application/json" },
         body: JSON.stringify({ ts_authkey: "key", basic_user: "user", basic_pass: "secret", state: {} }),
       });
-      const data = await response.json();
-      expect(response.status).toBe(200);
+      expect(response.status).toBe(202);
+      await waitFor(async () => {
+        const job = await (await fetch(`${url}/gateway/v1/runtime/bootstrap`, { headers: auth })).json();
+        return job.status === "finished";
+      });
+      const job = await (await fetch(`${url}/gateway/v1/runtime/bootstrap`, { headers: auth })).json();
+      expect(job.httpStatus).toBe(200);
+      const data = job.result;
       expect(data.upstream).toBe("https://mock.ts.net");
       expect(data.state["tailscaled.state"]).toBe("c2VjcmV0");
       expect(JSON.stringify(data)).not.toContain("mock-proxy-token-SECRET");
+      expect((await fetch(`${url}/gateway/v1/runtime/bootstrap`, { method: "DELETE", headers: auth })).status).toBe(200);
     } finally {
       await fetch(`${url}/gateway/v1/runtime`, { method: "DELETE", headers: auth }).catch(() => {});
       gateway.kill("SIGKILL");

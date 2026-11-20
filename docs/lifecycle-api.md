@@ -73,10 +73,13 @@ The response contains `state`, which is sensitive and must be saved in the
 Spindle enclave by the caller. Do not log or display it. Python and the
 `websocket-client` package are required in the host environment.
 
-This is a synchronous experimental route: the extension does not yet store or
-send these credentials or persist the returned state. It is therefore not yet a
-complete or restart-safe automation flow. Bootstrap can take longer than an
-HTTP client or proxy timeout. Allocation recovery is not durable, and a
+The POST returns `202` immediately; poll `GET /gateway/v1/runtime/bootstrap`
+until `status` is `finished`. Its `httpStatus` and `result` contain the outcome.
+The caller must persist the returned state securely before clearing the result
+with `DELETE /gateway/v1/runtime/bootstrap`. Only one result is held, in memory;
+it is lost on gateway restart. The extension does not yet store or send these
+credentials or persist the returned state, so this is not yet a complete or
+restart-safe automation flow. Allocation recovery is not durable, and a
 separate post-bootstrap authenticated worker health check is still needed.
 Keep this feature disabled until those gaps are addressed. No production
 Space deployment is implied by its presence in the repository.
