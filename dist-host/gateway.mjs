@@ -306,6 +306,7 @@ var creds = null;
 var accessToken = null;
 var owned = null;
 var provisioning = false;
+var uncertainCreate = false;
 var lastWorkAt = Date.now();
 function noteWork() {
   lastWorkAt = Date.now();
@@ -406,7 +407,7 @@ function maskRuntime(r) {
     spec: r.spec,
     adoptedAt: r.adoptedAt,
     tokenExpiresAt: r.tokenExpireTime,
-    tokenPresent: true
+    tokenPresent: Boolean(r.url)
   };
 }
 async function reconcile() {
@@ -417,7 +418,7 @@ async function reconcile() {
     throw colabError(status, json);
   const mine = (json?.runtimes ?? []).filter((r) => r?.name?.startsWith(`runtimes/${RUNTIME_PREFIX}`));
   if (mine.length > 1) {
-    console.warn("[rgm-gateway] lifecycle: multiple owned runtimes; adopting the first, delete the rest by hand");
+    throw new HttpError(409, "multiple_owned_runtimes", "Resolve multiple manager runtimes before continuing");
   }
   if (mine.length > 0) {
     const r = mine[0];
@@ -435,17 +436,33 @@ async function startRuntime() {
   if (provisioning)
     return errJson(409, "provisioning_in_progress");
   if (owned)
-    return Response.json({ runtime: maskRuntime(owned), state: "ready", reused: true });
+    return Response.json({ runtime: maskRuntime(owned), state: owned.url ? "ready" : "starting", reused: true });
   if (!creds)
     return errJson(401, "auth_required");
+  if (uncertainCreate)
+    return errJson(409, "allocation_uncertain");
   provisioning = true;
   try {
+    await reconcile();
+    if (owned)
+      return Response.json({ runtime: maskRuntime(owned), state: "ready", reused: true });
     const spec = await pickEligibleSpec();
     const runtimeId = RUNTIME_PREFIX + crypto.randomUUID().slice(0, 8);
-    const { status, json } = await colabRequest("POST", `/v1beta/runtimes?runtimeId=${runtimeId}`, { runtimeSpec: spec });
-    if (status !== 200 && status !== 201)
+    let created;
+    try {
+      created = await colabRequest("POST", `/v1beta/runtimes?runtimeId=${runtimeId}`, { runtimeSpec: spec });
+    } catch (error) {
+      uncertainCreate = true;
+      throw error;
+    }
+    const { status, json } = created;
+    if (status !== 200 && status !== 201) {
+      if (status >= 500)
+        uncertainCreate = true;
       throw colabError(status, json);
+    }
     const name = `runtimes/${runtimeId}`;
+    owned = { name, url: "", spec, adoptedAt: new Date().toISOString(), tokenExpireTime: "" };
     const deadline = Date.now() + CREATE_TIMEOUT_MS;
     for (;; ) {
       const got = await colabRequest("GET", `/v1beta/${name}`);
@@ -494,7 +511,7 @@ async function statusRuntime() {
   const remaining = idleMinutes > 0 ? Math.max(0, idleMinutes * 60000 - (Date.now() - lastWorkAt)) : null;
   return Response.json({
     runtime: owned ? maskRuntime(owned) : null,
-    state: provisioning ? "starting" : owned ? "ready" : "offline",
+    state: provisioning || owned && !owned.url ? "starting" : owned ? "ready" : "offline",
     idle: {
       minutes: idleMinutes,
       lastWorkAt: new Date(lastWorkAt).toISOString(),

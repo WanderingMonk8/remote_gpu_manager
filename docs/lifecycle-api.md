@@ -80,6 +80,15 @@ POST /gateway/v1/runtime  ->  200
 
 - Single-flight: a second `POST` while one is in progress returns `409 provisioning_in_progress`.
 - A `POST` while already ready returns `200` with `"reused": true` — no second allocation.
+- Before creating, the gateway lists manager-prefixed runtimes and reuses an existing
+  one; if there are multiple, it refuses with `multiple_owned_runtimes` for manual
+  reconciliation. This is not an interprocess lock: run only one controller.
+- If the create request has an ambiguous transport or server failure, further starts
+  in that process fail with `allocation_uncertain`. Inspect Colab before recovery.
+  This guard is in memory and does not survive a restart, so it is not yet a durable
+  solution for delayed or eventually consistent allocation.
+- After a successful create, the gateway retains the runtime handle even when
+  connection polling fails, allowing status and stop to find it.
 - Only runtimes named `rgm-gw-*` are ever created, adopted or deleted. Another
   session's runtime is never touched.
 - `connectionInfo.token` is a short-lived credential and is deliberately **not**
@@ -152,6 +161,8 @@ PUT /gateway/v1/runtime/idle   {"minutes": 10}
 | `offline` | 502/503 | Colab unreachable |
 | `timeout` | 504 | Created but `connectionInfo` never appeared |
 | `provisioning_in_progress` | 409 | Concurrent start |
+| `multiple_owned_runtimes` | 409 | More than one manager-prefixed runtime requires manual reconciliation |
+| `allocation_uncertain` | 409 | A create may have succeeded despite an ambiguous failure |
 | `no_owned_runtime` | 404 | Stop with nothing owned |
 | `idle_minutes_invalid` | 400 | Not in the R-06 set |
 

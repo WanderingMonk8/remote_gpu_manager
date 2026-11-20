@@ -427,6 +427,9 @@ interface OwnedRuntime {
 }
 let owned: OwnedRuntime | null = null;
 let provisioning = false;
+// An interrupted create may still succeed at Google. Never issue another create
+// in this process until the ambiguous operation is resolved by an operator.
+let uncertainCreate = false;
 let lastWorkAt = Date.now();
 
 function noteWork(): void {
@@ -535,7 +538,7 @@ function maskRuntime(r: OwnedRuntime) {
     spec: r.spec,
     adoptedAt: r.adoptedAt,
     tokenExpiresAt: r.tokenExpireTime,
-    tokenPresent: true, // the token itself never leaves this process
+    tokenPresent: Boolean(r.url), // the token itself never leaves this process
   };
 }
 
@@ -547,7 +550,7 @@ async function reconcile(): Promise<void> {
   if (status !== 200) throw colabError(status, json);
   const mine: any[] = (json?.runtimes ?? []).filter((r: any) => r?.name?.startsWith(`runtimes/${RUNTIME_PREFIX}`));
   if (mine.length > 1) {
-    console.warn("[rgm-gateway] lifecycle: multiple owned runtimes; adopting the first, delete the rest by hand");
+    throw new HttpError(409, "multiple_owned_runtimes", "Resolve multiple manager runtimes before continuing");
   }
   if (mine.length > 0) {
     const r = mine[0];
@@ -564,15 +567,31 @@ async function reconcile(): Promise<void> {
 
 async function startRuntime(): Promise<Response> {
   if (provisioning) return errJson(409, "provisioning_in_progress");
-  if (owned) return Response.json({ runtime: maskRuntime(owned), state: "ready", reused: true });
+  if (owned) return Response.json({ runtime: maskRuntime(owned), state: owned.url ? "ready" : "starting", reused: true });
   if (!creds) return errJson(401, "auth_required");
+  if (uncertainCreate) return errJson(409, "allocation_uncertain");
   provisioning = true;
   try {
+    // A new gateway process must discover an existing runtime before allocating.
+    await reconcile();
+    if (owned) return Response.json({ runtime: maskRuntime(owned), state: "ready", reused: true });
     const spec = await pickEligibleSpec();
     const runtimeId = RUNTIME_PREFIX + crypto.randomUUID().slice(0, 8);
-    const { status, json } = await colabRequest("POST", `/v1beta/runtimes?runtimeId=${runtimeId}`, { runtimeSpec: spec });
-    if (status !== 200 && status !== 201) throw colabError(status, json);
+    let created: { status: number; json: any };
+    try {
+      created = await colabRequest("POST", `/v1beta/runtimes?runtimeId=${runtimeId}`, { runtimeSpec: spec });
+    } catch (error) {
+      uncertainCreate = true;
+      throw error;
+    }
+    const { status, json } = created;
+    if (status !== 200 && status !== 201) {
+      if (status >= 500) uncertainCreate = true;
+      throw colabError(status, json);
+    }
     const name = `runtimes/${runtimeId}`;
+    // Preserve the allocation handle even if connectionInfo polling fails.
+    owned = { name, url: "", spec, adoptedAt: new Date().toISOString(), tokenExpireTime: "" };
     const deadline = Date.now() + CREATE_TIMEOUT_MS;
     for (;;) {
       const got = await colabRequest("GET", `/v1beta/${name}`);
@@ -623,7 +642,7 @@ async function statusRuntime(): Promise<Response> {
   const remaining = idleMinutes > 0 ? Math.max(0, idleMinutes * 60_000 - (Date.now() - lastWorkAt)) : null;
   return Response.json({
     runtime: owned ? maskRuntime(owned) : null,
-    state: provisioning ? "starting" : owned ? "ready" : "offline",
+    state: provisioning || (owned && !owned.url) ? "starting" : owned ? "ready" : "offline",
     idle: {
       minutes: idleMinutes,
       lastWorkAt: new Date(lastWorkAt).toISOString(),
