@@ -20,3 +20,5 @@ dist/
 **/client_secret.json
 docs/colab-eligibility-result.json
 .venv/
+# Colab runtime spike output (may contain account identifiers)
+**/colab-runtime-api-result.json
