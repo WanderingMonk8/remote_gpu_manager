@@ -61,6 +61,9 @@ spindle.onFrontendMessage(async (payload: any, userId?: string) => {
           await automation.save(userId, payload.secrets);
           result = { saved: true };
           break;
+        case "automation_credentials_status":
+          result = await automation.credentialsStatus(userId);
+          break;
         case "automation_drive_status":
           result = await automation.driveStatus(userId);
           break;

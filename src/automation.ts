@@ -109,6 +109,11 @@ export class AutomationController {
     return { saved: true, complete: missing.length === 0, missing };
   }
 
+  async credentialsStatus(user: string): Promise<{ saved: boolean }> {
+    if (!user) throw new Error("user_required");
+    return { saved: (await this.store.get(SECRETS, user)) !== null };
+  }
+
   async driveStatus(user: string): Promise<{ saved: boolean; missing: string[] }> {
     if (!user) throw new Error("user_required");
     const saved = await this.store.get(DRIVE, user);

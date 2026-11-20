@@ -99,6 +99,8 @@ describe("automation controller", () => {
     await expect(controller.save("owner", { ...secrets, tailnetKey: "" })).rejects.toThrow("missing_tailnet_key");
     await expect(controller.save("owner", { ...secrets, basicUser: "invalid:user" })).rejects.toThrow("invalid_basic_user");
     await controller.save("owner", secrets);
+    expect(await controller.credentialsStatus("owner")).toEqual({ saved: true });
+    expect(await controller.credentialsStatus("other")).toEqual({ saved: false });
     await controller.save("owner", { ...secrets, clientSecret: "", basicPass: "new-password" });
     const saved = JSON.parse(entries.get("owner:automation-credentials-v1")!);
     expect(saved.clientSecret).toBe("oauth-secret");
