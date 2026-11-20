@@ -58,4 +58,17 @@ describe("automation controller", () => {
     await expect(controller.poll("owner")).rejects.toThrow();
     expect(calls).toEqual(["GET"]);
   });
+
+  test("saves node identity even when endpoint adoption failed", async () => {
+    const entries = new Map<string, string>();
+    const controller = new AutomationController({
+      async get(key) { return key === "automation-credentials-v1" ? JSON.stringify(secrets) : entries.get(key) ?? null; },
+      async put(key, value) { entries.set(key, value); },
+    }, async (_path, method) => method === "GET"
+      ? { status: "finished", httpStatus: 200, result: { ok: true, workerHealthy: false,
+        error: "bootstrap_endpoint_invalid", state: { "tailscaled.state": "secret" } } }
+      : { ok: true });
+    expect(await controller.poll("owner")).toEqual({ status: "finished", workerHealthy: false, error: "bootstrap_endpoint_invalid" });
+    expect(entries.has("automation-tailnet-state-v1")).toBe(true);
+  });
 });

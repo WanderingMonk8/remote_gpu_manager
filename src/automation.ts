@@ -91,7 +91,8 @@ export class AutomationController {
     // Save before acknowledging: an enclave failure must leave the job recoverable.
     await this.store.put(STATE, JSON.stringify(job.result.state), user);
     await this.call("/gateway/v1/runtime/bootstrap", "DELETE", controlToken);
-    return { status: "finished", workerHealthy: job.result.workerHealthy === true };
+    return { status: "finished", workerHealthy: job.result.workerHealthy === true,
+      ...(typeof job.result.error === "string" && /^[a-z_]+$/.test(job.result.error) ? { error: job.result.error } : {}) };
   }
 
   async stop(user: string, force = false): Promise<any> {
