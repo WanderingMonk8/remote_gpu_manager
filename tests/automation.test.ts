@@ -5,6 +5,26 @@ const secrets: AutomationSecrets = { controlToken: "control", clientId: "id", cl
   refreshToken: "refresh", tailnetKey: "ts-secret", basicUser: "user", basicPass: "password" };
 
 describe("automation controller", () => {
+  test("saves Picker selections across visits and refuses an incomplete cache", async () => {
+    const entries = new Map<string, string>();
+    const calls: string[] = [];
+    const controller = new AutomationController({
+      async get(key, user) { return entries.get(`${user}:${key}`) ?? null; },
+      async put(key, value, user) { entries.set(`${user}:${key}`, value); },
+    }, async (path) => { calls.push(path); return {}; });
+    await controller.save("owner", secrets);
+    const first = await controller.saveDriveFiles("owner", [{ id: "a", name: "moss_image_sft_int8_convrot.safetensors" }]);
+    expect(first.complete).toBe(false);
+    expect(first.missing).toEqual(["qwen3.5_9b_w4a8_gptq.safetensors", "flux2-vae_small.safetensors"]);
+    await expect(controller.start("owner")).rejects.toThrow("drive_selection_incomplete");
+    expect(calls).toEqual([]);
+    await controller.saveDriveFiles("owner", [{ id: "b", name: "qwen3.5_9b_w4a8_gptq.safetensors" }]);
+    const last = await controller.saveDriveFiles("owner", [{ id: "c", name: "flux2-vae_small.safetensors" }]);
+    expect(last.complete).toBe(true);
+    expect(last.missing).toEqual([]);
+    expect(JSON.parse(entries.get("owner:automation-drive-cache-v1")!)).toHaveLength(3);
+  });
+
   test("identifies missing fields and preserves saved credentials on partial updates", async () => {
     const entries = new Map<string, string>();
     const controller = new AutomationController({

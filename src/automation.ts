@@ -42,14 +42,20 @@ export class AutomationController {
     await this.store.put(SECRETS, JSON.stringify(merged), user);
   }
 
-  async saveDriveFiles(user: string, files: DriveFile[]): Promise<void> {
-    if (!user || !Array.isArray(files) || files.length > 16 ||
+  async saveDriveFiles(user: string, files: DriveFile[]): Promise<{ saved: true; complete: boolean; missing: string[] }> {
+    if (!user || !Array.isArray(files) || files.length === 0 || files.length > 16 ||
         files.some(f => !f || typeof f.id !== "string" || !/^[A-Za-z0-9_-]{1,256}$/.test(f.id) || !MODEL_FILES.has(f.name)) ||
-        new Set(files.map(f => f.name)).size !== files.length ||
-        !DEFAULT_FILES.every(name => files.filter(f => f.name === name).length === 1)) {
-      throw new Error("drive_selection_incomplete");
+        new Set(files.map(f => f.name)).size !== files.length) {
+      throw new Error("drive_selection_invalid");
     }
-    await this.store.put(DRIVE, JSON.stringify(files), user);
+    const saved = await this.store.get(DRIVE, user);
+    const previous = saved ? JSON.parse(saved) as DriveFile[] : [];
+    const merged = new Map(previous.map(file => [file.name, file]));
+    for (const file of files) merged.set(file.name, { id: file.id, name: file.name });
+    const allFiles = [...merged.values()];
+    const missing = DEFAULT_FILES.filter(name => !merged.has(name));
+    await this.store.put(DRIVE, JSON.stringify(allFiles), user);
+    return { saved: true, complete: missing.length === 0, missing };
   }
 
   private async secrets(user: string): Promise<AutomationSecrets> {
@@ -73,6 +79,9 @@ export class AutomationController {
     const savedDrive = await this.store.get(DRIVE, user);
     if (!savedDrive) throw new Error("drive_selection_required");
     const driveFiles = JSON.parse(savedDrive) as DriveFile[];
+    if (!Array.isArray(driveFiles) || !DEFAULT_FILES.every(name => driveFiles.some(file => file?.name === name))) {
+      throw new Error("drive_selection_incomplete");
+    }
     const existing = await this.call("/gateway/v1/runtime/bootstrap", "GET", s.controlToken);
     if (existing.status !== "idle") throw new Error("bootstrap_result_pending");
     await this.call("/gateway/v1/runtime/credentials", "POST", s.controlToken,
