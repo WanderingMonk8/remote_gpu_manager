@@ -34,6 +34,7 @@ changed: the Colab API v1beta is now public (discovery revision 20261118).
 | Without Drive, every start re-downloads 12.1 GiB (~10 min) | cell 6 timing |
 | **Tunnel works headless (2026-11-20):** cells 2,4,8,10,25 with the stub → Caddy on 8189 + tailscaled + Funnel; returned `https://moss-comfy-1.tailf0a296.ts.net`, captured as `GATEWAY_UPSTREAM`, runtime deleted | `tools/colab-bootstrap-probe.py --stub` |
 | Ephemeral tailnet state ⇒ hostname gains a `-N` suffix (`moss-comfy` → `moss-comfy-1`) and a fresh TLS cert is issued every session | cell 25 output |
+| **State custody makes the endpoint stable (2026-11-20):** identity saved from run 1 was restored in run 2; both runs returned `https://moss-comfy-2.tailf0a296.ts.net` | two `--stub` runs sharing `tools/.tailnet-state` |
 
 The spike holds OAuth tokens in memory only and writes nothing but the masked result file.
 
@@ -89,6 +90,10 @@ Lifecycle control is the gateway's job, called through the Colab API — not the
   `GATEWAY_UPSTREAM` is set once does not hold. Options: gateway-mediated state custody
   (worker uploads `tailscaled.state` before stop, downloads it at start), a non-interactive
   Drive mount, or a dedicated automation hostname plus node cleanup.
+- **State custody is proven and is now a required component.** The local
+  `tools/.tailnet-state` stand-in makes the hostname stable across runtimes; in production
+  the identity belongs in the enclave, and it must be treated as a secret (it authenticates
+  as the node). Tooling must never echo the state payload.
 
 ## 5. Alternatives considered
 
