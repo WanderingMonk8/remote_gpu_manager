@@ -21,6 +21,7 @@
  */
 
 import { timingSafeEqual } from "node:crypto";
+import { runBootstrap } from "./bootstrap";
 
 const VERSION = "0.2.0-m4";
 
@@ -52,6 +53,9 @@ const STARTED_AT = Date.now();
  * response. */
 
 const LIFECYCLE_ENABLED = (process.env.GATEWAY_LIFECYCLE ?? "") === "1";
+const BOOTSTRAP_ENABLED = process.env.GATEWAY_BOOTSTRAP === "1";
+const BOOTSTRAP_PYTHON = process.env.GATEWAY_BOOTSTRAP_PYTHON ?? "python3";
+const BOOTSTRAP_SCRIPT = process.env.GATEWAY_BOOTSTRAP_SCRIPT ?? "tools/colab-bootstrap-worker.py";
 const COLAB_BASE = (process.env.COLAB_BASE ?? "https://colaboratory.googleapis.com").replace(/\/+$/, "");
 const OAUTH_TOKEN_URL = process.env.OAUTH_TOKEN_URL ?? "https://oauth2.googleapis.com/token";
 const RUNTIME_PREFIX = "rgm-gw-";
@@ -652,6 +656,7 @@ async function statusRuntime(): Promise<Response> {
 }
 
 async function stopRuntime(): Promise<Response> {
+  if (provisioning) return errJson(409, "provisioning_in_progress");
   if (!owned) return errJson(404, "no_owned_runtime");
   const name = owned.name;
   const { status, json } = await colabRequest("DELETE", `/v1beta/${name}`);
@@ -672,6 +677,54 @@ async function stopRuntime(): Promise<Response> {
     },
     { status: 202 },
   );
+}
+
+async function bootstrapRuntime(req: Request): Promise<Response> {
+  if (!BOOTSTRAP_ENABLED) return errJson(403, "bootstrap_disabled");
+  if (provisioning) return errJson(409, "provisioning_in_progress");
+  if (!owned) return errJson(404, "no_owned_runtime");
+  let body: any;
+  try {
+    body = JSON.parse(new TextDecoder().decode(await readBounded(req, 8 * 1024 * 1024)));
+  } catch {
+    return errJson(400, "invalid_json");
+  }
+  const { ts_authkey, basic_user, basic_pass, state } = body ?? {};
+  if (typeof ts_authkey !== "string" || typeof basic_user !== "string" ||
+      !/^[^:\s]+$/.test(basic_user) || typeof basic_pass !== "string" || !basic_pass ||
+      !state || typeof state !== "object" || Array.isArray(state) ||
+      Object.values(state).some((v) => typeof v !== "string")) {
+    return errJson(400, "bootstrap_input_invalid");
+  }
+  provisioning = true;
+  try {
+    const got = await colabRequest("GET", `/v1beta/${owned.name}`);
+    if (got.status !== 200) throw colabError(got.status, got.json);
+    const connection = got.json?.connectionInfo;
+    if (typeof connection?.url !== "string" || typeof connection?.token !== "string") {
+      return errJson(409, "connection_not_ready");
+    }
+    const result = await runBootstrap([BOOTSTRAP_PYTHON, BOOTSTRAP_SCRIPT], {
+      runtime: { name: owned.name, connectionInfo: { url: connection.url, token: connection.token } },
+      credentials: { TS_AUTHKEY: ts_authkey, BASIC_AUTH_USER: basic_user, BASIC_AUTH_PASS: basic_pass },
+      state,
+    });
+    // Reuse the same URL allowlist and credential validation as manual adoption.
+    const adopted = await handleControl(new Request("http://127.0.0.1/gateway/v1/upstream", {
+      method: "PUT", headers: { Authorization: `Bearer ${CONTROL_TOKEN}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ url: result.funnel, basic_auth: `${basic_user}:${basic_pass}` }),
+    }), "/gateway/v1/upstream");
+    if (!adopted.ok) return errJson(502, "bootstrap_endpoint_invalid");
+    noteWork();
+    // The authenticated caller must put this node identity into the enclave.
+    return Response.json({ ok: true, upstream: GATEWAY_UPSTREAM, state: result.state },
+      { headers: { "Cache-Control": "no-store" } });
+  } catch (err) {
+    if (err instanceof HttpError) throw err;
+    return errJson(502, "bootstrap_failed");
+  } finally {
+    provisioning = false;
+  }
 }
 
 async function putCredentials(req: Request): Promise<Response> {
@@ -715,6 +768,7 @@ function setIdle(body: any): Response {
 }
 
 async function handleRuntime(req: Request, path: string): Promise<Response> {
+  if (path === "/gateway/v1/runtime/bootstrap" && req.method === "POST") return bootstrapRuntime(req);
   if (path === "/gateway/v1/runtime/credentials") {
     if (req.method === "POST") return putCredentials(req);
     if (req.method === "DELETE") {

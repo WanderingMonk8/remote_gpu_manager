@@ -1,6 +1,45 @@
 // @bun
 // host-gateway/gateway.ts
 import { timingSafeEqual } from "crypto";
+
+// host-gateway/bootstrap.ts
+async function runBootstrap(command, request, timeoutMs = 30 * 60000) {
+  const proc = Bun.spawn(command, { stdin: "pipe", stdout: "pipe", stderr: "ignore" });
+  const timeout = setTimeout(() => proc.kill(), timeoutMs);
+  try {
+    proc.stdin.write(JSON.stringify(request));
+    proc.stdin.end();
+    const reader = proc.stdout.getReader();
+    const chunks = [];
+    let size = 0;
+    for (;; ) {
+      const { done, value } = await reader.read();
+      if (done)
+        break;
+      size += value.byteLength;
+      if (size > 8 * 1024 * 1024) {
+        proc.kill();
+        throw new Error("bootstrap_output_too_large");
+      }
+      chunks.push(value);
+    }
+    const exit = await proc.exited;
+    if (exit !== 0)
+      throw new Error("bootstrap_failed");
+    const result = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    if (result?.ok !== true || typeof result.funnel !== "string" || !result.state || typeof result.state !== "object" || Array.isArray(result.state)) {
+      throw new Error("bootstrap_invalid_response");
+    }
+    return { funnel: result.funnel, state: result.state };
+  } catch {
+    throw new Error("bootstrap_failed");
+  } finally {
+    clearTimeout(timeout);
+    proc.kill();
+  }
+}
+
+// host-gateway/gateway.ts
 var VERSION = "0.2.0-m4";
 var env = (name, fallback) => {
   const v = process.env[name];
@@ -21,6 +60,9 @@ var SKIP_BROWSER_WARNING = (process.env.GATEWAY_SKIP_BROWSER_WARNING ?? "1") ===
 var CONTROL_TOKEN = process.env.GATEWAY_CONTROL_TOKEN ?? "";
 var STARTED_AT = Date.now();
 var LIFECYCLE_ENABLED = (process.env.GATEWAY_LIFECYCLE ?? "") === "1";
+var BOOTSTRAP_ENABLED = process.env.GATEWAY_BOOTSTRAP === "1";
+var BOOTSTRAP_PYTHON = process.env.GATEWAY_BOOTSTRAP_PYTHON ?? "python3";
+var BOOTSTRAP_SCRIPT = process.env.GATEWAY_BOOTSTRAP_SCRIPT ?? "tools/colab-bootstrap-worker.py";
 var COLAB_BASE = (process.env.COLAB_BASE ?? "https://colaboratory.googleapis.com").replace(/\/+$/, "");
 var OAUTH_TOKEN_URL = process.env.OAUTH_TOKEN_URL ?? "https://oauth2.googleapis.com/token";
 var RUNTIME_PREFIX = "rgm-gw-";
@@ -520,6 +562,8 @@ async function statusRuntime() {
   });
 }
 async function stopRuntime() {
+  if (provisioning)
+    return errJson(409, "provisioning_in_progress");
   if (!owned)
     return errJson(404, "no_owned_runtime");
   const name = owned.name;
@@ -538,6 +582,54 @@ async function stopRuntime() {
     confirmed: false,
     detail: "delete accepted but runtime still listed; recheck GET /gateway/v1/runtime"
   }, { status: 202 });
+}
+async function bootstrapRuntime(req) {
+  if (!BOOTSTRAP_ENABLED)
+    return errJson(403, "bootstrap_disabled");
+  if (provisioning)
+    return errJson(409, "provisioning_in_progress");
+  if (!owned)
+    return errJson(404, "no_owned_runtime");
+  let body;
+  try {
+    body = JSON.parse(new TextDecoder().decode(await readBounded(req, 8 * 1024 * 1024)));
+  } catch {
+    return errJson(400, "invalid_json");
+  }
+  const { ts_authkey, basic_user, basic_pass, state } = body ?? {};
+  if (typeof ts_authkey !== "string" || typeof basic_user !== "string" || !/^[^:\s]+$/.test(basic_user) || typeof basic_pass !== "string" || !basic_pass || !state || typeof state !== "object" || Array.isArray(state) || Object.values(state).some((v) => typeof v !== "string")) {
+    return errJson(400, "bootstrap_input_invalid");
+  }
+  provisioning = true;
+  try {
+    const got = await colabRequest("GET", `/v1beta/${owned.name}`);
+    if (got.status !== 200)
+      throw colabError(got.status, got.json);
+    const connection = got.json?.connectionInfo;
+    if (typeof connection?.url !== "string" || typeof connection?.token !== "string") {
+      return errJson(409, "connection_not_ready");
+    }
+    const result = await runBootstrap([BOOTSTRAP_PYTHON, BOOTSTRAP_SCRIPT], {
+      runtime: { name: owned.name, connectionInfo: { url: connection.url, token: connection.token } },
+      credentials: { TS_AUTHKEY: ts_authkey, BASIC_AUTH_USER: basic_user, BASIC_AUTH_PASS: basic_pass },
+      state
+    });
+    const adopted = await handleControl(new Request("http://127.0.0.1/gateway/v1/upstream", {
+      method: "PUT",
+      headers: { Authorization: `Bearer ${CONTROL_TOKEN}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ url: result.funnel, basic_auth: `${basic_user}:${basic_pass}` })
+    }), "/gateway/v1/upstream");
+    if (!adopted.ok)
+      return errJson(502, "bootstrap_endpoint_invalid");
+    noteWork();
+    return Response.json({ ok: true, upstream: GATEWAY_UPSTREAM, state: result.state }, { headers: { "Cache-Control": "no-store" } });
+  } catch (err) {
+    if (err instanceof HttpError)
+      throw err;
+    return errJson(502, "bootstrap_failed");
+  } finally {
+    provisioning = false;
+  }
 }
 async function putCredentials(req) {
   let body;
@@ -570,6 +662,8 @@ function setIdle(body) {
   return Response.json({ idleMinutes });
 }
 async function handleRuntime(req, path) {
+  if (path === "/gateway/v1/runtime/bootstrap" && req.method === "POST")
+    return bootstrapRuntime(req);
   if (path === "/gateway/v1/runtime/credentials") {
     if (req.method === "POST")
       return putCredentials(req);

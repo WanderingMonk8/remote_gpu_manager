@@ -20,6 +20,7 @@ All routes live on the existing loopback control plane and require
 | `GET` | `/gateway/v1/runtime` | Status, adopted runtime, idle countdown |
 | `DELETE` | `/gateway/v1/runtime` | Stop: delete and **confirm** deletion |
 | `PUT` | `/gateway/v1/runtime/idle` | Set idle minutes (`0` disables) |
+| `POST` | `/gateway/v1/runtime/bootstrap` | Bootstrap the owned runtime (separate opt-in; see below) |
 | `PUT` | `/gateway/v1/upstream` | Adopt a worker URL (HTTPS + host allowlist) |
 | `GET` | `/gateway/v1/upstream` | Read the current upstream |
 
@@ -60,6 +61,25 @@ POST /gateway/v1/runtime/credentials
 They are held in module memory only. They are never written to disk, never logged,
 and never echoed in a response. The short-lived Google access token is refreshed
 on demand and cached until 60 s before expiry.
+
+## Bootstrap worker (experimental)
+
+When `GATEWAY_BOOTSTRAP=1`, the authenticated control plane accepts a bootstrap
+request containing `ts_authkey`, `basic_user`, `basic_pass`, and `state` (a map
+of saved Tailscale state files to base64 strings). It retrieves the owned
+runtime's current connection token, starts `tools/colab-bootstrap-worker.py`
+through private stdio, then validates and adopts the returned Funnel hostname.
+The response contains `state`, which is sensitive and must be saved in the
+Spindle enclave by the caller. Do not log or display it. Python and the
+`websocket-client` package are required in the host environment.
+
+This is a synchronous experimental route: the extension does not yet store or
+send these credentials or persist the returned state. It is therefore not yet a
+complete or restart-safe automation flow. Bootstrap can take longer than an
+HTTP client or proxy timeout. Allocation recovery is not durable, and a
+separate post-bootstrap authenticated worker health check is still needed.
+Keep this feature disabled until those gaps are addressed. No production
+Space deployment is implied by its presence in the repository.
 
 ## Start
 
