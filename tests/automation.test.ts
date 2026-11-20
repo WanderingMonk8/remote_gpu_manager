@@ -5,6 +5,20 @@ const secrets: AutomationSecrets = { controlToken: "control", clientId: "id", cl
   refreshToken: "refresh", tailnetKey: "ts-secret", basicUser: "user", basicPass: "password" };
 
 describe("automation controller", () => {
+  test("saves and restores Picker settings separately for each user", async () => {
+    const entries = new Map<string, string>();
+    const controller = new AutomationController({
+      async get(key, user) { return entries.get(`${user}:${key}`) ?? null; },
+      async put(key, value, user) { entries.set(`${user}:${key}`, value); },
+    }, async () => ({}));
+    const config = { clientId: "web-client", apiKey: "browser-key", projectNumber: "123456" };
+    await controller.savePickerConfig("owner", config);
+    expect(await controller.getPickerConfig("owner")).toEqual(config);
+    expect(await controller.getPickerConfig("other-user")).toBeNull();
+    await expect(controller.savePickerConfig("owner", { ...config, projectNumber: "not-a-number" })).rejects.toThrow("picker_config_invalid");
+    expect(await controller.getPickerConfig("owner")).toEqual(config);
+  });
+
   test("saves Picker selections across visits and refuses an incomplete cache", async () => {
     const entries = new Map<string, string>();
     const calls: string[] = [];

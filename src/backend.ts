@@ -64,6 +64,13 @@ spindle.onFrontendMessage(async (payload: any, userId?: string) => {
         case "automation_save_drive":
           result = await automation.saveDriveFiles(userId, payload.files);
           break;
+        case "automation_picker_config_save":
+          await automation.savePickerConfig(userId, payload.config);
+          result = { saved: true };
+          break;
+        case "automation_picker_config_get":
+          result = { config: await automation.getPickerConfig(userId) };
+          break;
         case "automation_start":
           await automation.start(userId);
           result = { status: "running" };
