@@ -348,6 +348,7 @@ var creds = null;
 var accessToken = null;
 var owned = null;
 var provisioning = false;
+var bootstrapJob = null;
 var uncertainCreate = false;
 var lastWorkAt = Date.now();
 function noteWork() {
@@ -475,7 +476,7 @@ async function reconcile() {
   }
 }
 async function startRuntime() {
-  if (provisioning)
+  if (provisioning || bootstrapJob?.status === "running")
     return errJson(409, "provisioning_in_progress");
   if (owned)
     return Response.json({ runtime: maskRuntime(owned), state: owned.url ? "ready" : "starting", reused: true });
@@ -562,7 +563,7 @@ async function statusRuntime() {
   });
 }
 async function stopRuntime() {
-  if (provisioning)
+  if (provisioning || bootstrapJob?.status === "running")
     return errJson(409, "provisioning_in_progress");
   if (!owned)
     return errJson(404, "no_owned_runtime");
@@ -631,6 +632,42 @@ async function bootstrapRuntime(req) {
     provisioning = false;
   }
 }
+async function bootstrapControl(req) {
+  if (!BOOTSTRAP_ENABLED)
+    return errJson(403, "bootstrap_disabled");
+  const headers = { "Cache-Control": "no-store" };
+  if (req.method === "GET") {
+    return Response.json(bootstrapJob ?? { status: "idle" }, { headers });
+  }
+  if (req.method === "DELETE") {
+    if (bootstrapJob?.status === "running")
+      return errJson(409, "provisioning_in_progress");
+    bootstrapJob = null;
+    return Response.json({ ok: true }, { headers });
+  }
+  if (req.method !== "POST")
+    return errJson(405, "method_not_allowed");
+  if (bootstrapJob)
+    return errJson(409, "bootstrap_result_pending");
+  bootstrapJob = { status: "running" };
+  let input;
+  try {
+    input = await readBounded(req, 8 * 1024 * 1024);
+  } catch {
+    bootstrapJob = null;
+    return errJson(400, "bootstrap_input_invalid");
+  }
+  const privateRequest = new Request("http://127.0.0.1/", { method: "POST", body: input });
+  (async () => {
+    try {
+      const response = await bootstrapRuntime(privateRequest);
+      bootstrapJob = { status: "finished", httpStatus: response.status, result: await response.json() };
+    } catch {
+      bootstrapJob = { status: "finished", httpStatus: 500, result: { error: "bootstrap_failed" } };
+    }
+  })();
+  return Response.json({ status: "running" }, { status: 202, headers });
+}
 async function putCredentials(req) {
   let body;
   try {
@@ -662,8 +699,8 @@ function setIdle(body) {
   return Response.json({ idleMinutes });
 }
 async function handleRuntime(req, path) {
-  if (path === "/gateway/v1/runtime/bootstrap" && req.method === "POST")
-    return bootstrapRuntime(req);
+  if (path === "/gateway/v1/runtime/bootstrap")
+    return bootstrapControl(req);
   if (path === "/gateway/v1/runtime/credentials") {
     if (req.method === "POST")
       return putCredentials(req);
@@ -697,7 +734,7 @@ if (LIFECYCLE_ENABLED) {
   setInterval(() => {
     (async () => {
       try {
-        if (!owned || idleMinutes <= 0 || provisioning)
+        if (!owned || idleMinutes <= 0 || provisioning || bootstrapJob?.status === "running")
           return;
         if (Date.now() - lastWorkAt < idleMinutes * 60000)
           return;
