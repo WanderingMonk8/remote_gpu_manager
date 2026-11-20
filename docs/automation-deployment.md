@@ -23,7 +23,7 @@ ENV GATEWAY_LIFECYCLE=1 \
 Add `mkdir -p /app/data/rgm` inside `start_rgm_gateway`, immediately before
 `bun run /opt/remote-gpu-manager/dist-host/gateway.mjs &`, so the directory is
 created after the persistent volume is mounted. The checkout must include the
-notebook and `tools/` files, not only `dist-host/`. The intent file stores
+final notebook `Unified_MOSS_Anima_Colab_Studio_Tailscale_Final.ipynb` and `tools/` files, not only `dist-host/`. The automated worker runs selected cells from this committed copy; it does not load the workbook from Drive. The intent file stores
 only the manager runtime name; do not place credentials there. Persistent
 storage must survive restarts for allocation fencing to work.
 

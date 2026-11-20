@@ -17,7 +17,7 @@ tools/validate-moss-workflow.mjs            # structural validation of workflow 
 tools/colab-eligibility-check.py            # read-only Colab eligibility probe (owner-run)
 workflows/                                  # verified-structure baseline API workflows
 docs/                                       # ADRs, M0 report, M1 record
-Unified_MOSS_Anima_Colab_Studio_Tailscale.ipynb   # reference worker notebook (user artifact; Tailscale Funnel tunnel)
+Unified_MOSS_Anima_Colab_Studio_Tailscale_Final.ipynb   # automation worker notebook (Tailscale Funnel tunnel)
 ```
 
 ## Develop

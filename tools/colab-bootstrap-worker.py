@@ -34,7 +34,7 @@ def main():
         spec.loader.exec_module(module)
         args = SimpleNamespace(cells="2,4,6,8,10,12,14,16,18,20,25", timeout=900,
                                no_state=True, stub=False, fetch_images=False)
-        cells = module.load_cells(HERE.parent / "Unified_MOSS_Anima_Colab_Studio_Tailscale.ipynb")
+        cells = module.load_cells(HERE.parent / "Unified_MOSS_Anima_Colab_Studio_Tailscale_Final.ipynb")
         # Interactive drive.mount() cannot run headlessly. Cache restoration is
         # performed through the Drive API before the model-selection cell.
         marker = "USE_DRIVE = True # @param {type:\"boolean\"}"
