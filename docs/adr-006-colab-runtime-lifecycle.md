@@ -56,15 +56,16 @@ Lifecycle control is the gateway's job, called through the Colab API — not the
 - **BLOCKER — OAuth custody.** The write scope needs a refresh token that outlives one shell
   process. Options: (a) HF Space secret (new secret; owner approval required), (b) Spindle Secure
   Enclave. Decision required before any gateway code.
-- **Open technical question.** Does the proxy route by port prefix (`8080-…` → `8188-…`)? If yes,
-  an API-created runtime can publish ComfyUI directly and the Funnel becomes optional. The
-  observed host (`8080-gpu-t4-s-ass1c3-….asia-southeast1.prod.r.colab.dev`) makes this testable:
-  create a runtime, run a trivial HTTP server on 8188 inside it via the Jupyter API using
-  `connectionInfo`, then `GET https://8188-<same-host>` with `X-Colab-Runtime-Proxy-Token`.
-  Deferred until custody is settled.
-- `connectionInfo.url` targets Jupyter (8080), not ComfyUI (8188). Do not assume parity.
+- **RESOLVED — port-prefix routing does not work.** Tested against four live runtimes
+  (`asia-southeast1`, `us-west1`, `us-west4`): a server started on 8188 inside the runtime
+  answered `200` from inside (`urllib` → `http://127.0.0.1:8188/`), but the proxy returned
+  `404` for both `8188-<suffix>` and `8081-<suffix>`, while `8080-<suffix>/api/kernels`
+  returned `200`. The proxy routes only the Jupyter port. **The Funnel stays** for ComfyUI;
+  the port-prefix shortcut is not available. Probe: `tools/colab-port-routing-probe.py`.
+- `connectionInfo.url` targets Jupyter (8080), not ComfyUI (8188). Confirmed, not assumed.
 - The bootstrap path (how our stack lands on a blank API-created runtime: Jupyter-API cell
-  execution vs startup script) is unresolved and gates the extension-controlled start.
+  execution vs startup script) is unresolved and gates the extension-controlled start. The
+  probe proved the Jupyter API is reachable and can execute code, so cell execution is viable.
 
 ## 5. Alternatives considered
 
@@ -77,7 +78,10 @@ Lifecycle control is the gateway's job, called through the Colab API — not the
 ## 6. Open items
 
 1. Token custody decision (owner).
-2. Port-prefix routing spike (§4).
-3. Gateway endpoints: `POST/GET/DELETE /manager/v1/runtime`, idle-timer wiring, and the
+2. Gateway endpoints: `POST/GET/DELETE /manager/v1/runtime`, idle-timer wiring, and the
    worker-config endpoint that hands Basic Auth to the worker.
-4. Bootstrap design: how the notebook's cells execute on an API-created runtime.
+3. Bootstrap design: how the notebook's cells execute on an API-created runtime. The probe
+   confirmed the Jupyter API accepts `execute_request` over the authenticated WebSocket, so
+   cell execution is viable; the remaining question is how to inject the notebook's cells.
+4. Funnel stays: the proxy does not route port 8188, so the worker must be published through
+   the existing Tailscale Funnel (or equivalent) as before.
