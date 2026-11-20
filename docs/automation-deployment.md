@@ -27,9 +27,11 @@ notebook and `tools/` files, not only `dist-host/`. The intent file stores
 only the manager runtime name; do not place credentials there. Persistent
 storage must survive restarts for allocation fencing to work.
 
-The reference Dockerfile currently clones `main`; the implementation commits
-must first be made available on the branch that the Space builds. The locally
-checked-out archive branch alone is not available to the remote Space.
+The deployed Space gateway is configured to clone `archive/colab-working-v1.1`,
+keeping Colab gateway updates independent of `main`. Publish new gateway commits
+to that branch and update the Space Dockerfile's `RGM_REVISION` cache-busting
+argument to deploy them. Select the same branch for the extension in Lumiverse;
+the extension and the gateway are updated separately.
 
 Set `GATEWAY_CONTROL_TOKEN` as a Space secret. The same token is entered in the
 extension's credential form and saved in the per-user enclave. Keep the gateway
