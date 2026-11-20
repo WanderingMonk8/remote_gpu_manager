@@ -165,10 +165,20 @@ def main():
                         help="path to the .ipynb to execute")
     parser.add_argument("--list-cells", action="store_true",
                         help="print the notebook's cells and exit (no allocation)")
+    parser.add_argument("--override", nargs=3, action="append",
+                        metavar=("CELL", "OLD", "NEW"),
+                        help="replace OLD with NEW in CELL's source, in memory only")
     args = parser.parse_args()
     indices = [int(x) for x in args.cells.split(",") if x.strip()]
 
     cells = load_cells(Path(args.notebook))
+    for spec in args.override or []:
+        idx, old, new = int(spec[0]), spec[1], spec[2]
+        if old not in cells[idx]:
+            print(f"override failed: {old!r} not found in cell {idx}")
+            return 2
+        cells[idx] = cells[idx].replace(old, new, 1)
+        print(f"override: cell {idx} {old!r} -> {new!r} (in memory only)")
     if args.list_cells:
         print(f"{args.notebook}: {len(cells)} cells")
         for i, src in enumerate(cells):

@@ -28,6 +28,10 @@ changed: the Colab API v1beta is now public (discovery revision 20261118).
 | Proxy token is short-lived (`expireTime` present); refresh by re-`GET`ting the runtime | API schema `ConnectionInfo` |
 | `eligible: true` in `ListRuntimeSpecs` is permission to ask, not a guarantee of stock; both states now observed | `docs/colab-eligibility-result.json` + the spike run |
 | There is no "power on": `DELETE` unassigns, `POST` allocates a new runtime | API semantics |
+| **The owner's real MOSS workbook bootstraps headless (2026-11-20):** cells 2,4,6,8,10,12,14,16,18,20 ran verbatim over the Jupyter API; 12.1 GiB of weights from HF, ComfyUI `0.46.0` answered `/system_stats`, the pinned `MOSS-Image-NSFW-Uncensored-LoRA-ComfyUI` LoRA installed (70.9 MiB), runtime deleted | `tools/colab-bootstrap-probe.py --notebook …_Final.ipynb` |
+| `drive.mount()` blocks headless (no browser → `input()` never returns); a guard that skips Drive when `RGM_AUTOMATION=1` fixes it, with no other cell changes | cell 4, preflight timeout then guard |
+| **Colab Secrets are unavailable headless:** `userdata.get` fails with "Secrets can only be fetched when running from the Colab UI" | cell 6 HF token warning |
+| Without Drive, every start re-downloads 12.1 GiB (~10 min) | cell 6 timing |
 
 The spike holds OAuth tokens in memory only and writes nothing but the masked result file.
 
@@ -70,6 +74,12 @@ Lifecycle control is the gateway's job, called through the Colab API — not the
   supervisor), and a stub replacing section 3's multi-GB weight download. ComfyUI runs
   with no models, which is enough to prove the mechanism. The full profile adds cell 6
   (weights) and cell 25 (tunnel).
+- **Headless constraints found on the real workbook.**
+  (a) `drive.mount()` blocks; guarded by `AUTOMATION` in cell 4.
+  (b) Colab Secrets cannot be read headless, so every credential must arrive from the
+  enclave via env injection.
+  (c) Without Drive, weights re-download (12.1 GiB) on every start — a caching decision
+  still open.
 
 ## 5. Alternatives considered
 
