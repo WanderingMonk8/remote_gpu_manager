@@ -1,5 +1,17 @@
 import type { DriveFile } from "./automation";
 
+/** Google requires the top-level origin when the app is embedded in an iframe. */
+export function pickerOrigin(current: string, ancestors: ArrayLike<string> | undefined, referrer: string, embedded: boolean): string {
+  if (!embedded) return current;
+  if (ancestors?.length) {
+    try { return new URL(ancestors[ancestors.length - 1]).origin; } catch { /* fall back */ }
+  }
+  if (referrer) {
+    try { return new URL(referrer).origin; } catch { /* fall back */ }
+  }
+  return current;
+}
+
 function loadScript(url: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const script = document.createElement("script");
@@ -30,9 +42,10 @@ export async function chooseDriveFiles(config: { clientId: string; apiKey: strin
     const view = new picker.DocsView().setMode(picker.DocsViewMode.LIST);
     new picker.PickerBuilder().addView(view).enableFeature(picker.Feature.MULTISELECT_ENABLED)
       .setOAuthToken(token).setDeveloperKey(config.apiKey).setAppId(config.projectNumber)
-      .setOrigin(window.location.origin)
+      .setOrigin(pickerOrigin(window.location.origin, (window.location as Location & { ancestorOrigins?: DOMStringList }).ancestorOrigins, document.referrer, window.parent !== window))
       .setCallback((result: any) => {
         if (result.action === picker.Action.CANCEL) reject(new Error("picker_cancelled"));
+        if (result.action === picker.Action.ERROR) reject(new Error("picker_error"));
         if (result.action === picker.Action.PICKED) {
           resolve((result.docs ?? []).map((item: any) => ({ id: item.id, name: item.name })));
         }
