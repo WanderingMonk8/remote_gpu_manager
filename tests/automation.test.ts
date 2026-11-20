@@ -5,6 +5,21 @@ const secrets: AutomationSecrets = { controlToken: "control", clientId: "id", cl
   refreshToken: "refresh", tailnetKey: "ts-secret", basicUser: "user", basicPass: "password" };
 
 describe("automation controller", () => {
+  test("identifies missing fields and preserves saved credentials on partial updates", async () => {
+    const entries = new Map<string, string>();
+    const controller = new AutomationController({
+      async get(key, user) { return entries.get(`${user}:${key}`) ?? null; },
+      async put(key, value, user) { entries.set(`${user}:${key}`, value); },
+    }, async () => ({}));
+    await expect(controller.save("owner", { ...secrets, tailnetKey: "" })).rejects.toThrow("missing_tailnet_key");
+    await expect(controller.save("owner", { ...secrets, basicUser: "invalid:user" })).rejects.toThrow("invalid_basic_user");
+    await controller.save("owner", secrets);
+    await controller.save("owner", { ...secrets, clientSecret: "", basicPass: "new-password" });
+    const saved = JSON.parse(entries.get("owner:automation-credentials-v1")!);
+    expect(saved.clientSecret).toBe("oauth-secret");
+    expect(saved.basicPass).toBe("new-password");
+  });
+
   test("does not allocate if Drive preflight fails", async () => {
     const entries = new Map<string, string>();
     const calls: string[] = [];
