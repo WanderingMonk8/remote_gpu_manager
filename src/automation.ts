@@ -17,13 +17,33 @@ export type GatewayCall = (path: string, method: string, token: string, body?: u
 const SECRETS = "automation-credentials-v1";
 const STATE = "automation-tailnet-state-v1";
 const DRIVE = "automation-drive-cache-v1";
+const PICKER = "automation-picker-config-v1";
 export type DriveFile = { id: string; name: string };
+export type PickerConfig = { clientId: string; apiKey: string; projectNumber: string };
 const DEFAULT_FILES = ["moss_image_sft_int8_convrot.safetensors", "qwen3.5_9b_w4a8_gptq.safetensors", "flux2-vae_small.safetensors"];
 const MODEL_FILES = new Set([...DEFAULT_FILES, "moss_image_base_int8_convrot.safetensors", "qwen_3_06b_base.safetensors", "qwen_image_vae.safetensors",
   ...["base-v1.0", "turbo-v1.0", "turbo-v1.1", "aesthetic-v1.0", "aesthetic-v1.0b", "aesthetic-v1.1"].map(name => `anima-${name}.safetensors`)]);
 
 export class AutomationController {
   constructor(private store: AutomationStore, private call: GatewayCall) {}
+
+  async savePickerConfig(user: string, config: PickerConfig): Promise<void> {
+    if (!user || !config || typeof config.clientId !== "string" || !config.clientId.trim() ||
+        typeof config.apiKey !== "string" || !config.apiKey.trim() ||
+        typeof config.projectNumber !== "string" || !/^\d+$/.test(config.projectNumber.trim())) {
+      throw new Error("picker_config_invalid");
+    }
+    await this.store.put(PICKER, JSON.stringify({ clientId: config.clientId.trim(), apiKey: config.apiKey.trim(),
+      projectNumber: config.projectNumber.trim() }), user);
+  }
+
+  async getPickerConfig(user: string): Promise<PickerConfig | null> {
+    if (!user) throw new Error("user_required");
+    const saved = await this.store.get(PICKER, user);
+    if (!saved) return null;
+    const config = JSON.parse(saved);
+    return { clientId: config.clientId, apiKey: config.apiKey, projectNumber: config.projectNumber };
+  }
 
   async save(user: string, secrets: AutomationSecrets): Promise<void> {
     if (!user || !secrets || typeof secrets !== "object") throw new Error("invalid_credentials");

@@ -63,6 +63,8 @@ export function setup(ctx: SpindleFrontendContext) {
         <label>Google web OAuth client ID<input class="rgm-picker-client" type="text" autocomplete="off" /></label>
         <label>Google Picker API key<input class="rgm-picker-key" type="text" autocomplete="off" /></label>
         <label>Google Cloud project number<input class="rgm-picker-project" type="text" autocomplete="off" /></label>
+        <button class="rgm-save-picker" type="button">Save Picker settings</button>
+        <p class="rgm-picker-settings-status" role="status"></p>
         <button class="rgm-picker" type="button">Select cache files</button>
         <p class="rgm-drive-status" role="status">No selection made in this session.</p>
       </details>
@@ -84,10 +86,21 @@ export function setup(ctx: SpindleFrontendContext) {
   const urlInput = drawer.root.querySelector(".rgm-gw-url") as HTMLInputElement | null;
   const automationStatus = drawer.root.querySelector(".rgm-automation-status") as HTMLDivElement | null;
   const driveStatus = drawer.root.querySelector(".rgm-drive-status") as HTMLParagraphElement | null;
+  const pickerSettingsStatus = drawer.root.querySelector(".rgm-picker-settings-status") as HTMLParagraphElement | null;
   let pollTimer: ReturnType<typeof setTimeout> | null = null;
   let pendingSecrets: Record<string, string> | null = null;
+  let pickerDirty = false;
   const send = (type: string, extra: object = {}) => ctx.sendToBackend({ type, ...extra });
   const poll = () => send("automation_poll");
+  const pickerConfig = () => {
+    const field = (selector: string) => (drawer.root.querySelector(selector) as HTMLInputElement).value.trim();
+    return { clientId: field(".rgm-picker-client"), apiKey: field(".rgm-picker-key"), projectNumber: field(".rgm-picker-project") };
+  };
+  drawer.root.querySelectorAll<HTMLInputElement>(".rgm-picker-client, .rgm-picker-key, .rgm-picker-project")
+    .forEach(input => input.addEventListener("input", () => { pickerDirty = true; }));
+  drawer.root.querySelector(".rgm-save-picker")?.addEventListener("click", () => {
+    send("automation_picker_config_save", { config: pickerConfig() });
+  });
   drawer.root.querySelector(".rgm-save-secrets")?.addEventListener("click", () => {
     const secrets: Record<string, string> = {};
     drawer.root.querySelectorAll<HTMLInputElement>("[data-secret]").forEach(input => {
@@ -97,9 +110,10 @@ export function setup(ctx: SpindleFrontendContext) {
     send("automation_save", { secrets });
   });
   drawer.root.querySelector(".rgm-picker")?.addEventListener("click", async () => {
-    const field = (selector: string) => (drawer.root.querySelector(selector) as HTMLInputElement).value.trim();
     try {
-      const files = await chooseDriveFiles({ clientId: field(".rgm-picker-client"), apiKey: field(".rgm-picker-key"), projectNumber: field(".rgm-picker-project") });
+      const config = pickerConfig();
+      send("automation_picker_config_save", { config });
+      const files = await chooseDriveFiles(config);
       if (driveStatus) driveStatus.textContent = `Saving ${files.length} selected file${files.length === 1 ? "" : "s"}…`;
       send("automation_save_drive", { files });
     } catch (error) {
@@ -133,6 +147,24 @@ export function setup(ctx: SpindleFrontendContext) {
   });
 
   const unsub = ctx.onBackendMessage((payload: any) => {
+    if (payload?.action === "automation_picker_config_get") {
+      if (payload.type === "automation_result" && payload.result?.config && !pickerDirty) {
+        const config = payload.result.config;
+        (drawer.root.querySelector(".rgm-picker-client") as HTMLInputElement).value = config.clientId;
+        (drawer.root.querySelector(".rgm-picker-key") as HTMLInputElement).value = config.apiKey;
+        (drawer.root.querySelector(".rgm-picker-project") as HTMLInputElement).value = config.projectNumber;
+        if (pickerSettingsStatus) pickerSettingsStatus.textContent = "Saved Picker settings loaded.";
+      } else if (payload.type === "automation_error" && pickerSettingsStatus) {
+        pickerSettingsStatus.textContent = "Could not load saved Picker settings.";
+      }
+      return;
+    }
+    if (payload?.action === "automation_picker_config_save") {
+      if (pickerSettingsStatus) pickerSettingsStatus.textContent = payload.type === "automation_result"
+        ? "Picker settings saved."
+        : "Picker settings were not saved. Check all three fields and try again.";
+      return;
+    }
     if (automationStatus && payload?.type === "automation_error") {
       automationStatus.dataset.tone = "bad";
       const messages: Record<string, string> = {
@@ -195,6 +227,8 @@ export function setup(ctx: SpindleFrontendContext) {
       statusBox.textContent = `URL rejected: ${payload.error}`;
     }
   });
+
+  send("automation_picker_config_get");
 
   return () => {
     if (pollTimer) clearTimeout(pollTimer);
