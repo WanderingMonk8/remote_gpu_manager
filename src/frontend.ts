@@ -104,7 +104,7 @@ export function setup(ctx: SpindleFrontendContext) {
       option = document.createElement("option");
       option.value = value;
       const [accelerator, shape] = value.split("|");
-      option.textContent = `${accelerator} ? ${shape.replace(/^SHAPE_/, "").toLowerCase()} (saved${eligibleGpuValues ? "; not currently eligible" : "; eligibility not checked"})`;
+      option.textContent = `${accelerator} - ${shape.replace(/^SHAPE_/, "").toLowerCase()} (saved${eligibleGpuValues ? "; not currently eligible" : "; eligibility not checked"})`;
       option.disabled = eligibleGpuValues !== null;
       gpuSelect.appendChild(option);
     }
@@ -135,6 +135,10 @@ export function setup(ctx: SpindleFrontendContext) {
   drawer.root.querySelector(".rgm-picker")?.addEventListener("click", async () => {
     try {
       const config = pickerConfig();
+      if (!config.clientId || !config.apiKey || !/^\d+$/.test(config.projectNumber)) {
+        if (driveStatus) driveStatus.textContent = "Enter the Picker settings and save them before selecting files.";
+        return;
+      }
       send("automation_picker_config_save", { config });
       const files = await chooseDriveFiles(config);
       const issue = driveSelectionIssue(files);
@@ -168,7 +172,7 @@ export function setup(ctx: SpindleFrontendContext) {
     const [accelerator, shape] = gpuSelect.value.split("|");
     gpuSavePending = true;
     gpuSelect.disabled = true;
-    if (gpuStatus) gpuStatus.textContent = "Saving GPU preference?";
+    if (gpuStatus) gpuStatus.textContent = "Saving GPU preference...";
     send("automation_gpu_choice_save", { choice: { accelerator, shape } });
   });
   drawer.root.querySelector(".rgm-gpu-refresh")?.addEventListener("click", () => {
@@ -224,7 +228,7 @@ export function setup(ctx: SpindleFrontendContext) {
           if (!validGpuPreference(spec)) continue;
           const option = document.createElement("option");
           option.value = `${spec.accelerator}|${spec.shape}`;
-          option.textContent = `${spec.accelerator} ? ${spec.shape.replace(/^SHAPE_/, "").toLowerCase()}`;
+          option.textContent = `${spec.accelerator} - ${spec.shape.replace(/^SHAPE_/, "").toLowerCase()}`;
           eligibleGpuValues.add(option.value);
           gpuSelect.appendChild(option);
         }
@@ -255,6 +259,15 @@ export function setup(ctx: SpindleFrontendContext) {
         : "GPU preference could not be saved; this choice applies only to this session.";
       return;
     }
+    if (payload?.action === "automation_drive_status") {
+      if (driveStatus) {
+        if (payload.type === "automation_error") driveStatus.textContent = `Could not load saved cache selection: ${payload.error}.`;
+        else if (payload.result?.saved && payload.result.missing?.length === 0) driveStatus.textContent = "All three cache files are saved. You do not need to select them again.";
+        else if (payload.result?.saved) driveStatus.textContent = `Saved cache selection is incomplete. Still needed: ${payload.result.missing.join(", ")}.`;
+        else driveStatus.textContent = "No cache files are saved yet.";
+      }
+      return;
+    }
     if (payload?.action === "automation_picker_config_get") {
       if (payload.type === "automation_result" && payload.result?.config && !pickerDirty) {
         const config = payload.result.config;
@@ -270,7 +283,7 @@ export function setup(ctx: SpindleFrontendContext) {
     if (payload?.action === "automation_picker_config_save") {
       if (pickerSettingsStatus) pickerSettingsStatus.textContent = payload.type === "automation_result"
         ? "Picker settings saved."
-        : "Picker settings were not saved. Check all three fields and try again.";
+        : `Picker settings were not saved (${payload.error}). Check all three fields and try again.`;
       return;
     }
     if (automationStatus && payload?.type === "automation_error") {
@@ -336,6 +349,7 @@ export function setup(ctx: SpindleFrontendContext) {
 
   send("automation_picker_config_get");
   send("automation_gpu_choice_get");
+  send("automation_drive_status");
 
   return () => {
     if (pollTimer) clearTimeout(pollTimer);

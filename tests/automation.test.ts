@@ -86,6 +86,8 @@ describe("automation controller", () => {
     expect(last.complete).toBe(true);
     expect(last.missing).toEqual([]);
     expect(JSON.parse(entries.get("owner:automation-drive-cache-v1")!)).toHaveLength(3);
+    expect(await controller.driveStatus("owner")).toEqual({ saved: true, missing: [] });
+    expect((await controller.driveStatus("other")).saved).toBe(false);
   });
 
   test("identifies missing fields and preserves saved credentials on partial updates", async () => {

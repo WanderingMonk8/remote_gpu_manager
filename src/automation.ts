@@ -109,6 +109,14 @@ export class AutomationController {
     return { saved: true, complete: missing.length === 0, missing };
   }
 
+  async driveStatus(user: string): Promise<{ saved: boolean; missing: string[] }> {
+    if (!user) throw new Error("user_required");
+    const saved = await this.store.get(DRIVE, user);
+    const files: DriveFile[] = saved ? JSON.parse(saved) : [];
+    if (!Array.isArray(files) || (files.length > 0 && driveSelectionIssue(files))) throw new Error("drive_selection_invalid");
+    return { saved: files.length > 0, missing: DEFAULT_FILES.filter(name => !files.some(file => file.name === name)) };
+  }
+
   private async secrets(user: string): Promise<AutomationSecrets> {
     if (!user) throw new Error("user_required");
     const saved = await this.store.get(SECRETS, user);
