@@ -112,7 +112,7 @@ def user_env(name):
         return ""
 
 
-def env_preamble():
+def env_preamble(injected=None):
     """Set RGM_AUTOMATION and inject the tunnel credentials into the kernel.
 
     The values are base64-encoded so a syntax error in the cell cannot print them
@@ -121,13 +121,14 @@ def env_preamble():
     values = {"RGM_AUTOMATION": "1"}
     saved = {}
     creds_path = HERE / ".colab-creds.json"
-    if creds_path.is_file():
+    if injected is None and creds_path.is_file():
         saved = json.loads(creds_path.read_text(encoding="utf-8"))
     for key in ENV_KEYS:
         # Process env wins, then the persistent user env (setx), then the file.
-        value = (os.environ.get(key, "").strip()
+        value = (str(injected.get(key, "")).strip() if injected is not None else
+                 (os.environ.get(key, "").strip()
                  or user_env(key)
-                 or str(saved.get(key, "")).strip())
+                 or str(saved.get(key, "")).strip()))
         if value:
             values[key] = value
     blob = base64.b64encode(json.dumps(values).encode("utf-8")).decode("ascii")
@@ -197,7 +198,8 @@ def execute_live(ws, session_id, code, timeout=CELL_TIMEOUT, echo=True):
         elif kind == "error":
             trace = "\n".join(content.get("traceback", []))
             out.append(trace)
-            print(trace)
+            if echo:
+                print(trace)
             return False, content.get("ename", "error"), "".join(out)
         elif kind == "execute_reply":
             status = content.get("status")
@@ -211,39 +213,44 @@ def execute_live(ws, session_id, code, timeout=CELL_TIMEOUT, echo=True):
                         late = json.loads(ws.recv())
                     except Exception:
                         break
+                    if late.get("parent_header", {}).get("msg_id") != msg_id:
+                        continue
                     lk = late.get("header", {}).get("msg_type")
                     lc = late.get("content", {})
                     if lk == "stream":
                         t = lc.get("text", "")
                         out.append(t)
-                        sys.stdout.write(t)
-                        sys.stdout.flush()
+                        if echo:
+                            sys.stdout.write(t)
+                            sys.stdout.flush()
                     elif lk in ("execute_result", "display_data"):
                         t = lc.get("data", {}).get("text/plain", "")
                         if t:
                             out.append(t + "\n")
-                            print(t)
+                            if echo:
+                                print(t)
             finally:
                 ws.settimeout(prev)
             return status == "ok", status, "".join(out)
     return False, "timeout", "".join(out)
 
 
-def restore_state(ws, session_id, state_dir):
+def valid_state_path(rel):
+    return isinstance(rel, str) and "\\" not in rel and ":" not in rel and (
+        rel == "tailscaled.state" or (rel.startswith("certs/") and
+        all(part not in ("", ".", "..") for part in rel.split("/"))))
+
+
+def restore_state_data(ws, session_id, files):
     """Copy a saved tailnet identity into /content/ts-run before the tunnel cell.
 
     With it present, the notebook's `restored_login` is true, so it reuses the
     existing node instead of registering a new one (no hostname drift, no new cert).
     """
-    if not state_dir.is_dir():
-        return 0
-    files = {}
-    for p in state_dir.rglob("*"):
-        if p.is_file():
-            rel = str(p.relative_to(state_dir)).replace("\\", "/")
-            files[rel] = base64.b64encode(p.read_bytes()).decode("ascii")
     if not files:
         return 0
+    if any(not valid_state_path(rel) for rel in files):
+        raise ValueError("invalid state path")
     payload = base64.b64encode(json.dumps(files).encode()).decode("ascii")
     code = (
         "import base64, json\n"
@@ -259,7 +266,18 @@ def restore_state(ws, session_id, state_dir):
     return len(files) if ok else 0
 
 
-def dump_state(ws, session_id, state_dir):
+def restore_state(ws, session_id, state_dir):
+    if not state_dir.is_dir():
+        return 0
+    files = {}
+    for p in state_dir.rglob("*"):
+        if p.is_file():
+            rel = str(p.relative_to(state_dir)).replace("\\", "/")
+            files[rel] = base64.b64encode(p.read_bytes()).decode("ascii")
+    return restore_state_data(ws, session_id, files)
+
+
+def dump_state_data(ws, session_id):
     """Save the runtime's tailnet identity locally before the runtime is deleted."""
     code = (
         "import base64, json\n"
@@ -277,19 +295,144 @@ def dump_state(ws, session_id, state_dir):
     )
     ok, status, out = execute_live(ws, session_id, code, timeout=120, echo=False)
     if not ok:
-        return 0
+        return {}
     m = re.search(r"STATE_DUMP:(\{.*\})", out or "", re.S)
     if not m:
-        return 0
+        return {}
     data = json.loads(m.group(1))
+    if not isinstance(data, dict) or any(not valid_state_path(rel) for rel in data):
+        raise ValueError("invalid state path")
+    return data
+
+
+def dump_state(ws, session_id, state_dir):
+    data = dump_state_data(ws, session_id)
     if not data:
         return 0
+    # State originates in a remote kernel; never trust its file paths.
+    if any(not valid_state_path(rel) for rel in data):
+        raise ValueError("invalid state path")
     state_dir.mkdir(parents=True, exist_ok=True)
     for rel, b64 in data.items():
         p = state_dir / rel
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_bytes(base64.b64decode(b64))
     return len(data)
+
+
+def bootstrap_runtime(args, cells, name, runtime, hooks=None):
+    """Bootstrap an already allocated runtime; the caller owns its lifecycle.
+
+    Credentials and connection information stay in memory. The caller decides
+    whether to retain or delete the runtime, including on bootstrap failure.
+    """
+    indices = [int(x) for x in args.cells.split(",") if x.strip()]
+    host, port, suffix, ptoken = probe.parse_proxy(runtime["connectionInfo"])
+    print(f"  runtime {name}")
+    print(f"  host    {host}")
+
+    verdict, detail, funnel = "INCONCLUSIVE", "", None
+    scheme, status, body, err = None, None, "", ""
+    for attempt in range(1, 25):
+        scheme, status, body, err = probe.discover_scheme(host, ptoken)
+        if scheme is not None and status == 200:
+            break
+        print(f"[1] attempt {attempt}: Jupyter not ready ({scheme} HTTP {status})")
+        time.sleep(5)
+    print(f"[1] Jupyter API via {scheme} -> HTTP {status}")
+    if scheme is None or status != 200:
+        verdict, detail = "NO_JUPYTER", f"HTTP {status} {err}"
+        return 1
+
+    req = urllib.request.Request(
+        f"https://{host}/api/kernels",
+        data=json.dumps({"name": "python3"}).encode(),
+        method="POST",
+        headers={"Content-Type": "application/json", "X-Colab-Runtime-Proxy-Token": ptoken},
+    )
+    with urllib.request.urlopen(req, timeout=60) as r:
+        kernel_id = json.loads(r.read().decode())["id"]
+    print(f"[2] kernel {kernel_id}")
+    if not probe.wait_for_kernel(host, ptoken, scheme, kernel_id):
+        print("    kernel did not report idle; continuing")
+
+    ws, session_id = probe.ws_connect(host, ptoken, scheme, kernel_id)
+    ws.settimeout(args.timeout)
+
+    print("[3] environment")
+    ok, st, _ = execute_live(ws, session_id, PREAMBLE, timeout=180)
+    if not ok:
+        verdict, detail = "PREAMBLE_FAILED", st
+        return 1
+    env_code, injected = env_preamble(hooks["credentials"]) if hooks else env_preamble()
+    ok, st, _ = execute_live(ws, session_id, env_code, timeout=60)
+    if not ok:
+        verdict, detail = "ENV_FAILED", st
+        return 1
+    print(f"    injected: {', '.join(injected)}")
+
+    if hooks is not None:
+        restore_state_data(ws, session_id, hooks.get("state", {}))
+    elif not args.no_state:
+        restored = restore_state(ws, session_id, Path(args.state_dir))
+        print(f"    state: restored {restored} file(s)" if restored
+              else "    state: none saved yet (first run)")
+
+    if args.stub:
+        print("[4] stubbing section 3")
+        ok, st, _ = execute_live(ws, session_id, STUB, timeout=120)
+        if not ok:
+            verdict, detail = "STUB_FAILED", st
+            return 1
+
+    for idx in indices:
+        print(f"\n[5] cell {idx}")
+        ok, st, out = execute_live(ws, session_id, cells[idx], timeout=args.timeout)
+        print(f"    -> {st}")
+        if not ok:
+            verdict, detail = "CELL_FAILED", f"cell {idx}: {st}"
+            return 1
+        for pattern in (r"GATEWAY_UPSTREAM=(https?://\S+)", r"Tunnel online:\s*(https?://\S+)"):
+            m = re.search(pattern, out or "")
+            if m:
+                funnel = m.group(1).rstrip(".,)")
+
+    if hooks is not None:
+        hooks["state"] = dump_state_data(ws, session_id)
+    elif not args.no_state:
+        saved = dump_state(ws, session_id, Path(args.state_dir))
+        print(f"\n[5c] tailnet state: saved {saved} file(s) to {args.state_dir}")
+
+    if args.fetch_images:
+        print("\n[5b] fetching generated images")
+        ok_f, st_f, out_f = execute_live(ws, session_id, FETCH_IMAGES, timeout=180)
+        m = re.search(r"RGM_IMAGES:(\[.*\])", out_f or "", re.S)
+        if m:
+            try:
+                paths = save_images(json.loads(m.group(1)), Path(args.out_dir))
+                print(f"    saved {len(paths)} image(s): " + ", ".join(p.name for p in paths))
+            except Exception as exc:
+                print(f"    could not save images: {exc}")
+        else:
+            print(f"    no images reported ({st_f})")
+
+    print("\n[6] verifying ComfyUI")
+    ok, st, out = execute_live(ws, session_id, VERIFY, timeout=120)
+    ws.close()
+    if ok and "COMFY 200" in out:
+        verdict = "COMFY_UP"
+        detail = "cells ran; ComfyUI answered /system_stats"
+    else:
+        verdict, detail = "VERIFY_FAILED", (out.strip() or st)
+    if funnel:
+        detail += f" | funnel {funnel}"
+    print(f"\nRESULT: {verdict}")
+    print(f"  {detail}")
+    if funnel:
+        print(f"  GATEWAY_UPSTREAM={funnel}")
+    if hooks is not None:
+        hooks["funnel"] = funnel
+    return 0 if verdict == "COMFY_UP" else 1
 
 
 def main():
@@ -316,8 +459,6 @@ def main():
     parser.add_argument("--no-state", action="store_true",
                         help="do not restore or save tailnet state")
     args = parser.parse_args()
-    indices = [int(x) for x in args.cells.split(",") if x.strip()]
-
     cells = load_cells(Path(args.notebook))
     for spec in args.override or []:
         idx, old, new = int(spec[0]), spec[1], spec[2]
@@ -341,107 +482,8 @@ def main():
     token = probe.access_token()
     print("=== Colab bootstrap probe ===")
     name, runtime = probe.create_runtime(token, args.accelerator.upper())
-    host, port, suffix, ptoken = probe.parse_proxy(runtime["connectionInfo"])
-    print(f"  runtime {name}")
-    print(f"  host    {host}")
-
-    verdict, detail, funnel = "INCONCLUSIVE", "", None
     try:
-        scheme, status, body, err = None, None, "", ""
-        for attempt in range(1, 25):
-            scheme, status, body, err = probe.discover_scheme(host, ptoken)
-            if scheme is not None and status == 200:
-                break
-            print(f"[1] attempt {attempt}: Jupyter not ready ({scheme} HTTP {status})")
-            time.sleep(5)
-        print(f"[1] Jupyter API via {scheme} -> HTTP {status}")
-        if scheme is None or status != 200:
-            verdict, detail = "NO_JUPYTER", f"HTTP {status} {err}"
-            return 1
-
-        req = urllib.request.Request(
-            f"https://{host}/api/kernels",
-            data=json.dumps({"name": "python3"}).encode(),
-            method="POST",
-            headers={"Content-Type": "application/json", "X-Colab-Runtime-Proxy-Token": ptoken},
-        )
-        with urllib.request.urlopen(req, timeout=60) as r:
-            kernel_id = json.loads(r.read().decode())["id"]
-        print(f"[2] kernel {kernel_id}")
-        if not probe.wait_for_kernel(host, ptoken, scheme, kernel_id):
-            print("    kernel did not report idle; continuing")
-
-        ws, session_id = probe.ws_connect(host, ptoken, scheme, kernel_id)
-        ws.settimeout(args.timeout)
-
-        print("[3] environment")
-        ok, st, _ = execute_live(ws, session_id, PREAMBLE, timeout=180)
-        if not ok:
-            verdict, detail = "PREAMBLE_FAILED", st
-            return 1
-        env_code, injected = env_preamble()
-        ok, st, _ = execute_live(ws, session_id, env_code, timeout=60)
-        if not ok:
-            verdict, detail = "ENV_FAILED", st
-            return 1
-        print(f"    injected: {', '.join(injected)}")
-
-        if not args.no_state:
-            restored = restore_state(ws, session_id, Path(args.state_dir))
-            print(f"    state: restored {restored} file(s)" if restored
-                  else "    state: none saved yet (first run)")
-
-        if args.stub:
-            print("[4] stubbing section 3")
-            ok, st, _ = execute_live(ws, session_id, STUB, timeout=120)
-            if not ok:
-                verdict, detail = "STUB_FAILED", st
-                return 1
-
-        for idx in indices:
-            print(f"\n[5] cell {idx}")
-            ok, st, out = execute_live(ws, session_id, cells[idx], timeout=args.timeout)
-            print(f"    -> {st}")
-            if not ok:
-                verdict, detail = "CELL_FAILED", f"cell {idx}: {st}"
-                return 1
-            for pattern in (r"GATEWAY_UPSTREAM=(https?://\S+)", r"Tunnel online:\s*(https?://\S+)"):
-                m = re.search(pattern, out or "")
-                if m:
-                    funnel = m.group(1).rstrip(".,)")
-
-        if not args.no_state:
-            saved = dump_state(ws, session_id, Path(args.state_dir))
-            print(f"\n[5c] tailnet state: saved {saved} file(s) to {args.state_dir}")
-
-        if args.fetch_images:
-            print("\n[5b] fetching generated images")
-            ok_f, st_f, out_f = execute_live(ws, session_id, FETCH_IMAGES, timeout=180)
-            m = re.search(r"RGM_IMAGES:(\[.*\])", out_f or "", re.S)
-            if m:
-                try:
-                    paths = save_images(json.loads(m.group(1)), Path(args.out_dir))
-                    print(f"    saved {len(paths)} image(s): " + ", ".join(p.name for p in paths))
-                except Exception as exc:
-                    print(f"    could not save images: {exc}")
-            else:
-                print(f"    no images reported ({st_f})")
-
-        print("\n[6] verifying ComfyUI")
-        ok, st, out = execute_live(ws, session_id, VERIFY, timeout=120)
-        ws.close()
-        if ok and "COMFY 200" in out:
-            verdict = "COMFY_UP"
-            detail = "cells ran; ComfyUI answered /system_stats"
-        else:
-            verdict, detail = "VERIFY_FAILED", (out.strip() or st)
-        if funnel:
-            detail += f" | funnel {funnel}"
-        print(f"\nRESULT: {verdict}")
-        print(f"  {detail}")
-        if funnel:
-            print(f"  GATEWAY_UPSTREAM={funnel}")
-        return 0 if verdict == "COMFY_UP" else 1
+        return bootstrap_runtime(args, cells, name, runtime)
     finally:
         if args.keep:
             print(f"\n--keep: {name} is still running.")

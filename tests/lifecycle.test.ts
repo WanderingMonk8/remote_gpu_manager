@@ -65,7 +65,7 @@ async function ensureCreds(atBase: string): Promise<void> {
   if (!res.ok) throw new Error(`ensureCreds failed: ${res.status}`);
 }
 
-function spawnGateway(port: number, colabPort: number | null, upstream: string) {
+function spawnGateway(port: number, colabPort: number | null, upstream: string, extraEnv: Record<string, string> = {}) {
   return Bun.spawn(["bun", "host-gateway/gateway.ts"], {
       env: {
         ...process.env,
@@ -73,6 +73,7 @@ function spawnGateway(port: number, colabPort: number | null, upstream: string) 
         GATEWAY_UPSTREAM: upstream,
         GATEWAY_BASIC_AUTH: "lumiverse:test-secret",
         GATEWAY_CONTROL_TOKEN: CONTROL_TOKEN,
+        ...extraEnv,
         ...(colabPort !== null
           ? {
               GATEWAY_LIFECYCLE: "1",
@@ -186,6 +187,32 @@ describe("credentials custody (ADR-006)", () => {
 });
 
 describe("start / status / stop", () => {
+  test("bootstrap passes the owned connection privately and adopts the returned endpoint", async () => {
+    const port = PORT_BASE + 9;
+    const gateway = spawnGateway(port, COLAB_PORT, `http://127.0.0.1:${MOCK_PORT}`, {
+      GATEWAY_BOOTSTRAP: "1", GATEWAY_BOOTSTRAP_PYTHON: process.execPath,
+      GATEWAY_BOOTSTRAP_SCRIPT: "tests/mock-colab/bootstrap-worker.ts",
+    });
+    const url = `http://127.0.0.1:${port}`;
+    try {
+      await waitFor(async () => (await fetch(`${url}/system_stats`)).ok);
+      await ensureCreds(url);
+      expect((await fetch(`${url}/gateway/v1/runtime`, { method: "POST", headers: auth })).status).toBe(200);
+      const response = await fetch(`${url}/gateway/v1/runtime/bootstrap`, {
+        method: "POST", headers: { ...auth, "Content-Type": "application/json" },
+        body: JSON.stringify({ ts_authkey: "key", basic_user: "user", basic_pass: "secret", state: {} }),
+      });
+      const data = await response.json();
+      expect(response.status).toBe(200);
+      expect(data.upstream).toBe("https://mock.ts.net");
+      expect(data.state["tailscaled.state"]).toBe("c2VjcmV0");
+      expect(JSON.stringify(data)).not.toContain("mock-proxy-token-SECRET");
+    } finally {
+      await fetch(`${url}/gateway/v1/runtime`, { method: "DELETE", headers: auth }).catch(() => {});
+      gateway.kill("SIGKILL");
+    }
+  });
+
   test("a second gateway reconciles before start instead of allocating again", async () => {
     await ensureCreds(base());
     const first = await (await fetch(`${base()}/gateway/v1/runtime`, { method: "POST", headers: auth })).json();
