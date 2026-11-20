@@ -62,9 +62,10 @@ export function setup(ctx: SpindleFrontendContext) {
       </details>
       <details><summary>Drive model cache</summary>
         <p>Use a web OAuth client, browser API key, and project number from the same Google Cloud project as the Colab OAuth client. Select the three MOSS SFT model files, together or one at a time.</p>
-        <label>Google web OAuth client ID<input class="rgm-picker-client" type="text" autocomplete="off" /></label>
-        <label>Google Picker API key<input class="rgm-picker-key" type="text" autocomplete="off" /></label>
-        <label>Google Cloud project number<input class="rgm-picker-project" type="text" autocomplete="off" /></label>
+        <label>Google web OAuth client ID<input class="rgm-picker-client" type="password" autocomplete="off" /></label>
+        <label>Google Picker API key<input class="rgm-picker-key" type="password" autocomplete="off" /></label>
+        <label>Google Cloud project number<input class="rgm-picker-project" type="password" autocomplete="off" /></label>
+        <p>Saved Picker settings are masked. You can replace them when needed.</p>
         <button class="rgm-save-picker" type="button">Save Picker settings</button>
         <p class="rgm-picker-settings-status" role="status"></p>
         <button class="rgm-picker" type="button">Select cache files</button>
