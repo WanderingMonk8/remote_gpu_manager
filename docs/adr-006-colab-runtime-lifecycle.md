@@ -32,6 +32,8 @@ changed: the Colab API v1beta is now public (discovery revision 20261118).
 | `drive.mount()` blocks headless (no browser → `input()` never returns); a guard that skips Drive when `RGM_AUTOMATION=1` fixes it, with no other cell changes | cell 4, preflight timeout then guard |
 | **Colab Secrets are unavailable headless:** `userdata.get` fails with "Secrets can only be fetched when running from the Colab UI" | cell 6 HF token warning |
 | Without Drive, every start re-downloads 12.1 GiB (~10 min) | cell 6 timing |
+| **Tunnel works headless (2026-11-20):** cells 2,4,8,10,25 with the stub → Caddy on 8189 + tailscaled + Funnel; returned `https://moss-comfy-1.tailf0a296.ts.net`, captured as `GATEWAY_UPSTREAM`, runtime deleted | `tools/colab-bootstrap-probe.py --stub` |
+| Ephemeral tailnet state ⇒ hostname gains a `-N` suffix (`moss-comfy` → `moss-comfy-1`) and a fresh TLS cert is issued every session | cell 25 output |
 
 The spike holds OAuth tokens in memory only and writes nothing but the masked result file.
 
@@ -80,6 +82,13 @@ Lifecycle control is the gateway's job, called through the Colab API — not the
   enclave via env injection.
   (c) Without Drive, weights re-download (12.1 GiB) on every start — a caching decision
   still open.
+- **Tailnet identity must persist, or the endpoint is not stable.** Headless runs use
+  ephemeral `tailscaled` state, so each start creates a new node: the Funnel hostname gains
+  a `-N` suffix and a fresh TLS certificate is issued (Let's Encrypt allows ~5 duplicate
+  certs per hostname per week). Until state persists, the ADR-005 assumption that
+  `GATEWAY_UPSTREAM` is set once does not hold. Options: gateway-mediated state custody
+  (worker uploads `tailscaled.state` before stop, downloads it at start), a non-interactive
+  Drive mount, or a dedicated automation hostname plus node cleanup.
 
 ## 5. Alternatives considered
 
