@@ -1,3 +1,4 @@
+import { bundledWorkbook } from "./workbook";
 /** Automation orchestration with injected enclave and loopback transport. */
 export interface AutomationSecrets {
   controlToken: string;
@@ -158,6 +159,9 @@ export class AutomationController {
     }
     const existing = await this.call("/gateway/v1/runtime/bootstrap", "GET", s.controlToken);
     if (existing.status !== "idle") throw new Error("bootstrap_result_pending");
+    if (existing.workbook_transfer !== 1) throw new Error("gateway_workbook_update_required");
+    const workbook = await bundledWorkbook();
+    await this.call("/gateway/v1/runtime/workbook-check", "POST", s.controlToken, { workbook });
     await this.call("/gateway/v1/runtime/credentials", "POST", s.controlToken,
       { client_id: s.clientId, client_secret: s.clientSecret, refresh_token: s.refreshToken });
     await this.call("/gateway/v1/runtime/cache-check", "POST", s.controlToken, { files: driveFiles });
@@ -169,7 +173,7 @@ export class AutomationController {
     // Do not rerun notebook setup on a reused runtime that may contain work.
     if (allocation.reused) throw new Error("runtime_already_exists");
     await this.call("/gateway/v1/runtime/bootstrap", "POST", s.controlToken,
-      { ts_authkey: s.tailnetKey, basic_user: s.basicUser, basic_pass: s.basicPass, state, drive_files: driveFiles });
+      { ts_authkey: s.tailnetKey, basic_user: s.basicUser, basic_pass: s.basicPass, state, drive_files: driveFiles, workbook });
   }
 
   async poll(user: string): Promise<{ status: string; workerHealthy?: boolean; error?: string }> {

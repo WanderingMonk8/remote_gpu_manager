@@ -14,7 +14,7 @@ describe("automation controller", () => {
     }, async (path, _method, _token, body) => {
       calls.push({ path, body });
       if (path.endsWith("/specs")) return { specs: [{ accelerator: "L4", shape: "SHAPE_STANDARD" }] };
-      if (path.endsWith("/bootstrap") && body === undefined) return { status: "idle" };
+      if (path.endsWith("/bootstrap") && body === undefined) return { status: "idle", workbook_transfer: 1 };
       return {};
     });
     await controller.save("owner", secrets);
@@ -55,7 +55,7 @@ describe("automation controller", () => {
       async put(key, value, user) { entries.set(`${user}:${key}`, value); },
     }, async (path, method, _token, body) => {
       calls.push({ path, method, body });
-      if (path.endsWith("/bootstrap") && method === "GET") return { status: "idle" };
+      if (path.endsWith("/bootstrap") && method === "GET") return { status: "idle", workbook_transfer: 1 };
       return {};
     });
     await controller.save("owner", secrets);
@@ -74,6 +74,23 @@ describe("automation controller", () => {
     const allocation = calls.findIndex(call => call.path === "/gateway/v1/runtime" && call.method === "POST");
     expect(calls[idle].body).toEqual({ minutes: 15 });
     expect(idle).toBeLessThan(allocation);
+  });
+
+  test("refuses to allocate when the gateway cannot receive the final workbook", async () => {
+    const entries = new Map<string, string>();
+    const calls: Array<{ path: string; method: string }> = [];
+    const controller = new AutomationController({
+      async get(key, user) { return entries.get(`${user}:${key}`) ?? null; },
+      async put(key, value, user) { entries.set(`${user}:${key}`, value); },
+    }, async (path, method) => { calls.push({ path, method }); return { status: "idle" }; });
+    await controller.save("owner", secrets);
+    await controller.saveDriveFiles("owner", [
+      { id: "a", name: "moss_image_sft_int8_convrot.safetensors" },
+      { id: "b", name: "qwen3.5_9b_w4a8_gptq.safetensors" },
+      { id: "c", name: "flux2-vae_small.safetensors" },
+    ]);
+    await expect(controller.start("owner")).rejects.toThrow("gateway_workbook_update_required");
+    expect(calls.some(call => call.path === "/gateway/v1/runtime" && call.method === "POST")).toBe(false);
   });
 
   test("distinguishes Picker selection problems without exposing file IDs", () => {
@@ -144,7 +161,7 @@ describe("automation controller", () => {
       async put(key, value, user) { entries.set(`${user}:${key}`, value); },
     }, async (path, method) => {
       calls.push(`${method}:${path}`);
-      if (path.endsWith("bootstrap")) return { status: "idle" };
+      if (path.endsWith("bootstrap")) return { status: "idle", workbook_transfer: 1 };
       if (path.endsWith("cache-check")) throw new Error("drive_access_required");
       return {};
     });

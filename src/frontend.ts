@@ -47,6 +47,7 @@ export function setup(ctx: SpindleFrontendContext) {
       <div class="rgm-status" data-tone="unknown">Not checked yet.</div>
       <pre class="rgm-out"></pre>
       <h3>Colab automation</h3>
+      <p class="rgm-workbook-status" role="status">Checking workbook revision...</p>
       <p>Credentials are saved in your encrypted enclave. Starting allocates a Colab runtime; stop it when finished.</p>
       <details><summary>Automation credentials</summary>
         <p>Credential fields stay blank for security even when saved. Leave a field blank to keep its saved value.</p>
@@ -222,6 +223,13 @@ export function setup(ctx: SpindleFrontendContext) {
   });
 
   const unsub = ctx.onBackendMessage((payload: any) => {
+    if (payload?.action === "automation_workbook_info") {
+      const status = drawer.root.querySelector(".rgm-workbook-status");
+      if (status) status.textContent = payload.type === "automation_result" && /^[a-f0-9]{64}$/.test(payload.result?.sha256)
+        ? `Final workbook SHA-256: ${payload.result.sha256.slice(0, 12)} (extension copy).`
+        : "Could not identify the extension workbook.";
+      return;
+    }
     if (payload?.action === "automation_idle_get") {
       if (payload.type === "automation_result" && payload.result?.minutes !== null && !idleDirty) {
         idleSelect.value = String(payload.result.minutes);
@@ -325,6 +333,7 @@ export function setup(ctx: SpindleFrontendContext) {
         missing_basic_pass: "Enter the tunnel Basic Auth password.",
         invalid_basic_user: "The tunnel Basic Auth username cannot contain spaces or a colon.",
         invalid_credentials: "Check the credential fields and try again.",
+        gateway_workbook_update_required: "The gateway must support extension-supplied workbooks before Colab can start. No runtime was allocated.",
       };
       automationStatus.textContent = messages[payload.error] ?? `${payload.action}: ${payload.error}`;
       if (payload.action === "automation_save") pendingSecrets = null;
@@ -380,6 +389,7 @@ export function setup(ctx: SpindleFrontendContext) {
   send("automation_drive_status");
   send("automation_credentials_status");
   send("automation_idle_get");
+  send("automation_workbook_info");
 
   return () => {
     if (pollTimer) clearTimeout(pollTimer);
