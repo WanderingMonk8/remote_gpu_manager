@@ -431,6 +431,8 @@ interface OwnedRuntime {
 }
 let owned: OwnedRuntime | null = null;
 let provisioning = false;
+let stopping = false;
+let workInFlight = 0;
 let bootstrapJob: { status: "running" | "finished"; httpStatus?: number; result?: unknown } | null = null;
 // An interrupted create may still succeed at Google. Never issue another create
 // in this process until the ambiguous operation is resolved by an operator.
@@ -656,9 +658,31 @@ async function statusRuntime(): Promise<Response> {
   });
 }
 
-async function stopRuntime(): Promise<Response> {
-  if (provisioning || bootstrapJob?.status === "running") return errJson(409, "provisioning_in_progress");
+async function queueIsIdle(): Promise<boolean> {
+  const rule = ROUTES.find((r) => r.method === "GET" && r.pattern.test("/queue"));
+  if (!rule) throw new Error("queue_unavailable");
+  const q = await fetchUpstream("/queue", { method: "GET", headers: upstreamHeaders() }, rule);
+  if (q.status < 200 || q.status >= 300) throw new Error("queue_unavailable");
+  const data = JSON.parse(new TextDecoder().decode(q.body));
+  if (!Array.isArray(data.queue_running) || !Array.isArray(data.queue_pending)) throw new Error("queue_unavailable");
+  return data.queue_running.length === 0 && data.queue_pending.length === 0;
+}
+
+async function stopRuntime(force = false): Promise<Response> {
+  if (provisioning || bootstrapJob?.status === "running" || stopping) return errJson(409, "provisioning_in_progress");
   if (!owned) return errJson(404, "no_owned_runtime");
+  stopping = true;
+  try {
+  if (!force) {
+    if (workInFlight) return errJson(409, "runtime_busy");
+    const observedWork = lastWorkAt;
+    try {
+      if (!await queueIsIdle()) return errJson(409, "runtime_busy");
+    } catch {
+      return errJson(409, "queue_unavailable");
+    }
+    if (lastWorkAt !== observedWork || workInFlight) return errJson(409, "runtime_busy");
+  }
   const name = owned.name;
   const { status, json } = await colabRequest("DELETE", `/v1beta/${name}`);
   if (status !== 200 && status !== 204 && status !== 404) throw colabError(status, json);
@@ -678,6 +702,9 @@ async function stopRuntime(): Promise<Response> {
     },
     { status: 202 },
   );
+  } finally {
+    stopping = false;
+  }
 }
 
 async function bootstrapRuntime(req: Request): Promise<Response> {
@@ -826,7 +853,7 @@ async function handleRuntime(req: Request, path: string): Promise<Response> {
   if (path === "/gateway/v1/runtime") {
     if (req.method === "POST") return startRuntime();
     if (req.method === "GET") return statusRuntime();
-    if (req.method === "DELETE") return stopRuntime();
+    if (req.method === "DELETE") return stopRuntime(new URL(req.url).searchParams.get("force") === "1");
   }
   if (path === "/gateway/v1/runtime/idle" && req.method === "PUT") {
     let body: any;
@@ -849,13 +876,8 @@ if (LIFECYCLE_ENABLED) {
       try {
         if (!owned || idleMinutes <= 0 || provisioning || bootstrapJob?.status === "running") return;
         if (Date.now() - lastWorkAt < idleMinutes * 60_000) return;
-        const queueRule = ROUTES.find((r) => r.method === "GET" && r.pattern.test("/queue"));
-        if (!queueRule) return;
         // Same injected auth as the proxy path — a bare GET here returns 401.
-        const q = await fetchUpstream("/queue", { method: "GET", headers: upstreamHeaders() }, queueRule);
-        const j = JSON.parse(new TextDecoder().decode(q.body));
-        const depth = (j.queue_running?.length ?? 0) + (j.queue_pending?.length ?? 0);
-        if (depth > 0) {
+        if (!await queueIsIdle()) {
           noteWork();
           return;
         }
@@ -894,6 +916,7 @@ const server = Bun.serve<WsData>({
     const url = new URL(req.url);
     const path = url.pathname.replace(/\/+$/, "") || "/";
     const ms = () => Date.now() - started;
+    let countedWork = false;
 
     try {
       /* ---- control plane ---- */
@@ -928,6 +951,12 @@ const server = Bun.serve<WsData>({
         audit(req.method, path, res.status, ms());
         return res;
       }
+      if (isWorkRoute(req.method, path)) {
+        if (stopping) return errJson(503, "runtime_stopping");
+        workInFlight++;
+        countedWork = true;
+        noteWork();
+      }
 
       const body =
         req.method === "POST" ? new Uint8Array(await readBounded(req, rule.maxBytes)) : undefined;
@@ -945,6 +974,25 @@ const server = Bun.serve<WsData>({
         const res = await proxyStreamingView(path + url.search, upstreamInit, rule);
         if (res.ok) noteWork(); // result retrieval is real work (PRD R-05)
         audit(req.method, path, res.status, ms());
+        if (countedWork && res.body) {
+          const reader = res.body.getReader();
+          let released = false;
+          const release = () => {
+            if (!released) { released = true; workInFlight--; noteWork(); }
+          };
+          const stream = new ReadableStream({
+            async pull(controller) {
+              try {
+                const chunk = await reader.read();
+                if (chunk.done) { release(); controller.close(); }
+                else controller.enqueue(chunk.value);
+              } catch (error) { release(); controller.error(error); }
+            },
+            async cancel(reason) { try { await reader.cancel(reason); } finally { release(); } },
+          });
+          countedWork = false;
+          return new Response(stream, { status: res.status, statusText: res.statusText, headers: res.headers });
+        }
         return res;
       }
 
@@ -978,6 +1026,8 @@ const server = Bun.serve<WsData>({
       const res = errJson(status, code);
       audit(req.method, path, status, ms());
       return res;
+    } finally {
+      if (countedWork) workInFlight--;
     }
   },
 

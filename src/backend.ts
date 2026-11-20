@@ -67,7 +67,7 @@ spindle.onFrontendMessage(async (payload: any, userId?: string) => {
           break;
         case "automation_poll": result = await automation.poll(userId); break;
         case "automation_status": result = await automation.status(userId); break;
-        case "automation_stop": result = await automation.stop(userId); break;
+        case "automation_stop": result = await automation.stop(userId, payload.force === true); break;
         case "automation_idle": result = await automation.idle(userId, payload.minutes); break;
         default: throw new Error("unsupported_action");
       }

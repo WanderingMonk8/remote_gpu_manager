@@ -348,6 +348,8 @@ var creds = null;
 var accessToken = null;
 var owned = null;
 var provisioning = false;
+var stopping = false;
+var workInFlight = 0;
 var bootstrapJob = null;
 var uncertainCreate = false;
 var lastWorkAt = Date.now();
@@ -562,27 +564,57 @@ async function statusRuntime() {
     }
   });
 }
-async function stopRuntime() {
-  if (provisioning || bootstrapJob?.status === "running")
+async function queueIsIdle() {
+  const rule = ROUTES.find((r) => r.method === "GET" && r.pattern.test("/queue"));
+  if (!rule)
+    throw new Error("queue_unavailable");
+  const q = await fetchUpstream("/queue", { method: "GET", headers: upstreamHeaders() }, rule);
+  if (q.status < 200 || q.status >= 300)
+    throw new Error("queue_unavailable");
+  const data = JSON.parse(new TextDecoder().decode(q.body));
+  if (!Array.isArray(data.queue_running) || !Array.isArray(data.queue_pending))
+    throw new Error("queue_unavailable");
+  return data.queue_running.length === 0 && data.queue_pending.length === 0;
+}
+async function stopRuntime(force = false) {
+  if (provisioning || bootstrapJob?.status === "running" || stopping)
     return errJson(409, "provisioning_in_progress");
   if (!owned)
     return errJson(404, "no_owned_runtime");
-  const name = owned.name;
-  const { status, json } = await colabRequest("DELETE", `/v1beta/${name}`);
-  if (status !== 200 && status !== 204 && status !== 404)
-    throw colabError(status, json);
-  const check = await colabRequest("GET", `/v1beta/${name}`);
-  if (check.status === 404) {
-    owned = null;
-    console.log(`[rgm-gateway] lifecycle: deleted ${name} (confirmed)`);
-    return Response.json({ deleted: true, name, confirmed: true });
+  stopping = true;
+  try {
+    if (!force) {
+      if (workInFlight)
+        return errJson(409, "runtime_busy");
+      const observedWork = lastWorkAt;
+      try {
+        if (!await queueIsIdle())
+          return errJson(409, "runtime_busy");
+      } catch {
+        return errJson(409, "queue_unavailable");
+      }
+      if (lastWorkAt !== observedWork || workInFlight)
+        return errJson(409, "runtime_busy");
+    }
+    const name = owned.name;
+    const { status, json } = await colabRequest("DELETE", `/v1beta/${name}`);
+    if (status !== 200 && status !== 204 && status !== 404)
+      throw colabError(status, json);
+    const check = await colabRequest("GET", `/v1beta/${name}`);
+    if (check.status === 404) {
+      owned = null;
+      console.log(`[rgm-gateway] lifecycle: deleted ${name} (confirmed)`);
+      return Response.json({ deleted: true, name, confirmed: true });
+    }
+    return Response.json({
+      deleted: false,
+      name,
+      confirmed: false,
+      detail: "delete accepted but runtime still listed; recheck GET /gateway/v1/runtime"
+    }, { status: 202 });
+  } finally {
+    stopping = false;
   }
-  return Response.json({
-    deleted: false,
-    name,
-    confirmed: false,
-    detail: "delete accepted but runtime still listed; recheck GET /gateway/v1/runtime"
-  }, { status: 202 });
 }
 async function bootstrapRuntime(req) {
   if (!BOOTSTRAP_ENABLED)
@@ -725,7 +757,7 @@ async function handleRuntime(req, path) {
     if (req.method === "GET")
       return statusRuntime();
     if (req.method === "DELETE")
-      return stopRuntime();
+      return stopRuntime(new URL(req.url).searchParams.get("force") === "1");
   }
   if (path === "/gateway/v1/runtime/idle" && req.method === "PUT") {
     let body;
@@ -746,13 +778,7 @@ if (LIFECYCLE_ENABLED) {
           return;
         if (Date.now() - lastWorkAt < idleMinutes * 60000)
           return;
-        const queueRule = ROUTES.find((r) => r.method === "GET" && r.pattern.test("/queue"));
-        if (!queueRule)
-          return;
-        const q = await fetchUpstream("/queue", { method: "GET", headers: upstreamHeaders() }, queueRule);
-        const j = JSON.parse(new TextDecoder().decode(q.body));
-        const depth = (j.queue_running?.length ?? 0) + (j.queue_pending?.length ?? 0);
-        if (depth > 0) {
+        if (!await queueIsIdle()) {
           noteWork();
           return;
         }
@@ -773,6 +799,7 @@ var server = Bun.serve({
     const url = new URL(req.url);
     const path = url.pathname.replace(/\/+$/, "") || "/";
     const ms = () => Date.now() - started;
+    let countedWork = false;
     try {
       if (path.startsWith("/gateway/")) {
         const res = await handleControl(req, path);
@@ -801,6 +828,13 @@ var server = Bun.serve({
         audit(req.method, path, res.status, ms());
         return res;
       }
+      if (isWorkRoute(req.method, path)) {
+        if (stopping)
+          return errJson(503, "runtime_stopping");
+        workInFlight++;
+        countedWork = true;
+        noteWork();
+      }
       const body = req.method === "POST" ? new Uint8Array(await readBounded(req, rule.maxBytes)) : undefined;
       const contentType = req.headers.get("content-type") ?? "application/json";
       const upstreamInit = {
@@ -813,6 +847,41 @@ var server = Bun.serve({
         if (res.ok)
           noteWork();
         audit(req.method, path, res.status, ms());
+        if (countedWork && res.body) {
+          const reader = res.body.getReader();
+          let released = false;
+          const release = () => {
+            if (!released) {
+              released = true;
+              workInFlight--;
+              noteWork();
+            }
+          };
+          const stream = new ReadableStream({
+            async pull(controller) {
+              try {
+                const chunk = await reader.read();
+                if (chunk.done) {
+                  release();
+                  controller.close();
+                } else
+                  controller.enqueue(chunk.value);
+              } catch (error) {
+                release();
+                controller.error(error);
+              }
+            },
+            async cancel(reason) {
+              try {
+                await reader.cancel(reason);
+              } finally {
+                release();
+              }
+            }
+          });
+          countedWork = false;
+          return new Response(stream, { status: res.status, statusText: res.statusText, headers: res.headers });
+        }
         return res;
       }
       const upstream = await fetchUpstream(path + (req.method === "GET" ? url.search : ""), upstreamInit, rule);
@@ -841,6 +910,9 @@ var server = Bun.serve({
       const res = errJson(status, code);
       audit(req.method, path, status, ms());
       return res;
+    } finally {
+      if (countedWork)
+        workInFlight--;
     }
   },
   websocket: {

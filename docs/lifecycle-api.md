@@ -145,6 +145,11 @@ confirm deletion, not a stop request). If the delete is accepted but the runtime
 is still listed, the gateway returns `202` with `"confirmed": false` instead of
 claiming success.
 
+Normal stop refuses if the queue is busy or cannot be verified. The separately
+confirmed `DELETE /gateway/v1/runtime?force=1` overrides that check, including
+when the worker is offline. Incoming generation work is held out while a stop is
+in progress, and in-flight work and streamed image retrieval hold normal stop.
+
 ## Idle shutdown
 
 ```json
