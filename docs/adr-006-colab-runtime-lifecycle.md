@@ -22,6 +22,8 @@ changed: the Colab API v1beta is now public (discovery revision 20261118).
 |---|---|
 | Public API: `POST/GET/DELETE /v1beta/runtimes`, `GET /v1beta/runtimespecs`; scope `…/auth/colaboratory` | live discovery document |
 | Free tier **allocates**: `VARIANT_GPU / T4 / SHAPE_STANDARD` created as `runtimes/rgm-spike-eefd1a`, `connectionInfo` returned, runtime deleted | `tools/colab-runtime-api.py`, run 2026-11-20 |
+| **Gateway path verified end to end against real Colab (2026-11-20):** credentials → `POST /gateway/v1/runtime` (allocated `runtimes/rgm-gw-3411f931`, T4 STANDARD, 5.6 s) → status `ready` → `DELETE` → `confirmed: true` → `offline` | local gateway, `tools/test-lifecycle.mjs` |
+| Allocation landed in **asia-southeast1**: `8080-gpu-t4-s-ass1c3-….asia-southeast1.prod.r.colab.dev` | same run |
 | `connectionInfo.url` is a port-prefixed proxy host: `https://8080-gpu-t4-s-….us-west4.prod.r.colab.dev` | `docs/colab-runtime-api-result.json` (gitignored, token masked) |
 | Proxy token is short-lived (`expireTime` present); refresh by re-`GET`ting the runtime | API schema `ConnectionInfo` |
 | `eligible: true` in `ListRuntimeSpecs` is permission to ask, not a guarantee of stock; both states now observed | `docs/colab-eligibility-result.json` + the spike run |
@@ -55,8 +57,9 @@ Lifecycle control is the gateway's job, called through the Colab API — not the
   process. Options: (a) HF Space secret (new secret; owner approval required), (b) Spindle Secure
   Enclave. Decision required before any gateway code.
 - **Open technical question.** Does the proxy route by port prefix (`8080-…` → `8188-…`)? If yes,
-  an API-created runtime can publish ComfyUI directly and the Funnel becomes optional. Test
-  design: create a runtime, run a trivial HTTP server on 8188 inside it via the Jupyter API using
+  an API-created runtime can publish ComfyUI directly and the Funnel becomes optional. The
+  observed host (`8080-gpu-t4-s-ass1c3-….asia-southeast1.prod.r.colab.dev`) makes this testable:
+  create a runtime, run a trivial HTTP server on 8188 inside it via the Jupyter API using
   `connectionInfo`, then `GET https://8188-<same-host>` with `X-Colab-Runtime-Proxy-Token`.
   Deferred until custody is settled.
 - `connectionInfo.url` targets Jupyter (8080), not ComfyUI (8188). Do not assume parity.
