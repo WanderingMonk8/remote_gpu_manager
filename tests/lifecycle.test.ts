@@ -13,10 +13,13 @@
  */
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import type { Subprocess } from "bun";
+import { existsSync, unlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 // Randomized high ports so concurrent/leftover instances never collide.
 // Integration suite uses 19200+pid%400; this file starts above its range.
-const PORT_BASE = 19700 + (process.pid % 200);
+const PORT_BASE = 24000 + Math.floor(Math.random() * 15000);
 const COLAB_PORT = PORT_BASE;
 const COLAB_FAIL_PORT = PORT_BASE + 1;
 const MOCK_PORT = PORT_BASE + 2;
@@ -187,6 +190,33 @@ describe("credentials custody (ADR-006)", () => {
 });
 
 describe("start / status / stop", () => {
+  test("persistent allocation intent permits recovery and clears after confirmed stop", async () => {
+    const file = join(tmpdir(), `rgm-intent-${crypto.randomUUID()}.json`);
+    const port = PORT_BASE + 11;
+    const env = { RUNTIME_INTENT_FILE: file };
+    let gateway = spawnGateway(port, COLAB_PORT, `http://127.0.0.1:${MOCK_PORT}`, env);
+    const url = `http://127.0.0.1:${port}`;
+    try {
+      await waitFor(async () => (await fetch(`${url}/system_stats`)).ok);
+      await ensureCreds(url);
+      const first = await (await fetch(`${url}/gateway/v1/runtime`, { method: "POST", headers: auth })).json();
+      expect(existsSync(file)).toBe(true);
+      gateway.kill("SIGKILL");
+      await gateway.exited;
+      gateway = spawnGateway(port, COLAB_PORT, `http://127.0.0.1:${MOCK_PORT}`, env);
+      await waitFor(async () => (await fetch(`${url}/system_stats`)).ok);
+      await ensureCreds(url);
+      const second = await (await fetch(`${url}/gateway/v1/runtime`, { method: "POST", headers: auth })).json();
+      expect(second.runtime.name).toBe(first.runtime.name);
+      expect(second.reused).toBe(true);
+      expect((await fetch(`${url}/gateway/v1/runtime`, { method: "DELETE", headers: auth })).status).toBe(200);
+      expect(existsSync(file)).toBe(false);
+    } finally {
+      gateway.kill("SIGKILL");
+      if (existsSync(file)) unlinkSync(file);
+    }
+  });
+
   test("unreadable queue prevents normal stop", async () => {
     const port = PORT_BASE + 10;
     const gateway = spawnGateway(port, COLAB_PORT, `http://127.0.0.1:${MOCK_PORT}`, { GATEWAY_BASIC_AUTH: "wrong:wrong" });

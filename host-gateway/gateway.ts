@@ -21,6 +21,7 @@
  */
 
 import { timingSafeEqual } from "node:crypto";
+import { open, readFile, unlink } from "node:fs/promises";
 import { runBootstrap } from "./bootstrap";
 
 const VERSION = "0.2.0-m4";
@@ -56,6 +57,9 @@ const LIFECYCLE_ENABLED = (process.env.GATEWAY_LIFECYCLE ?? "") === "1";
 const BOOTSTRAP_ENABLED = process.env.GATEWAY_BOOTSTRAP === "1";
 const BOOTSTRAP_PYTHON = process.env.GATEWAY_BOOTSTRAP_PYTHON ?? "python3";
 const BOOTSTRAP_SCRIPT = process.env.GATEWAY_BOOTSTRAP_SCRIPT ?? "tools/colab-bootstrap-worker.py";
+// A dedicated persistent path lets allocation intent survive gateway restarts.
+// The file contains only an owned runtime name, never credentials.
+const INTENT_FILE = process.env.RUNTIME_INTENT_FILE ?? "";
 const COLAB_BASE = (process.env.COLAB_BASE ?? "https://colaboratory.googleapis.com").replace(/\/+$/, "");
 const OAUTH_TOKEN_URL = process.env.OAUTH_TOKEN_URL ?? "https://oauth2.googleapis.com/token";
 const RUNTIME_PREFIX = "rgm-gw-";
@@ -561,6 +565,14 @@ async function reconcile(): Promise<void> {
   }
   if (mine.length > 0) {
     const r = mine[0];
+    if (INTENT_FILE) {
+      try {
+        const intent = JSON.parse(await readFile(INTENT_FILE, "utf8"));
+        if (intent.name !== r.name) throw new Error("mismatch");
+      } catch {
+        throw new HttpError(409, "ownership_unverified", "Runtime does not match the persistent allocation intent");
+      }
+    }
     owned = {
       name: r.name,
       url: r.connectionInfo?.url ?? "",
@@ -582,8 +594,27 @@ async function startRuntime(): Promise<Response> {
     // A new gateway process must discover an existing runtime before allocating.
     await reconcile();
     if (owned) return Response.json({ runtime: maskRuntime(owned), state: "ready", reused: true });
+    if (INTENT_FILE) {
+      try {
+        await readFile(INTENT_FILE, "utf8");
+        // Even a missing listed runtime may be an eventually consistent create.
+        return errJson(409, "allocation_uncertain");
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new Error("intent_unavailable");
+      }
+    }
     const spec = await pickEligibleSpec();
     const runtimeId = RUNTIME_PREFIX + crypto.randomUUID().slice(0, 8);
+    if (INTENT_FILE) {
+      try {
+        const file = await open(INTENT_FILE, "wx", 0o600);
+        try { await file.writeFile(JSON.stringify({ name: `runtimes/${runtimeId}` })); await file.sync(); }
+        finally { await file.close(); }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "EEXIST") return errJson(409, "allocation_uncertain");
+        throw new Error("intent_unavailable");
+      }
+    }
     let created: { status: number; json: any };
     try {
       created = await colabRequest("POST", `/v1beta/runtimes?runtimeId=${runtimeId}`, { runtimeSpec: spec });
@@ -593,7 +624,8 @@ async function startRuntime(): Promise<Response> {
     }
     const { status, json } = created;
     if (status !== 200 && status !== 201) {
-      if (status >= 500) uncertainCreate = true;
+      if (status >= 500 || status === 408) uncertainCreate = true;
+      else if (INTENT_FILE) await unlink(INTENT_FILE);
       throw colabError(status, json);
     }
     const name = `runtimes/${runtimeId}`;
@@ -690,6 +722,15 @@ async function stopRuntime(force = false): Promise<Response> {
   const check = await colabRequest("GET", `/v1beta/${name}`);
   if (check.status === 404) {
     owned = null;
+    if (INTENT_FILE) {
+      // Only clear a matching intent after confirmed deletion.
+      try {
+        const intent = JSON.parse(await readFile(INTENT_FILE, "utf8"));
+        if (intent.name === name) await unlink(INTENT_FILE);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") console.warn("[rgm-gateway] lifecycle: intent cleanup failed");
+      }
+    }
     console.log(`[rgm-gateway] lifecycle: deleted ${name} (confirmed)`);
     return Response.json({ deleted: true, name, confirmed: true });
   }

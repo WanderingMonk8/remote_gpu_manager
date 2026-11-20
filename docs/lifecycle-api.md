@@ -109,8 +109,9 @@ POST /gateway/v1/runtime  ->  200
   reconciliation. This is not an interprocess lock: run only one controller.
 - If the create request has an ambiguous transport or server failure, further starts
   in that process fail with `allocation_uncertain`. Inspect Colab before recovery.
-  This guard is in memory and does not survive a restart, so it is not yet a durable
-  solution for delayed or eventually consistent allocation.
+  Configure `RUNTIME_INTENT_FILE` on persistent storage to preserve allocation
+  intent across restarts and fence competing controllers. A stale intent blocks
+  allocation until the operator verifies Colab state and removes the file.
 - After a successful create, the gateway retains the runtime handle even when
   connection polling fails, allowing status and stop to find it.
 - Only runtimes named `rgm-gw-*` are ever created, adopted or deleted. Another
@@ -178,6 +179,7 @@ PUT /gateway/v1/runtime/idle   {"minutes": 10}
 | `RUNTIME_IDLE_MINUTES` | `10` | Initial idle timeout |
 | `RUNTIME_CREATE_TIMEOUT_MS` | `300000` | How long to wait for `connectionInfo` |
 | `RUNTIME_IDLE_CHECK_MS` | `30000` | Timer resolution |
+| `RUNTIME_INTENT_FILE` | unset | Absolute persistent file path for allocation intent; parent directory must exist |
 
 ## Typed errors (PRD §5)
 
