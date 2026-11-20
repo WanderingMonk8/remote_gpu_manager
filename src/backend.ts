@@ -61,6 +61,9 @@ spindle.onFrontendMessage(async (payload: any, userId?: string) => {
           await automation.save(userId, payload.secrets);
           result = { saved: true };
           break;
+        case "automation_drive_status":
+          result = await automation.driveStatus(userId);
+          break;
         case "automation_save_drive":
           result = await automation.saveDriveFiles(userId, payload.files);
           break;
