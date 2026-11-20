@@ -30,6 +30,7 @@ import argparse
 import base64
 import importlib.util
 import json
+import os
 import re
 import sys
 import time
@@ -101,12 +102,15 @@ def env_preamble():
     in a traceback. Nothing here is written to disk in the runtime.
     """
     values = {"RGM_AUTOMATION": "1"}
+    saved = {}
     creds_path = HERE / ".colab-creds.json"
     if creds_path.is_file():
         saved = json.loads(creds_path.read_text(encoding="utf-8"))
-        for key in ENV_KEYS:
-            if str(saved.get(key, "")).strip():
-                values[key] = str(saved[key]).strip()
+    for key in ENV_KEYS:
+        # Host environment wins, matching the notebook's own precedence.
+        value = os.environ.get(key, "").strip() or str(saved.get(key, "")).strip()
+        if value:
+            values[key] = value
     blob = base64.b64encode(json.dumps(values).encode("utf-8")).decode("ascii")
     code = (
         "import base64, json, os\n"
