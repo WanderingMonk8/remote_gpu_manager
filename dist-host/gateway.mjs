@@ -657,9 +657,10 @@ async function recoverAllocation(req) {
     const listed = await colabRequest("GET", "/v1beta/runtimes");
     if (listed.status !== 200)
       throw colabError(listed.status, listed.json);
-    if (!Array.isArray(listed.json?.runtimes))
+    if (!listed.json || typeof listed.json !== "object" || Array.isArray(listed.json) || listed.json.runtimes !== undefined && !Array.isArray(listed.json.runtimes) || listed.json.nextPageToken)
       return errJson(502, "colab_invalid_response");
-    if (listed.json.runtimes.some((r) => r?.name?.startsWith(`runtimes/${RUNTIME_PREFIX}`)))
+    const runtimes = listed.json.runtimes ?? [];
+    if (runtimes.some((r) => r?.name?.startsWith(`runtimes/${RUNTIME_PREFIX}`)))
       return errJson(409, "recovery_runtime_present");
     const exact = await colabRequest("GET", `/v1beta/${name}`);
     if (exact.status === 200)

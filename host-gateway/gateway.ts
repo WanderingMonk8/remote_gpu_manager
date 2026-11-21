@@ -727,8 +727,13 @@ async function recoverAllocation(req: Request): Promise<Response> {
     if (typeof name !== "string" || !/^runtimes\/rgm-gw-[a-zA-Z0-9-]+$/.test(name)) return errJson(409, "recovery_intent_invalid");
     const listed = await colabRequest("GET", "/v1beta/runtimes");
     if (listed.status !== 200) throw colabError(listed.status, listed.json);
-    if (!Array.isArray(listed.json?.runtimes)) return errJson(502, "colab_invalid_response");
-    if (listed.json.runtimes.some((r: any) => r?.name?.startsWith(`runtimes/${RUNTIME_PREFIX}`))) return errJson(409, "recovery_runtime_present");
+    // Google omits the repeated runtimes field when the list is empty.
+    // Reject malformed or paginated replies rather than overlooking a runtime.
+    if (!listed.json || typeof listed.json !== "object" || Array.isArray(listed.json) ||
+        (listed.json.runtimes !== undefined && !Array.isArray(listed.json.runtimes)) ||
+        listed.json.nextPageToken) return errJson(502, "colab_invalid_response");
+    const runtimes = listed.json.runtimes ?? [];
+    if (runtimes.some((r: any) => r?.name?.startsWith(`runtimes/${RUNTIME_PREFIX}`))) return errJson(409, "recovery_runtime_present");
     const exact = await colabRequest("GET", `/v1beta/${name}`);
     if (exact.status === 200) return errJson(409, "recovery_runtime_present");
     if (exact.status !== 404) throw colabError(exact.status, exact.json);
