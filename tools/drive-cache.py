@@ -77,8 +77,8 @@ def build_restore_cell(token, files, model="MOSS SFT INT8", family=None, custom=
         required = {"qwen_3_06b_base.safetensors", "qwen_image_vae.safetensors"} if family == "anima" else {"qwen3.5_9b_w4a8_gptq.safetensors", "flux2-vae_small.safetensors"} if family == "moss" else None
     else:
         required = MODELS.get(model)
-    if not required or not set(required).issubset(names):
-        raise ValueError("incomplete selected model cache")
+    if not required or not names.issubset(set(required) | ({custom_name} if custom_name else set())):
+        raise ValueError("selected cache does not match model")
     payload = base64.b64encode(json.dumps({"token": token, "files": selected}).encode()).decode()
     return f'''
 import base64, hashlib, json, os, requests
