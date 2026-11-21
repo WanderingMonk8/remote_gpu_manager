@@ -145,7 +145,7 @@ export function setup(ctx: SpindleFrontendContext) {
       for (const value of field.options) { const option = document.createElement("option"); option.value = value; option.textContent = value; input.appendChild(option); }
     } else {
       const item = input as HTMLInputElement;
-      item.type = field.type === "boolean" ? "checkbox" : "number";
+      item.type = field.type === "boolean" ? "checkbox" : field.type === "text" ? "text" : "number";
       if (field.type === "integer") { item.min = String(field.min); item.max = String(field.max); item.step = "1"; }
     }
     input.addEventListener("change", () => { settingsDirty = true; });
