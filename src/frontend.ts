@@ -149,6 +149,7 @@ export function setup(ctx: SpindleFrontendContext) {
   let pickerDirty = false;
   const send = (type: string, extra: object = {}) => ctx.sendToBackend({ type, ...extra });
   // Serialize writes by action so a slower earlier request cannot overwrite a newer choice.
+  const AUTOSAVE_DELAY_MS = 1000;
   const saves = new Map<string, { active: boolean; pending: (() => object) | null; timer?: ReturnType<typeof setTimeout> }>();
   function queueSave(action: string, value: () => object, delay = 0) {
     let entry = saves.get(action);
@@ -235,8 +236,8 @@ export function setup(ctx: SpindleFrontendContext) {
       item.type = field.type === "boolean" ? "checkbox" : field.type === "text" ? "text" : "number";
       if (field.type === "integer") { item.min = String(field.min); item.max = String(field.max); item.step = "1"; }
     }
-    input.addEventListener("input", () => { settingsDirty = true; if (field.type === "text" || field.type === "integer") { if (settingsTimer) clearTimeout(settingsTimer); settingsTimer = setTimeout(() => saveWorkbookSettings(), 700); } });
-    input.addEventListener("change", () => { settingsDirty = true; if (field.key === "MODEL_CHOICE") renderCacheFiles(); saveWorkbookSettings(); });
+    input.addEventListener("input", () => { settingsDirty = true; if (field.type === "text" || field.type === "integer") { if (settingsTimer) clearTimeout(settingsTimer); settingsTimer = setTimeout(() => saveWorkbookSettings(), AUTOSAVE_DELAY_MS); } });
+    input.addEventListener("change", () => { settingsDirty = true; if (settingsTimer) clearTimeout(settingsTimer); if (field.key === "MODEL_CHOICE") renderCacheFiles(); saveWorkbookSettings(); });
     label.appendChild(input); settingsRoot.appendChild(label);
   }
   function showWorkbookSettings(settings: Record<string, any>) {
@@ -260,7 +261,7 @@ export function setup(ctx: SpindleFrontendContext) {
   const civitaiTokenStatus = drawer.root.querySelector(".rgm-civitai-token-status") as HTMLParagraphElement;
   const saveToken = () => { if (civitaiToken.value.trim()) { const token = civitaiToken.value; civitaiTokenStatus.textContent = "Saving token..."; queueSave("automation_civitai_token_save", () => ({ token })); } };
   let tokenTimer: ReturnType<typeof setTimeout> | null = null;
-  civitaiToken.addEventListener("input", () => { if (tokenTimer) clearTimeout(tokenTimer); tokenTimer = setTimeout(saveToken, 700); });
+  civitaiToken.addEventListener("input", () => { if (tokenTimer) clearTimeout(tokenTimer); tokenTimer = setTimeout(saveToken, AUTOSAVE_DELAY_MS); });
   civitaiToken.addEventListener("change", () => { if (tokenTimer) clearTimeout(tokenTimer); saveToken(); });
   let removeTokenAfterSave = false;
   drawer.root.querySelector(".rgm-civitai-token-remove")?.addEventListener("click", () => {
@@ -286,7 +287,7 @@ export function setup(ctx: SpindleFrontendContext) {
     return { clientId: field(".rgm-picker-client"), apiKey: field(".rgm-picker-key"), projectNumber: field(".rgm-picker-project") };
   };
   drawer.root.querySelectorAll<HTMLInputElement>(".rgm-picker-client, .rgm-picker-key, .rgm-picker-project")
-    .forEach(input => input.addEventListener("input", () => { pickerDirty = true; const config = pickerConfig(); if (!config.projectNumber || /^\d+$/.test(config.projectNumber)) queueSave("automation_picker_config_save", () => ({ config }), 700); }));
+    .forEach(input => input.addEventListener("input", () => { pickerDirty = true; const config = pickerConfig(); if (!config.projectNumber || /^\d+$/.test(config.projectNumber)) queueSave("automation_picker_config_save", () => ({ config }), AUTOSAVE_DELAY_MS); }));
   function saveSecrets() {
     const secrets: Record<string, string> = {};
     drawer.root.querySelectorAll<HTMLInputElement>("[data-secret]").forEach(input => {
@@ -298,7 +299,7 @@ export function setup(ctx: SpindleFrontendContext) {
   let secretsTimer: ReturnType<typeof setTimeout> | null = null;
   drawer.root.querySelectorAll<HTMLInputElement>("[data-secret]").forEach(input => input.addEventListener("input", () => {
     if (secretsTimer) clearTimeout(secretsTimer);
-    secretsTimer = setTimeout(saveSecrets, 700);
+    secretsTimer = setTimeout(saveSecrets, AUTOSAVE_DELAY_MS);
   }));
   drawer.root.querySelector(".rgm-picker")?.addEventListener("click", async () => {
     try {
