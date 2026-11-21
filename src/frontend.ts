@@ -368,6 +368,7 @@ export function setup(ctx: SpindleFrontendContext) {
       automationStatus.textContent = `${payload.action}: ${display}${result.error ? ` (${result.error})` : ""}${result.workerHealthy === true ? " — worker healthy" : result.workerHealthy === false ? " — worker health check failed" : ""}`;
       if (payload.action === "automation_status") {
         if (result.worker) automationStatus.textContent += `; worker ${String(result.worker).replace(/_/g, " ")}`;
+        if (result.jupyter) automationStatus.textContent += `; Jupyter connection ${result.jupyter}`;
         if (result.job) automationStatus.textContent += `; jobs ${result.job.state}${result.job.lastActivity ? `, last activity ${new Date(result.job.lastActivity).toLocaleTimeString()}` : ""}`;
         if (result.idle?.lastWorkAt) automationStatus.textContent += `; last gateway work ${new Date(result.idle.lastWorkAt).toLocaleTimeString()}`;
         if (result.lastRuntimeObservation) automationStatus.textContent += `; last runtime observation ${String(result.lastRuntimeObservation.event).replace(/_/g, " ")} at ${new Date(result.lastRuntimeObservation.at).toLocaleTimeString()}`;

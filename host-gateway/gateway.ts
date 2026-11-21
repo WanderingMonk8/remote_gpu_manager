@@ -23,6 +23,7 @@
 import { timingSafeEqual } from "node:crypto";
 import { appendFile, open, readFile, rename, stat, unlink } from "node:fs/promises";
 import { runBootstrap } from "./bootstrap";
+import { JupyterConnection } from "./jupyter-connection";
 import { JobTracker } from "./job-tracker";
 
 const VERSION = "0.2.0-m4";
@@ -437,6 +438,14 @@ interface OwnedRuntime {
   tokenExpireTime: string;
 }
 let owned: OwnedRuntime | null = null;
+const jupyter = new JupyterConnection(async () => {
+  if (!owned) throw new Error("runtime unavailable");
+  const name = owned.name;
+  const got = await colabRequest("GET", `/v1beta/${name}`);
+  if (got.status !== 200 || owned?.name !== name || typeof got.json?.connectionInfo?.url !== "string" ||
+      typeof got.json?.connectionInfo?.token !== "string") throw new Error("connection unavailable");
+  return got.json.connectionInfo;
+});
 let provisioning = false;
 let stopping = false;
 let workInFlight = 0;
@@ -707,6 +716,7 @@ async function statusRuntime(): Promise<Response> {
     const got = await colabRequest("GET", `/v1beta/${owned.name}`);
     if (got.status === 404) {
       recordDiagnostic("provider_runtime_missing");
+      jupyter.stop();
       owned = null; // deleted outside the gateway (e.g. Colab-side idle reaping)
       jobs.reset();
     } else if (got.status !== 200) {
@@ -733,6 +743,7 @@ async function statusRuntime(): Promise<Response> {
     runtime: owned ? maskRuntime(owned) : null,
     state: provisioning || (owned && !owned.url) ? "starting" : owned ? "ready" : "offline",
     worker,
+    jupyter: jupyter.status(),
     job: jobs.snapshot(),
     lastDiagnostic,
     lastRuntimeObservation,
@@ -778,6 +789,7 @@ async function recoverAllocation(req: Request): Promise<Response> {
     if (await readFile(INTENT_FILE, "utf8") !== raw) return errJson(409, "recovery_intent_changed");
     await rename(INTENT_FILE, `${INTENT_FILE}.resolved-${crypto.randomUUID()}`);
     owned = null;
+    jupyter.stop();
     uncertainCreate = false;
     jobs.reset();
     return Response.json({ recovered: true });
@@ -816,6 +828,7 @@ async function stopRuntime(force = false, reason: "manual" | "idle" = "manual"):
   const check = await colabRequest("GET", `/v1beta/${name}`);
   if (check.status === 404) {
     owned = null;
+    jupyter.stop();
     recordDiagnostic(force ? "force_stop_confirmed" : reason === "idle" ? "idle_stop_confirmed" : "manual_stop_confirmed");
     jobs.reset();
     if (INTENT_FILE) {
@@ -896,6 +909,7 @@ async function bootstrapRuntime(req: Request): Promise<Response> {
       ...(Array.isArray(drive_files) && drive_files.length
         ? { drive: { token: await ensureAccessToken(), files: drive_files } } : {}),
     });
+    jupyter.start(result.kernelId);
     // Reuse the same URL allowlist and credential validation as manual adoption.
     const adopted = await handleControl(new Request("http://127.0.0.1/gateway/v1/upstream", {
       method: "PUT", headers: { Authorization: `Bearer ${CONTROL_TOKEN}`, "Content-Type": "application/json" },

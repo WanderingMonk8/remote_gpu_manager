@@ -10,6 +10,7 @@ export interface BootstrapRequest {
 export interface BootstrapResult {
   funnel: string;
   state: Record<string, string>;
+  kernelId: string;
 }
 
 export async function runBootstrap(
@@ -39,10 +40,11 @@ export async function runBootstrap(
     if (exit !== 0) throw new Error("bootstrap_failed");
     const result = JSON.parse(Buffer.concat(chunks).toString("utf8"));
     if (result?.ok !== true || typeof result.funnel !== "string" ||
-        !result.state || typeof result.state !== "object" || Array.isArray(result.state)) {
+        !result.state || typeof result.state !== "object" || Array.isArray(result.state) ||
+        typeof result.kernelId !== "string" || !/^[a-zA-Z0-9-]{1,100}$/.test(result.kernelId)) {
       throw new Error("bootstrap_invalid_response");
     }
-    return { funnel: result.funnel, state: result.state };
+    return { funnel: result.funnel, state: result.state, kernelId: result.kernelId };
   } catch {
     throw new Error("bootstrap_failed");
   } finally {
