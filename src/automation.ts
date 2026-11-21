@@ -132,13 +132,13 @@ export class AutomationController {
     return { saved: (await this.store.get(SECRETS, user)) !== null };
   }
 
-  async driveStatus(user: string): Promise<{ saved: boolean; missing: string[] }> {
+  async driveStatus(user: string): Promise<{ saved: boolean; missing: string[]; savedNames: string[] }> {
     if (!user) throw new Error("user_required");
     const saved = await this.store.get(DRIVE, user);
     const files: DriveFile[] = saved ? JSON.parse(saved) : [];
     if (!Array.isArray(files) || (files.length > 0 && driveSelectionIssue(files))) throw new Error("drive_selection_invalid");
     const model = String((await this.getWorkbookSettings(user)).MODEL_CHOICE);
-    return { saved: files.length > 0, missing: requiredModelFiles(model).filter(name => !files.some(file => file.name === name)) };
+    return { saved: files.length > 0, missing: requiredModelFiles(model).filter(name => !files.some(file => file.name === name)), savedNames: files.map(file => file.name) };
   }
 
   private async secrets(user: string): Promise<AutomationSecrets> {

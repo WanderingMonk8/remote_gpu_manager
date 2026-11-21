@@ -1,7 +1,7 @@
 import type { SpindleFrontendContext } from "lumiverse-spindle-types";
 import { chooseDriveFiles } from "./drive-picker";
 import { driveSelectionIssue, validGpuPreference } from "./automation";
-import { workbookSettings } from "./workbook-settings";
+import { requiredModelFiles, workbookSettings } from "./workbook-settings";
 
 const ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.5"/><rect x="2.5" y="9" width="2" height="6"/><rect x="19.5" y="9" width="2" height="6"/><path d="M9.5 2.5v2M12 2.5v2M14.5 2.5v2M9.5 19.5v2M12 19.5v2M14.5 19.5v2"/></svg>`;
 
@@ -24,6 +24,7 @@ export function setup(ctx: SpindleFrontendContext) {
     .rgm-out { margin: 0; max-height: 220px; overflow: auto; white-space: pre-wrap; font-size: 11px; color: var(--lumiverse-text-muted); }
     .rgm-panel label { display: grid; gap: 4px; font-size: 12px; }
     .rgm-panel select { padding: 7px; }
+    .rgm-cache-files { overflow-wrap: anywhere; font-size: 12px; line-height: 1.6; }
     .rgm-panel input[type=checkbox] { width: auto; }
   `;
   const removeStyle = ctx.dom.addStyle(STYLES);
@@ -72,6 +73,8 @@ export function setup(ctx: SpindleFrontendContext) {
         <p>Saved Picker settings are masked. You can replace them when needed.</p>
         <button class="rgm-save-picker" type="button">Save Picker settings</button>
         <p class="rgm-picker-settings-status" role="status"></p>
+        <p>Choose the exact filenames shown below in Google Picker. Saved means the file was selected previously; access is checked before Colab starts.</p>
+        <div class="rgm-cache-files" role="status"></div>
         <button class="rgm-picker" type="button">Select cache files</button>
         <p class="rgm-drive-status" role="status">No selection made in this session.</p>
       </details>
@@ -136,6 +139,23 @@ export function setup(ctx: SpindleFrontendContext) {
   const settingsRoot = drawer.root.querySelector(".rgm-workbook-settings") as HTMLDivElement;
   const settingsStatus = drawer.root.querySelector(".rgm-workbook-settings-status") as HTMLParagraphElement;
   let settingsDirty = false;
+  let savedCacheNames: Set<string> | null = null;
+  const cacheFiles = drawer.root.querySelector(".rgm-cache-files") as HTMLDivElement;
+  function renderCacheFiles() {
+    const model = (settingsRoot.querySelector('[data-workbook-setting="MODEL_CHOICE"]') as HTMLSelectElement | null)?.value;
+    if (!model) return;
+    cacheFiles.replaceChildren();
+    const heading = document.createElement("strong");
+    heading.textContent = `Files for ${model}:`;
+    cacheFiles.appendChild(heading);
+    const list = document.createElement("ul");
+    for (const name of requiredModelFiles(model)) {
+      const item = document.createElement("li");
+      item.textContent = `${name} ? ${savedCacheNames === null ? "checking" : savedCacheNames.has(name) ? "saved" : "select this file"}`;
+      list.appendChild(item);
+    }
+    cacheFiles.appendChild(list);
+  }
   for (const field of workbookSettings) {
     const label = document.createElement("label");
     label.textContent = field.label;
@@ -148,7 +168,7 @@ export function setup(ctx: SpindleFrontendContext) {
       item.type = field.type === "boolean" ? "checkbox" : field.type === "text" ? "text" : "number";
       if (field.type === "integer") { item.min = String(field.min); item.max = String(field.max); item.step = "1"; }
     }
-    input.addEventListener("change", () => { settingsDirty = true; });
+    input.addEventListener("change", () => { settingsDirty = true; if (field.key === "MODEL_CHOICE") renderCacheFiles(); });
     label.appendChild(input); settingsRoot.appendChild(label);
   }
   function showWorkbookSettings(settings: Record<string, any>) {
@@ -158,6 +178,7 @@ export function setup(ctx: SpindleFrontendContext) {
     }
   }
   showWorkbookSettings(Object.fromEntries(workbookSettings.map(field => [field.key, field.default])));
+  renderCacheFiles();
   drawer.root.querySelector(".rgm-workbook-settings-save")?.addEventListener("click", () => {
     const settings: Record<string, boolean | number | string> = {};
     for (const field of workbookSettings) {
@@ -270,7 +291,7 @@ export function setup(ctx: SpindleFrontendContext) {
 
   const unsub = ctx.onBackendMessage((payload: any) => {
     if (payload?.action === "automation_workbook_settings_get") {
-      if (payload.type === "automation_result" && !settingsDirty) { showWorkbookSettings(payload.result.settings); settingsStatus.textContent = "Saved settings loaded."; }
+      if (payload.type === "automation_result" && !settingsDirty) { showWorkbookSettings(payload.result.settings); renderCacheFiles(); settingsStatus.textContent = "Saved settings loaded."; }
       else if (payload.type === "automation_error") settingsStatus.textContent = "Could not load saved settings.";
     }
     if (payload?.action === "automation_workbook_settings_save") {
@@ -349,6 +370,7 @@ export function setup(ctx: SpindleFrontendContext) {
       return;
     }
     if (payload?.action === "automation_drive_status") {
+      if (payload.type === "automation_result" && Array.isArray(payload.result?.savedNames)) { savedCacheNames = new Set(payload.result.savedNames); renderCacheFiles(); }
       if (driveStatus) {
         if (payload.type === "automation_error") driveStatus.textContent = `Could not load saved cache selection: ${payload.error}.`;
         else if (payload.result?.saved && payload.result.missing?.length === 0) driveStatus.textContent = "Required cache files are saved. You do not need to select them again.";
@@ -400,6 +422,7 @@ export function setup(ctx: SpindleFrontendContext) {
     }
     if (automationStatus && payload?.type === "automation_result") {
       const result = payload.result ?? {};
+      if (payload.action === "automation_save_drive" && result.saved) send("automation_drive_status");
       if (payload.action === "automation_save_drive" && result.saved && driveStatus) {
         driveStatus.textContent = result.complete
           ? "Required cache files are saved. You can now start Colab."
