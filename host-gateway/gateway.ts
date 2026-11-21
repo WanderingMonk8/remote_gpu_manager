@@ -947,7 +947,7 @@ async function bootstrapControl(req: Request): Promise<Response> {
   if (!BOOTSTRAP_ENABLED) return errJson(403, "bootstrap_disabled");
   const headers = { "Cache-Control": "no-store" };
   if (req.method === "GET") {
-    return Response.json({ ...(bootstrapJob ?? { status: "idle" }), workbook_transfer: 1, model_cache: 2 }, { headers });
+    return Response.json({ ...(bootstrapJob ?? { status: "idle" }), workbook_transfer: 1, model_cache: 3 }, { headers });
   }
   if (req.method === "DELETE") {
     if (bootstrapJob?.status === "running") return errJson(409, "provisioning_in_progress");

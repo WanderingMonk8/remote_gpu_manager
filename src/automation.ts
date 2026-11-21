@@ -1,4 +1,4 @@
-import { requiredModelFiles, validateWorkbookSettings, type WorkbookSettings } from "./workbook-settings";
+import { requiredModelCacheVersion, requiredModelFiles, validateWorkbookSettings, type WorkbookSettings } from "./workbook-settings";
 import { bundledWorkbook } from "./workbook";
 /** Automation orchestration with injected enclave and loopback transport. */
 export interface AutomationSecrets {
@@ -33,12 +33,12 @@ export function validGpuPreference(choice: any): choice is GpuPreference {
     typeof choice?.shape === "string" && /^SHAPE_[A-Z0-9_]{1,40}$/.test(choice.shape);
 }
 const DEFAULT_FILES = ["moss_image_sft_int8_convrot.safetensors", "qwen3.5_9b_w4a8_gptq.safetensors", "flux2-vae_small.safetensors"];
-const MODEL_FILES = new Set([...DEFAULT_FILES, "moss_image_base_int8_convrot.safetensors", "qwen_3_06b_base.safetensors", "qwen_image_vae.safetensors",
-  ...["base-v1.0", "turbo-v1.0", "turbo-v1.1", "aesthetic-v1.0", "aesthetic-v1.0b", "aesthetic-v1.1"].map(name => `anima-${name}.safetensors`)]);
+const MODEL_FILES = new Set([...DEFAULT_FILES, "moss_image_base_int8_convrot.safetensors", "moss_image_base_bf16.safetensors", "moss_image_sft_bf16.safetensors", "Anima-2.9B-preview-v1.safetensors", "Anima-2.9B-preview-v1_int8_convrot.safetensors", "qwen_3_06b_base.safetensors", "qwen_image_vae.safetensors",
+  ...["base-v1.0", "turbo-v1.0", "turbo-v1.1", "aesthetic-v1.0", "aesthetic-v1.0b", "aesthetic-v1.1", "preview", "preview2", "preview3-base"].map(name => `anima-${name}.safetensors`)]);
 
 export function driveSelectionIssue(files: DriveFile[]): string | null {
   if (!Array.isArray(files) || files.length === 0) return "drive_selection_empty";
-  if (files.length > 16) return "drive_selection_too_many";
+  if (files.length > 64) return "drive_selection_too_many";
   if (files.some(f => !f || typeof f.id !== "string" || !/^[A-Za-z0-9_-]{1,256}$/.test(f.id) || typeof f.name !== "string")) {
     return "drive_selection_metadata_missing";
   }
@@ -179,7 +179,7 @@ export class AutomationController {
     const existing = await this.call("/gateway/v1/runtime/bootstrap", "GET", s.controlToken);
     if (existing.status !== "idle") throw new Error("bootstrap_result_pending");
     if (existing.workbook_transfer !== 1) throw new Error("gateway_workbook_update_required");
-    if (existing.model_cache !== 2 && workbookSettings.MODEL_CHOICE !== "MOSS SFT INT8") throw new Error("gateway_model_cache_update_required");
+    if ((existing.model_cache ?? 1) < requiredModelCacheVersion(String(workbookSettings.MODEL_CHOICE))) throw new Error("gateway_model_cache_update_required");
     const workbook = await bundledWorkbook(workbookSettings);
     await this.call("/gateway/v1/runtime/workbook-check", "POST", s.controlToken, { workbook });
     await this.call("/gateway/v1/runtime/credentials", "POST", s.controlToken,

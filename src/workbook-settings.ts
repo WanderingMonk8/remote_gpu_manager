@@ -1,6 +1,6 @@
 /** Supported noninteractive workbook startup preferences. */
 export const workbookSettings = [
-  { key: "MODEL_CHOICE", label: "Model for next startup", type: "select", default: "MOSS SFT INT8", options: ["Anima Turbo v1.1", "Anima Aesthetic v1.1", "Anima Base v1.0", "Anima Turbo v1.0", "Anima Aesthetic v1.0", "Anima Aesthetic v1.0b", "MOSS SFT INT8", "MOSS Base INT8"] },
+  { key: "MODEL_CHOICE", label: "Model for next startup", type: "select", default: "MOSS SFT INT8", options: ["Anima Turbo v1.1", "Anima Aesthetic v1.1", "Anima Base v1.0", "Anima Turbo v1.0", "Anima Aesthetic v1.0", "Anima Aesthetic v1.0b", "MOSS SFT INT8", "MOSS Base INT8", "MOSS SFT BF16", "MOSS Base BF16", "Anima Preview", "Anima Preview 2", "Anima Preview 3 Base", "Anima 2.9B Preview BF16", "Anima 2.9B Preview INT8"] },
   { key: "UPDATE_COMFYUI", label: "Update ComfyUI during startup", type: "boolean", default: false },
   { key: "INSTALL_ANIMA_ADAPTER", label: "Install Anima reference adapter", type: "boolean", default: true },
   { key: "DOWNLOAD_ADAPTER_WEIGHTS", label: "Download Anima adapter weights", type: "boolean", default: false },
@@ -31,14 +31,24 @@ export function validateWorkbookSettings(input: unknown): WorkbookSettings {
 }
 
 export function requiredModelFiles(model: string): string[] {
-  if (model === "MOSS SFT INT8" || model === "MOSS Base INT8") return [
-    model === "MOSS SFT INT8" ? "moss_image_sft_int8_convrot.safetensors" : "moss_image_base_int8_convrot.safetensors",
-    "qwen3.5_9b_w4a8_gptq.safetensors", "flux2-vae_small.safetensors"];
+  if (/^MOSS (SFT|Base) (INT8|BF16)$/.test(model)) {
+    const flavor = model.includes("SFT") ? "sft" : "base";
+    const format = model.endsWith("BF16") ? "bf16" : "int8_convrot";
+    return [`moss_image_${flavor}_${format}.safetensors`, "qwen3.5_9b_w4a8_gptq.safetensors", "flux2-vae_small.safetensors"];
+  }
   const checkpoints: Record<string, string> = {
+    "Anima Preview": "anima-preview.safetensors", "Anima Preview 2": "anima-preview2.safetensors",
+    "Anima Preview 3 Base": "anima-preview3-base.safetensors", "Anima 2.9B Preview BF16": "Anima-2.9B-preview-v1.safetensors",
+    "Anima 2.9B Preview INT8": "Anima-2.9B-preview-v1_int8_convrot.safetensors",
     "Anima Turbo v1.1": "anima-turbo-v1.1.safetensors", "Anima Aesthetic v1.1": "anima-aesthetic-v1.1.safetensors",
     "Anima Base v1.0": "anima-base-v1.0.safetensors", "Anima Turbo v1.0": "anima-turbo-v1.0.safetensors",
     "Anima Aesthetic v1.0": "anima-aesthetic-v1.0.safetensors", "Anima Aesthetic v1.0b": "anima-aesthetic-v1.0b.safetensors",
   };
   if (!checkpoints[model]) throw new Error("workbook_settings_invalid");
   return [checkpoints[model], "qwen_3_06b_base.safetensors", "qwen_image_vae.safetensors"];
+}
+
+/** Gateway v3 knows the expanded model catalog. */
+export function requiredModelCacheVersion(model: string): number {
+  return ["MOSS SFT BF16", "MOSS Base BF16", "Anima Preview", "Anima Preview 2", "Anima Preview 3 Base", "Anima 2.9B Preview BF16", "Anima 2.9B Preview INT8"].includes(model) ? 3 : model === "MOSS SFT INT8" ? 1 : 2;
 }
