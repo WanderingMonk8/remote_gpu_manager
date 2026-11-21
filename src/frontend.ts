@@ -109,6 +109,8 @@ export function setup(ctx: SpindleFrontendContext) {
         <button class="rgm-runtime-status" type="button">Check runtime</button>
         <button class="rgm-recover" type="button">Recover allocation</button>
       </div>
+      <button class="rgm-workflow-download" type="button">Download worker workflow</button>
+      <p class="rgm-workflow-download-status" role="status">Downloads a starter workflow for the worker's available model.</p>
       <label>Idle shutdown
         <select class="rgm-idle"><option value="0">Disabled</option><option value="5">5 minutes</option><option value="10" selected>10 minutes</option><option value="15">15 minutes</option><option value="30">30 minutes</option></select>
       </label>
@@ -372,6 +374,11 @@ export function setup(ctx: SpindleFrontendContext) {
     if (window.confirm("Only continue if you verified in Google Colab that the previous runtime was terminated and no allocation is still in progress. A delayed allocation could still appear and incur charges. Recover the allocation safeguard?")) send("automation_recover");
   });
   drawer.root.querySelector(".rgm-runtime-status")?.addEventListener("click", () => { send("automation_status"); });
+  const workflowDownloadStatus = drawer.root.querySelector(".rgm-workflow-download-status") as HTMLParagraphElement;
+  drawer.root.querySelector(".rgm-workflow-download")?.addEventListener("click", () => {
+    workflowDownloadStatus.textContent = "Checking the worker's model...";
+    send("automation_workflow_download");
+  });
   urlInput?.addEventListener("change", () => {
     if (urlInput.value.trim()) ctx.sendToBackend({ type: "set_gateway_url", url: urlInput.value.trim() });
   });
@@ -385,6 +392,23 @@ export function setup(ctx: SpindleFrontendContext) {
     if (queued?.active && (payload.type === "automation_result" || payload.type === "automation_error")) {
       queued.active = false;
       if (queued.pending) setTimeout(() => flushSave(payload.action), 0);
+    }
+    if (payload?.action === "automation_workflow_download") {
+      if (payload.type === "automation_result" && payload.result?.workflow) {
+        const blob = new Blob([JSON.stringify(payload.result.workflow, null, 2)], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a"); link.href = url; link.download = "worker-workflow-api.json"; link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        workflowDownloadStatus.textContent = "Workflow downloaded. Import it into Lumiverse and set your generation values there.";
+      } else {
+        const messages: Record<string, string> = {
+          workflow_worker_unreachable: "Worker unavailable. Start Colab and wait until it is ready.",
+          workflow_model_ambiguous: "The worker has zero or multiple checkpoints, so its model cannot be identified safely.",
+          workflow_family_ambiguous: "The worker's model family cannot be identified safely.",
+        };
+        workflowDownloadStatus.textContent = messages[payload.error] ?? "Could not create a workflow from this worker.";
+      }
+      return;
     }
     if (["automation_civitai_cache_get", "automation_civitai_cache_save"].includes(payload?.action)) {
       civitaiCacheStatus.textContent = payload.type === "automation_result" ? (payload.result?.saved ? "A Drive copy is saved for this checkpoint; it will be verified before use." : "No Drive copy is saved; the checkpoint will download from Civitai.") : "Could not save that file. Select exactly the checkpoint filename shown above.";
