@@ -83,7 +83,7 @@ Bun.serve({
           connectionInfo: { url: "https://8080-foreign.colab.dev", token: "foreign", expireTime: "" },
         });
       }
-      return json({ runtimes: list });
+      return json(list.length ? { runtimes: list } : {});
     }
 
     const single = path.match(/^\/v1beta\/runtimes\/(.+)$/);
