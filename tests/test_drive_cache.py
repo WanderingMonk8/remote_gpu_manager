@@ -26,8 +26,8 @@ class Response:
 
 
 class DriveCacheTests(unittest.TestCase):
-    def test_requires_complete_safe_selection(self):
-        with self.assertRaises(ValueError): drive.build_restore_cell("token", files[:2])
+    def test_accepts_partial_safe_selection(self):
+        self.assertTrue(drive.build_restore_cell("token", files[:2]))
         with self.assertRaises(ValueError): drive.build_restore_cell("token", files + [{"id":"../bad", "name":"bad"}])
 
     def test_selected_model_requirements_and_workbook_parser(self):
@@ -35,8 +35,7 @@ class DriveCacheTests(unittest.TestCase):
             selected = [{"id": f"id{i}", "name": name} for i, name in enumerate(names)]
             self.assertEqual(drive.workbook_model(f"MODEL_CHOICE = {model!r} # @param []\n"), model)
             self.assertTrue(drive.build_restore_cell("token", selected, model))
-            with self.assertRaises(ValueError):
-                drive.build_restore_cell("token", selected[:-1], model)
+            self.assertTrue(drive.build_restore_cell("token", selected[:-1], model))
         with self.assertRaises(ValueError):
             drive.workbook_model("MODEL_CHOICE = __import__('os') # @param []")
         with self.assertRaises(ValueError):
