@@ -55,6 +55,21 @@ class DriveCacheTests(unittest.TestCase):
                 self.assertEqual((profile["checkpoint"], profile["encoder"], profile["vae"]), required)
                 self.assertTrue(set(required).issubset(drive.FILES))
 
+    def test_custom_model_overrides_builtin_checkpoint_for_each_family(self):
+        import os
+        notebook = json.loads((path.parents[1] / "Unified_MOSS_Anima_Colab_Studio_Tailscale_Final.ipynb").read_text(encoding="utf-8"))
+        tree = ast.parse("".join(notebook["cells"][6]["source"]))
+        fn = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "make_profile")
+        ns = {"ANIMA_REPO": "circlestone-labs/Anima", "MOSS_REPO": "Comfy-Org/MOSS-Image", "os": os}
+        exec(compile(ast.Module(body=[fn], type_ignores=[]), "<profile>", "exec"), ns)
+        for family, encoder in (("anima", "qwen_3_06b_base.safetensors"), ("moss", "qwen3.5_9b_w4a8_gptq.safetensors")):
+            with mock.patch.dict(os.environ, {"RGM_CIVITAI_FAMILY": family, "RGM_CIVITAI_CHECKPOINT": "civitai-45-67.safetensors"}):
+                profile = ns["make_profile"]("Custom Civitai")
+                self.assertEqual(profile["checkpoint"], "civitai-45-67.safetensors")
+                self.assertEqual(profile["encoder"], encoder)
+        with mock.patch.dict(os.environ, {"RGM_CIVITAI_FAMILY": "anima", "RGM_CIVITAI_CHECKPOINT": "../bad.safetensors"}):
+            with self.assertRaises(ValueError): ns["make_profile"]("Custom Civitai")
+
     def test_community_checkpoint_uses_its_own_repository(self):
         notebook = json.loads((path.parents[1] / "Unified_MOSS_Anima_Colab_Studio_Tailscale_Final.ipynb").read_text(encoding="utf-8"))
         tree = ast.parse("".join(notebook["cells"][6]["source"]))
@@ -74,6 +89,18 @@ class DriveCacheTests(unittest.TestCase):
             exec(drive.build_restore_cell("token", files), {"MODELS": root})
             for file in files:
                 self.assertEqual((root / drive.FILES[file["name"]] / file["name"]).read_bytes(), b"abc")
+
+    def test_custom_checkpoint_restores_to_identity_path_and_verifies_sha(self):
+        selected = [{"id": "id1", "name": "qwen_3_06b_base.safetensors"}, {"id": "id2", "name": "qwen_image_vae.safetensors"}, {"id": "id3", "name": "example model.safetensors"}]
+        custom = {"version": {"id": 45, "family": "anima", "files": [{"id": 67, "name": "example model.safetensors", "sha256": hashlib.sha256(b"abc").hexdigest()}]}, "fileId": 67}
+        by_id = {f["id"]: f["name"] for f in selected}
+        with tempfile.TemporaryDirectory() as directory, mock.patch("requests.get", side_effect=lambda url, **kw: Response(by_id[url.rsplit("/", 1)[-1]])):
+            root = Path(directory)
+            exec(drive.build_restore_cell("token", selected, "Custom Civitai", "anima", custom), {"MODELS": root})
+            self.assertEqual((root / "diffusion_models" / "civitai-45-67.safetensors").read_bytes(), b"abc")
+        custom["version"]["files"][0]["sha256"] = "0" * 64
+        with tempfile.TemporaryDirectory() as directory, mock.patch("requests.get", side_effect=lambda url, **kw: Response(by_id[url.rsplit("/", 1)[-1]])):
+            with self.assertRaises(RuntimeError): exec(drive.build_restore_cell("token", selected, "Custom Civitai", "anima", custom), {"MODELS": Path(directory)})
 
     def test_corrupt_download_never_becomes_a_model(self):
         class Corrupt(Response):

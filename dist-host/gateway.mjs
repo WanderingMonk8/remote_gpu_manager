@@ -1014,7 +1014,7 @@ async function bootstrapRuntime(req) {
   } catch {
     return errJson(400, "invalid_json");
   }
-  const { ts_authkey, basic_user, basic_pass, state, drive_files, workbook } = body ?? {};
+  const { ts_authkey, basic_user, basic_pass, state, drive_files, workbook, civitai } = body ?? {};
   if (!await validateWorkbook(workbook))
     return errJson(400, "workbook_invalid");
   if (typeof ts_authkey !== "string" || typeof basic_user !== "string" || !/^[^:\s]+$/.test(basic_user) || typeof basic_pass !== "string" || !basic_pass || !state || typeof state !== "object" || Array.isArray(state) || Object.values(state).some((v) => typeof v !== "string")) {
@@ -1034,6 +1034,7 @@ async function bootstrapRuntime(req) {
       workbook,
       credentials: { TS_AUTHKEY: ts_authkey, BASIC_AUTH_USER: basic_user, BASIC_AUTH_PASS: basic_pass },
       state,
+      ...civitai ? { civitai } : {},
       ...Array.isArray(drive_files) && drive_files.length ? { drive: { token: await ensureAccessToken(), files: drive_files } } : {}
     });
     jupyter.start(result.kernelId);
@@ -1068,7 +1069,7 @@ async function bootstrapControl(req) {
     return errJson(403, "bootstrap_disabled");
   const headers = { "Cache-Control": "no-store" };
   if (req.method === "GET") {
-    return Response.json({ ...bootstrapJob ?? { status: "idle" }, workbook_transfer: 1, model_cache: 3 }, { headers });
+    return Response.json({ ...bootstrapJob ?? { status: "idle" }, workbook_transfer: 1, model_cache: 4 }, { headers });
   }
   if (req.method === "DELETE") {
     if (bootstrapJob?.status === "running")
@@ -1151,7 +1152,7 @@ async function handleRuntime(req, path) {
       return errJson(400, "invalid_json");
     }
     const files = body?.files;
-    if (!Array.isArray(files) || !files.length || files.length > 16 || files.some((f) => typeof f?.id !== "string" || !/^[A-Za-z0-9_-]{1,256}$/.test(f.id) || typeof f.name !== "string" || !/^[A-Za-z0-9._-]+\.safetensors$/.test(f.name))) {
+    if (!Array.isArray(files) || !files.length || files.length > 16 || files.some((f) => typeof f?.id !== "string" || !/^[A-Za-z0-9_-]{1,256}$/.test(f.id) || typeof f.name !== "string" || !(f.name.length <= 180 && /\.safetensors$/i.test(f.name) && !/[\x00-\x1f\x7f/\\]/.test(f.name)))) {
       return errJson(400, "drive_selection_invalid");
     }
     const token = await ensureAccessToken();

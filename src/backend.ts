@@ -10,12 +10,13 @@
 
 import { AutomationController } from "./automation";
 import { bundledWorkbook } from "./workbook";
+import { parseCivitaiUrl, parseCivitaiVersion } from "./civitai";
 declare const spindle: import("lumiverse-spindle-types").SpindleAPI;
 
 const DEFAULT_GATEWAY_URL = "http://127.0.0.1:8189";
 
 const automation = new AutomationController(
-  { get: (key, user) => spindle.enclave.get(key, user), put: (key, value, user) => spindle.enclave.put(key, value, user) },
+  { get: (key, user) => spindle.enclave.get(key, user), put: (key, value, user) => spindle.enclave.put(key, value, user), delete: async (key, user) => { await spindle.enclave.delete(key, user); } },
   async (path, method, token, body) => {
     // Never send credentials to the configurable status-probe URL.
     const res = await spindle.cors(`${DEFAULT_GATEWAY_URL}${path}`, {
@@ -31,6 +32,15 @@ const automation = new AutomationController(
     return data;
   },
 );
+
+async function civitaiMetadata(path: string, user: string): Promise<any> {
+  if (!/^\/api\/v1\/(?:models|model-versions)\/[1-9]\d{0,14}$/.test(path)) throw new Error("civitai_url_invalid");
+  const token = await automation.civitaiToken(user);
+  const response = await spindle.cors(`https://civitai.com${path}`, { method: "GET", headers: token ? { Authorization: `Bearer ${token}` } : {} });
+  if (response.status === 401 || response.status === 403) throw new Error("civitai_access_required");
+  if (response.status !== 200 || typeof response.body !== "string" || response.body.length > 2_000_000) throw new Error("civitai_lookup_failed");
+  try { return JSON.parse(response.body); } catch { throw new Error("civitai_lookup_failed"); }
+}
 
 async function getGatewayUrl(): Promise<string> {
   const saved = await spindle.storage.getJson<{ url?: string }>("gateway-url.json", { fallback: {} });
@@ -62,6 +72,45 @@ spindle.onFrontendMessage(async (payload: any, userId?: string) => {
           await automation.save(userId, payload.secrets);
           result = { saved: true };
           break;
+        case "automation_civitai_lookup": {
+          const parsed = parseCivitaiUrl(payload.url);
+          if (parsed.versionId) {
+            const version = parseCivitaiVersion(await civitaiMetadata(`/api/v1/model-versions/${parsed.versionId}`, userId));
+            if (parsed.modelId && parsed.modelId !== version.modelId) throw new Error("civitai_model_mismatch");
+            result = { version };
+          } else {
+            const model = await civitaiMetadata(`/api/v1/models/${parsed.modelId}`, userId);
+            if (model?.type !== "Checkpoint" || !Array.isArray(model.modelVersions)) throw new Error("civitai_model_unsupported");
+            const versions = model.modelVersions.filter((v: any) => Number.isSafeInteger(v?.id) && v.id > 0).slice(0, 100)
+              .map((v: any) => ({ id: v.id, name: typeof v.name === "string" ? v.name.slice(0, 120) : "Version" }));
+            if (!versions.length) throw new Error("civitai_lookup_failed");
+            result = { modelId: parsed.modelId, versions };
+          }
+          break;
+        }
+        case "automation_civitai_version": {
+          if (!Number.isSafeInteger(payload.versionId) || payload.versionId <= 0) throw new Error("civitai_url_invalid");
+          result = { version: parseCivitaiVersion(await civitaiMetadata(`/api/v1/model-versions/${payload.versionId}`, userId)) };
+          break;
+        }
+        case "automation_civitai_cache_get":
+          result = { saved: Boolean(await automation.getCivitaiCache(userId)) }; break;
+        case "automation_civitai_cache_save":
+          await automation.saveCivitaiCache(userId, payload.files); result = { saved: true }; break;
+        case "automation_civitai_selection_get":
+          result = { selection: await automation.getCivitaiSelection(userId) }; break;
+        case "automation_civitai_selection_save": {
+          if (!Number.isSafeInteger(payload.versionId) || !Number.isSafeInteger(payload.fileId)) throw new Error("civitai_selection_invalid");
+          const version = parseCivitaiVersion(await civitaiMetadata(`/api/v1/model-versions/${payload.versionId}`, userId));
+          await automation.saveCivitaiSelection(userId, { version, fileId: payload.fileId });
+          result = { selection: await automation.getCivitaiSelection(userId) }; break;
+        }
+        case "automation_civitai_token_save":
+          await automation.saveCivitaiToken(userId, payload.token); result = await automation.civitaiTokenStatus(userId); break;
+        case "automation_civitai_token_remove":
+          await automation.removeCivitaiToken(userId); result = await automation.civitaiTokenStatus(userId); break;
+        case "automation_civitai_token_status":
+          result = await automation.civitaiTokenStatus(userId); break;
         case "automation_credentials_status":
           result = await automation.credentialsStatus(userId);
           break;
@@ -78,10 +127,23 @@ spindle.onFrontendMessage(async (payload: any, userId?: string) => {
         case "automation_picker_config_get":
           result = { config: await automation.getPickerConfig(userId) };
           break;
-        case "automation_start":
+        case "automation_start": {
+          const settings = await automation.getWorkbookSettings(userId);
+          if (settings.MODEL_CHOICE === "Custom Civitai") {
+            const saved = await automation.getCivitaiSelection(userId);
+            if (!saved) throw new Error("civitai_selection_required");
+            if (!await automation.getCivitaiCache(userId)) {
+              const fresh = parseCivitaiVersion(await civitaiMetadata(`/api/v1/model-versions/${saved.version.id}`, userId));
+              const oldFile = saved.version.files.find(f => f.id === saved.fileId);
+              const newFile = fresh.files.find(f => f.id === saved.fileId);
+              if (!oldFile || !newFile || fresh.modelId !== saved.version.modelId || fresh.family !== saved.version.family ||
+                  newFile.name !== oldFile.name || newFile.sizeKB !== oldFile.sizeKB || newFile.sha256 !== oldFile.sha256) throw new Error("civitai_metadata_changed");
+            }
+          }
           await automation.start(userId, payload.choice);
           result = { status: "running" };
           break;
+        }
         case "automation_workbook_settings_get":
           result = { settings: await automation.getWorkbookSettings(userId) }; break;
         case "automation_workbook_settings_save":

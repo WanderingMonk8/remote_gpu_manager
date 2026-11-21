@@ -133,6 +133,29 @@ Sources: [CircleStone model files](https://huggingface.co/circlestone-labs/Anima
 [Anima 2.9B model card](https://huggingface.co/Gazingstars123/Anima-2.9B),
 and [Comfy-Org MOSS-Image model card](https://huggingface.co/Comfy-Org/MOSS-Image).
 
+### Custom Civitai checkpoints
+
+The advanced model list includes Custom Civitai. The user can enter a Civitai
+model or version URL, select a published version and a SafeTensors checkpoint,
+and save the choice per user. The first supported families are Anima and
+MOSS-Image; incompatible or unrecognized base-model metadata is rejected.
+Civitai's optional API token is held separately in the encrypted enclave, is never
+returned to the UI, and can be removed without removing the model selection.
+The selected file overrides the built-in diffusion model on the next startup;
+the relevant family encoder and VAE are still required through Drive Picker.
+
+An existing matching Drive copy can be selected separately to avoid downloading
+it on each new Colab runtime. Drive MD5 and file size are always checked, and the
+Civitai SHA-256 is also checked when published. Without a Drive copy the worker
+streams the selected file from Civitai and checks the hash if supplied and the
+SafeTensors header. The runtime and network cost depends on the file size; the
+file is not automatically written back to Drive. Tokens are passed to the private
+worker process and sent only to Civitai, never to redirected storage hosts.
+The selected Lumiverse workflow must match the custom model's actual architecture.
+The custom choice requires gateway model-cache capability 4, checked before
+allocation. Its integration needs a live, explicitly budgeted test; the Civitai
+metadata endpoint was unreachable from the development environment during testing.
+
 ### Remaining workbook controls
 
 Lumiverse owns generation settings. Do not expose prompt, dimensions, sampler,

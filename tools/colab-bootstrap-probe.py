@@ -396,10 +396,18 @@ def bootstrap_runtime(args, cells, name, runtime, hooks=None):
             drive_spec.loader.exec_module(drive_module)
             drive = hooks["drive"]
             model = drive_module.workbook_model(cells[6])
-            code = drive_module.build_restore_cell(drive["token"], drive["files"], model)
+            code = drive_module.build_restore_cell(drive["token"], drive["files"], model, hooks.get("civitai", {}).get("version", {}).get("family"), hooks.get("civitai"))
             ok, _, _ = execute_live(ws, session_id, code, timeout=args.timeout, echo=False)
             if not ok:
                 raise RuntimeError("Drive cache restore failed")
+        if idx == 6 and hooks is not None and hooks.get("civitai"):
+            civitai_spec = importlib.util.spec_from_file_location("civitai_checkpoint", HERE / "civitai-checkpoint.py")
+            civitai_module = importlib.util.module_from_spec(civitai_spec)
+            civitai_spec.loader.exec_module(civitai_module)
+            code = civitai_module.build_download_cell(hooks["civitai"])
+            ok, _, _ = execute_live(ws, session_id, code, timeout=args.timeout, echo=False)
+            if not ok:
+                raise RuntimeError("Civitai checkpoint restore failed")
         print(f"\n[5] cell {idx}")
         ok, st, out = execute_live(ws, session_id, cells[idx], timeout=args.timeout)
         print(f"    -> {st}")

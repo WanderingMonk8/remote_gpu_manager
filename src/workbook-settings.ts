@@ -1,6 +1,6 @@
 /** Supported noninteractive workbook startup preferences. */
 export const workbookSettings = [
-  { key: "MODEL_CHOICE", label: "Model for next startup", type: "select", default: "MOSS SFT INT8", options: ["Anima 2.9B Preview BF16", "Anima 2.9B Preview INT8", "Anima Aesthetic v1.0", "Anima Aesthetic v1.0b", "Anima Aesthetic v1.1", "Anima Base v1.0", "Anima Preview", "Anima Preview 2", "Anima Preview 3 Base", "Anima Turbo v1.0", "Anima Turbo v1.1", "MOSS Base BF16", "MOSS Base INT8", "MOSS SFT BF16", "MOSS SFT INT8"] },
+  { key: "MODEL_CHOICE", label: "Model for next startup", type: "select", default: "MOSS SFT INT8", options: ["Anima 2.9B Preview BF16", "Anima 2.9B Preview INT8", "Anima Aesthetic v1.0", "Anima Aesthetic v1.0b", "Anima Aesthetic v1.1", "Anima Base v1.0", "Anima Preview", "Anima Preview 2", "Anima Preview 3 Base", "Anima Turbo v1.0", "Anima Turbo v1.1", "Custom Civitai", "MOSS Base BF16", "MOSS Base INT8", "MOSS SFT BF16", "MOSS SFT INT8"] },
   { key: "UPDATE_COMFYUI", label: "Update ComfyUI during startup", type: "boolean", default: false },
   { key: "INSTALL_ANIMA_ADAPTER", label: "Install Anima reference adapter", type: "boolean", default: true },
   { key: "DOWNLOAD_ADAPTER_WEIGHTS", label: "Download Anima adapter weights", type: "boolean", default: false },
@@ -31,6 +31,7 @@ export function validateWorkbookSettings(input: unknown): WorkbookSettings {
 }
 
 export function requiredModelFiles(model: string): string[] {
+  if (model === "Custom Civitai") return [];
   if (/^MOSS (SFT|Base) (INT8|BF16)$/.test(model)) {
     const flavor = model.includes("SFT") ? "sft" : "base";
     const format = model.endsWith("BF16") ? "bf16" : "int8_convrot";
@@ -50,5 +51,5 @@ export function requiredModelFiles(model: string): string[] {
 
 /** Gateway v3 knows the expanded model catalog. */
 export function requiredModelCacheVersion(model: string): number {
-  return ["MOSS SFT BF16", "MOSS Base BF16", "Anima Preview", "Anima Preview 2", "Anima Preview 3 Base", "Anima 2.9B Preview BF16", "Anima 2.9B Preview INT8"].includes(model) ? 3 : model === "MOSS SFT INT8" ? 1 : 2;
+  return model === "Custom Civitai" ? 4 : ["MOSS SFT BF16", "MOSS Base BF16", "Anima Preview", "Anima Preview 2", "Anima Preview 3 Base", "Anima 2.9B Preview BF16", "Anima 2.9B Preview INT8"].includes(model) ? 3 : model === "MOSS SFT INT8" ? 1 : 2;
 }
