@@ -22,7 +22,7 @@ describe("automation controller", () => {
       { id: "b", name: "qwen3.5_9b_w4a8_gptq.safetensors" },
       { id: "c", name: "flux2-vae_small.safetensors" },
     ]);
-    await c.saveWorkbookSettings("owner", { VRAM_MODE: "lowvram", BEAT_SECONDS: 15 });
+    await c.saveWorkbookSettings("owner", { VRAM_MODE: "lowvram", BEAT_SECONDS: 15, LORA_URLS: "" });
     const reinstalled = new AutomationController(store, call);
     expect((await reinstalled.getWorkbookSettings("owner")).VRAM_MODE).toBe("lowvram");
     expect((await reinstalled.getWorkbookSettings("other")).VRAM_MODE).toBe("normalvram");
@@ -32,6 +32,8 @@ describe("automation controller", () => {
     const cells = JSON.parse(workbook.content).cells.map((cell: any) => cell.source?.join("") ?? "");
     expect(cells[8]).toContain("BEAT_SECONDS = 15");
     expect(cells[10]).toContain('VRAM_MODE = "lowvram"');
+    expect(cells[16]).toContain('LORA_URLS=""');
+    expect(cells[16]).toContain("UPLOAD_LOCAL_LORA=False");
     expect(cells[22]).toContain("GENERATE=False");
     expect(workbook.sha256).toHaveLength(64);
   });

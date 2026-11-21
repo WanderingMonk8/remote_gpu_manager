@@ -7,6 +7,8 @@ export async function bundledWorkbook(settings?: WorkbookSettings): Promise<{ co
   let content = notebook;
   if (settings) {
     const values = validateWorkbookSettings(settings);
+    // An empty URL list must not fall through to Colab's interactive file picker.
+    if (!String(values.LORA_URLS).trim()) values.UPLOAD_LOCAL_LORA = false;
     const parsed = JSON.parse(notebook);
     for (const [key, value] of Object.entries(values)) {
       let count = 0;

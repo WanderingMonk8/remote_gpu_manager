@@ -9,6 +9,7 @@ export const workbookSettings = [
   { key: "PROBE_EVERY_BEATS", label: "Health probe interval (beats)", type: "integer", default: 10, min: 1, max: 1000 },
   { key: "MIRROR_EVERY_BEATS", label: "State mirror interval (beats)", type: "integer", default: 30, min: 1, max: 1000 },
   { key: "RESTART_HUNG_COMFY", label: "Restart unresponsive ComfyUI (may interrupt long jobs)", type: "boolean", default: false },
+  { key: "LORA_URLS", label: "LoRA download URLs (installed at startup)", type: "text", default: "https://huggingface.co/axiomofmind/Moss-image-nsfw-uncensored-lora/resolve/main/MOSS-Image-NSFW-Uncensored-LoRA-ComfyUI.safetensors?download=true" },
   { key: "VRAM_MODE", label: "VRAM mode", type: "select", default: "normalvram", options: ["normalvram", "lowvram"] },
 ] as const;
 
@@ -22,6 +23,7 @@ export function validateWorkbookSettings(input: unknown): WorkbookSettings {
     const value = obj[field.key] ?? field.default;
     if (field.type === "boolean" && typeof value !== "boolean") throw new Error("workbook_settings_invalid");
     if (field.type === "integer" && (typeof value !== "number" || !Number.isInteger(value) || value < field.min || value > field.max)) throw new Error("workbook_settings_invalid");
+    if (field.type === "text" && (typeof value !== "string" || value.length > 8192 || value.includes("\u0000"))) throw new Error("workbook_settings_invalid");
     if (field.type === "select" && (typeof value !== "string" || !(field.options as readonly string[]).includes(value))) throw new Error("workbook_settings_invalid");
     values[field.key] = value as boolean | number | string;
   }
