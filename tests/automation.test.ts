@@ -233,7 +233,9 @@ describe("automation controller", () => {
       async get(key, user) { return entries.get(`${user}:${key}`) ?? null; },
       async put(key, value, user) { entries.set(`${user}:${key}`, value); },
     }, async () => ({}));
-    await expect(controller.save("owner", { ...secrets, tailnetKey: "" })).rejects.toThrow("missing_tailnet_key");
+    await controller.save("owner", { ...secrets, tailnetKey: "" });
+    expect(await controller.credentialsStatus("owner")).toEqual({ saved: false });
+    await expect(controller.status("owner")).rejects.toThrow("missing_tailnet_key");
     await expect(controller.save("owner", { ...secrets, basicUser: "invalid:user" })).rejects.toThrow("invalid_basic_user");
     await controller.save("owner", secrets);
     expect(await controller.credentialsStatus("owner")).toEqual({ saved: true });

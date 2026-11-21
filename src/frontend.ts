@@ -88,7 +88,7 @@ export function setup(ctx: SpindleFrontendContext) {
         <div class="rgm-actions"><button class="rgm-civitai-token-save" type="button">Save token</button><button class="rgm-civitai-token-remove" type="button">Remove token</button></div>
         <p class="rgm-civitai-token-status" role="status">Checking saved token...</p>
           </details>
-          <p>Paste a Civitai model or version URL. Only Anima and MOSS SafeTensors checkpoints are supported. After saving the checkpoint, save advanced settings to use Custom Civitai for the next start. Optionally select an existing Drive copy to avoid downloading the checkpoint on each fresh runtime. Civitai SHA-256 is checked when available; otherwise only Drive integrity and the filename can be verified.</p>
+          <p>Paste a Civitai model or version URL. Only Anima and MOSS SafeTensors checkpoints are supported. Selections are saved automatically for the next start. Optionally select an existing Drive copy to avoid downloading the checkpoint on each fresh runtime. Civitai SHA-256 is checked when available; otherwise only Drive integrity and the filename can be verified.</p>
           <label>Civitai model URL<input class="rgm-civitai-url" type="url" placeholder="https://civitai.com/models/..." /></label>
           <button class="rgm-civitai-lookup" type="button">Find versions</button>
           <label>Version<select class="rgm-civitai-versions"></select></label>
@@ -118,7 +118,7 @@ export function setup(ctx: SpindleFrontendContext) {
         <select class="rgm-idle"><option value="0">Disabled</option><option value="5">5 minutes</option><option value="10" selected>10 minutes</option><option value="15">15 minutes</option><option value="30">30 minutes</option></select>
       </label>
       <button class="rgm-set-idle" type="button">Set idle timeout</button>
-      <p class="rgm-idle-status" role="status">Default: 10 minutes. Set a timeout to save it.</p>
+      <p class="rgm-idle-status" role="status">Default: 10 minutes. Changes are saved automatically.</p>
       <div class="rgm-automation-status rgm-status" data-tone="unknown">Automation not checked.</div>
     </div>`;
 
@@ -134,7 +134,7 @@ export function setup(ctx: SpindleFrontendContext) {
   const idleSelect = drawer.root.querySelector(".rgm-idle") as HTMLSelectElement;
   const idleStatus = drawer.root.querySelector(".rgm-idle-status") as HTMLParagraphElement;
   let idleDirty = false;
-  idleSelect.addEventListener("change", () => { idleDirty = true; });
+  idleSelect.addEventListener("change", () => { idleDirty = true; queueSave("automation_idle", () => ({ minutes: Number(idleSelect.value) })); });
   let gpuDirty = false;
   let gpuSavePending = false;
   let eligibleGpuValues: Set<string> | null = null;
@@ -154,6 +154,22 @@ export function setup(ctx: SpindleFrontendContext) {
   let pendingSecrets: Record<string, string> | null = null;
   let pickerDirty = false;
   const send = (type: string, extra: object = {}) => ctx.sendToBackend({ type, ...extra });
+  // Serialize writes by action so a slower earlier request cannot overwrite a newer choice.
+  const saves = new Map<string, { active: boolean; pending: (() => object) | null; timer?: ReturnType<typeof setTimeout> }>();
+  function queueSave(action: string, value: () => object, delay = 0) {
+    let entry = saves.get(action);
+    if (!entry) { entry = { active: false, pending: null }; saves.set(action, entry); }
+    entry.pending = value;
+    if (entry.timer) clearTimeout(entry.timer);
+    const current = entry;
+    current.timer = setTimeout(() => flushSave(action), delay);
+  }
+  function flushSave(action: string) {
+    const entry = saves.get(action);
+    if (!entry || entry.active || !entry.pending) return;
+    const value = entry.pending; entry.pending = null; entry.active = true;
+    send(action, value());
+  }
   const settingsRoot = drawer.root.querySelector(".rgm-workbook-settings") as HTMLDivElement;
   const settingsStatus = drawer.root.querySelector(".rgm-workbook-settings-status") as HTMLParagraphElement;
   let settingsDirty = false;
@@ -175,6 +191,7 @@ export function setup(ctx: SpindleFrontendContext) {
       civitaiFiles.appendChild(option);
     }
     if (fileId) civitaiFiles.value = String(fileId);
+    else if (civitaiFiles.value) saveCivitaiSelection();
     civitaiDetail.textContent = `${version.modelName} / ${version.name}; base ${version.baseModel}. Verify it is compatible with your Lumiverse workflow.`;
   }
   drawer.root.querySelector(".rgm-civitai-lookup")?.addEventListener("click", () => {
@@ -182,11 +199,15 @@ export function setup(ctx: SpindleFrontendContext) {
     const url = civitaiUrl.value;
     civitaiDetail.textContent = "Looking up Civitai metadata..."; send("automation_civitai_lookup", { url });
   });
-  drawer.root.querySelector(".rgm-civitai-load-version")?.addEventListener("click", () => send("automation_civitai_version", { versionId: Number(civitaiVersions.value) }));
-  drawer.root.querySelector(".rgm-civitai-save")?.addEventListener("click", () => {
+  const loadCivitaiVersion = () => { if (civitaiVersions.value) send("automation_civitai_version", { versionId: Number(civitaiVersions.value) }); };
+  drawer.root.querySelector(".rgm-civitai-load-version")?.addEventListener("click", loadCivitaiVersion);
+  civitaiVersions.addEventListener("change", loadCivitaiVersion);
+  const saveCivitaiSelection = () => {
     if (!civitaiVersion || !civitaiFiles.value) { civitaiDetail.textContent = "Load a version and select a file first."; return; }
-    send("automation_civitai_selection_save", { versionId: civitaiVersion.id, fileId: Number(civitaiFiles.value) });
-  });
+    queueSave("automation_civitai_selection_save", () => ({ versionId: civitaiVersion.id, fileId: Number(civitaiFiles.value) }));
+  };
+  drawer.root.querySelector(".rgm-civitai-save")?.addEventListener("click", saveCivitaiSelection);
+  civitaiFiles.addEventListener("change", saveCivitaiSelection);
   let savedCacheNames: Set<string> | null = null;
   const cacheFiles = drawer.root.querySelector(".rgm-cache-files") as HTMLDivElement;
   function renderCacheFiles() {
@@ -207,6 +228,7 @@ export function setup(ctx: SpindleFrontendContext) {
     }
     cacheFiles.appendChild(list);
   }
+  let settingsTimer: ReturnType<typeof setTimeout> | null = null;
   for (const field of workbookSettings) {
     const label = document.createElement("label");
     label.textContent = field.label;
@@ -220,8 +242,8 @@ export function setup(ctx: SpindleFrontendContext) {
       item.type = field.type === "boolean" ? "checkbox" : field.type === "text" ? "text" : "number";
       if (field.type === "integer") { item.min = String(field.min); item.max = String(field.max); item.step = "1"; }
     }
-    input.addEventListener("input", () => { settingsDirty = true; });
-    input.addEventListener("change", () => { settingsDirty = true; if (field.key === "MODEL_CHOICE") renderCacheFiles(); });
+    input.addEventListener("input", () => { settingsDirty = true; if (field.type === "text" || field.type === "integer") { if (settingsTimer) clearTimeout(settingsTimer); settingsTimer = setTimeout(() => saveWorkbookSettings.click(), 700); } });
+    input.addEventListener("change", () => { settingsDirty = true; if (field.key === "MODEL_CHOICE") renderCacheFiles(); saveWorkbookSettings.click(); });
     label.appendChild(input); settingsRoot.appendChild(label);
   }
   function showWorkbookSettings(settings: Record<string, any>) {
@@ -240,12 +262,24 @@ export function setup(ctx: SpindleFrontendContext) {
       const input = settingsRoot.querySelector(`[data-workbook-setting="${field.key}"]`) as HTMLInputElement;
       settings[field.key] = field.type === "boolean" ? input.checked : field.type === "integer" ? Number(input.value) : input.value;
     }
-    send("automation_workbook_settings_save", { settings });
+    settingsStatus.textContent = "Saving advanced settings...";
+    queueSave("automation_workbook_settings_save", () => ({ settings }));
   });
   const civitaiToken = drawer.root.querySelector(".rgm-civitai-token") as HTMLInputElement;
   const civitaiTokenStatus = drawer.root.querySelector(".rgm-civitai-token-status") as HTMLParagraphElement;
-  drawer.root.querySelector(".rgm-civitai-token-save")?.addEventListener("click", () => send("automation_civitai_token_save", { token: civitaiToken.value }));
-  drawer.root.querySelector(".rgm-civitai-token-remove")?.addEventListener("click", () => send("automation_civitai_token_remove"));
+  const saveToken = () => { if (civitaiToken.value.trim()) { const token = civitaiToken.value; civitaiTokenStatus.textContent = "Saving token..."; queueSave("automation_civitai_token_save", () => ({ token })); } };
+  let tokenTimer: ReturnType<typeof setTimeout> | null = null;
+  civitaiToken.addEventListener("input", () => { if (tokenTimer) clearTimeout(tokenTimer); tokenTimer = setTimeout(saveToken, 700); });
+  civitaiToken.addEventListener("change", () => { if (tokenTimer) clearTimeout(tokenTimer); saveToken(); });
+  drawer.root.querySelector(".rgm-civitai-token-save")?.addEventListener("click", saveToken);
+  let removeTokenAfterSave = false;
+  drawer.root.querySelector(".rgm-civitai-token-remove")?.addEventListener("click", () => {
+    if (tokenTimer) clearTimeout(tokenTimer);
+    civitaiToken.value = "";
+    const entry = saves.get("automation_civitai_token_save");
+    if (entry) { entry.pending = null; if (entry.timer) clearTimeout(entry.timer); }
+    if (entry?.active) removeTokenAfterSave = true; else send("automation_civitai_token_remove");
+  });
   const civitaiCacheStatus = drawer.root.querySelector(".rgm-civitai-cache-status") as HTMLParagraphElement;
   drawer.root.querySelector(".rgm-civitai-cache-picker")?.addEventListener("click", async () => {
     try {
@@ -262,9 +296,9 @@ export function setup(ctx: SpindleFrontendContext) {
     return { clientId: field(".rgm-picker-client"), apiKey: field(".rgm-picker-key"), projectNumber: field(".rgm-picker-project") };
   };
   drawer.root.querySelectorAll<HTMLInputElement>(".rgm-picker-client, .rgm-picker-key, .rgm-picker-project")
-    .forEach(input => input.addEventListener("input", () => { pickerDirty = true; }));
+    .forEach(input => input.addEventListener("input", () => { pickerDirty = true; const config = pickerConfig(); if (!config.projectNumber || /^\d+$/.test(config.projectNumber)) queueSave("automation_picker_config_save", () => ({ config }), 700); }));
   drawer.root.querySelector(".rgm-save-picker")?.addEventListener("click", () => {
-    send("automation_picker_config_save", { config: pickerConfig() });
+    const config = pickerConfig(); queueSave("automation_picker_config_save", () => ({ config }));
   });
   drawer.root.querySelector(".rgm-save-secrets")?.addEventListener("click", () => {
     const secrets: Record<string, string> = {};
@@ -272,8 +306,13 @@ export function setup(ctx: SpindleFrontendContext) {
       secrets[input.dataset.secret!] = input.value;
     });
     pendingSecrets = secrets;
-    send("automation_save", { secrets });
+    queueSave("automation_save", () => ({ secrets }));
   });
+  let secretsTimer: ReturnType<typeof setTimeout> | null = null;
+  drawer.root.querySelectorAll<HTMLInputElement>("[data-secret]").forEach(input => input.addEventListener("input", () => {
+    if (secretsTimer) clearTimeout(secretsTimer);
+    secretsTimer = setTimeout(() => (drawer.root.querySelector(".rgm-save-secrets") as HTMLButtonElement).click(), 700);
+  }));
   drawer.root.querySelector(".rgm-picker")?.addEventListener("click", async () => {
     try {
       const config = pickerConfig();
@@ -281,7 +320,7 @@ export function setup(ctx: SpindleFrontendContext) {
         if (driveStatus) driveStatus.textContent = "Enter the Picker settings and save them before selecting files.";
         return;
       }
-      send("automation_picker_config_save", { config });
+      queueSave("automation_picker_config_save", () => ({ config }));
       const files = await chooseDriveFiles(config);
       const issue = driveSelectionIssue(files);
       if (issue) {
@@ -347,18 +386,24 @@ export function setup(ctx: SpindleFrontendContext) {
   drawer.root.querySelector(".rgm-runtime-status")?.addEventListener("click", () => { send("automation_status"); });
   drawer.root.querySelector(".rgm-set-idle")?.addEventListener("click", () => {
     idleDirty = true;
-    send("automation_idle", { minutes: Number(idleSelect.value) });
+    queueSave("automation_idle", () => ({ minutes: Number(idleSelect.value) }));
   });
 
   drawer.root.querySelector(".rgm-save-url")?.addEventListener("click", () => {
     if (urlInput?.value.trim()) ctx.sendToBackend({ type: "set_gateway_url", url: urlInput.value.trim() });
   });
+  urlInput?.addEventListener("change", () => { if (urlInput.value.trim()) (drawer.root.querySelector(".rgm-save-url") as HTMLButtonElement).click(); });
   drawer.root.querySelector(".rgm-check")?.addEventListener("click", () => {
     if (statusBox) { statusBox.dataset.tone = "unknown"; statusBox.textContent = "Probing…"; }
     ctx.sendToBackend({ type: "status" });
   });
 
   const unsub = ctx.onBackendMessage((payload: any) => {
+    const queued = saves.get(payload?.action);
+    if (queued?.active && (payload.type === "automation_result" || payload.type === "automation_error")) {
+      queued.active = false;
+      if (queued.pending) setTimeout(() => flushSave(payload.action), 0);
+    }
     if (["automation_civitai_cache_get", "automation_civitai_cache_save"].includes(payload?.action)) {
       civitaiCacheStatus.textContent = payload.type === "automation_result" ? (payload.result?.saved ? "A Drive copy is saved for this checkpoint; it will be verified before use." : "No Drive copy is saved; the checkpoint will download from Civitai.") : "Could not save that file. Select exactly the checkpoint filename shown above.";
       return;
@@ -386,9 +431,10 @@ export function setup(ctx: SpindleFrontendContext) {
       }
       return;
     }
+    if (payload?.action === "automation_civitai_token_save" && removeTokenAfterSave) { removeTokenAfterSave = false; send("automation_civitai_token_remove"); }
     if (["automation_civitai_token_save", "automation_civitai_token_remove", "automation_civitai_token_status"].includes(payload?.action)) {
       if (payload.type === "automation_result") {
-        if (payload.action !== "automation_civitai_token_status") civitaiToken.value = "";
+        if (payload.action === "automation_civitai_token_remove") civitaiToken.value = "";
         civitaiTokenStatus.textContent = payload.result?.saved ? "A Civitai token is saved." : "No Civitai token is saved.";
       } else if (payload.type === "automation_error") civitaiTokenStatus.textContent = "Could not update the Civitai token.";
       return;
@@ -533,7 +579,7 @@ export function setup(ctx: SpindleFrontendContext) {
           ? "Required cache files are saved. You can now start Colab."
           : `Selection saved. Still needed: ${(result.missing ?? []).join(", ")}. Select the remaining files.`;
       }
-      if (payload.action === "automation_save" && result.saved && credentialsStatus) credentialsStatus.textContent = "Credentials are saved for this account.";
+      if (payload.action === "automation_save" && result.saved && credentialsStatus) { credentialsStatus.textContent = "Credentials saved."; send("automation_credentials_status"); }
       if (payload.action === "automation_save" && result.saved && pendingSecrets) {
         const submitted = pendingSecrets;
         drawer.root.querySelectorAll<HTMLInputElement>("[data-secret]").forEach(input => {
@@ -588,6 +634,10 @@ export function setup(ctx: SpindleFrontendContext) {
 
   return () => {
     if (pollTimer) clearTimeout(pollTimer);
+    if (settingsTimer) clearTimeout(settingsTimer);
+    if (tokenTimer) clearTimeout(tokenTimer);
+    if (secretsTimer) clearTimeout(secretsTimer);
+    for (const entry of saves.values()) if (entry.timer) clearTimeout(entry.timer);
     unsub();
     removeStyle();
     drawer.destroy();
