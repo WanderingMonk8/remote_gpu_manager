@@ -1,3 +1,4 @@
+import { requiredModelFiles, validateWorkbookSettings, type WorkbookSettings } from "./workbook-settings";
 import { bundledWorkbook } from "./workbook";
 /** Automation orchestration with injected enclave and loopback transport. */
 export interface AutomationSecrets {
@@ -21,6 +22,7 @@ const DRIVE = "automation-drive-cache-v1";
 const PICKER = "automation-picker-config-v1";
 const GPU = "automation-gpu-preference-v1";
 const IDLE = "automation-idle-preference-v1";
+const WORKBOOK_SETTINGS = "automation-workbook-settings-v1";
 const IDLE_CHOICES = new Set([0, 5, 10, 15, 30]);
 export type DriveFile = { id: string; name: string };
 export type PickerConfig = { clientId: string; apiKey: string; projectNumber: string };
@@ -47,6 +49,18 @@ export function driveSelectionIssue(files: DriveFile[]): string | null {
 
 export class AutomationController {
   constructor(private store: AutomationStore, private call: GatewayCall) {}
+
+  async saveWorkbookSettings(user: string, input: unknown): Promise<void> {
+    if (!user) throw new Error("user_required");
+    const settings = validateWorkbookSettings(input);
+    await this.store.put(WORKBOOK_SETTINGS, JSON.stringify(settings), user);
+  }
+
+  async getWorkbookSettings(user: string): Promise<WorkbookSettings> {
+    if (!user) throw new Error("user_required");
+    const saved = await this.store.get(WORKBOOK_SETTINGS, user);
+    return validateWorkbookSettings(saved ? JSON.parse(saved) : {});
+  }
 
   async saveGpuPreference(user: string, choice: GpuPreference): Promise<void> {
     if (!user) throw new Error("user_required");
@@ -107,7 +121,8 @@ export class AutomationController {
     const merged = new Map(previous.map(file => [file.name, file]));
     for (const file of files) merged.set(file.name, { id: file.id, name: file.name });
     const allFiles = [...merged.values()];
-    const missing = DEFAULT_FILES.filter(name => !merged.has(name));
+    const model = String((await this.getWorkbookSettings(user)).MODEL_CHOICE);
+    const missing = [...new Set([...DEFAULT_FILES, ...requiredModelFiles(model)])].filter(name => !merged.has(name));
     await this.store.put(DRIVE, JSON.stringify(allFiles), user);
     return { saved: true, complete: missing.length === 0, missing };
   }
@@ -122,7 +137,8 @@ export class AutomationController {
     const saved = await this.store.get(DRIVE, user);
     const files: DriveFile[] = saved ? JSON.parse(saved) : [];
     if (!Array.isArray(files) || (files.length > 0 && driveSelectionIssue(files))) throw new Error("drive_selection_invalid");
-    return { saved: files.length > 0, missing: DEFAULT_FILES.filter(name => !files.some(file => file.name === name)) };
+    const model = String((await this.getWorkbookSettings(user)).MODEL_CHOICE);
+    return { saved: files.length > 0, missing: [...new Set([...DEFAULT_FILES, ...requiredModelFiles(model)])].filter(name => !files.some(file => file.name === name)) };
   }
 
   private async secrets(user: string): Promise<AutomationSecrets> {
@@ -154,17 +170,20 @@ export class AutomationController {
     const savedDrive = await this.store.get(DRIVE, user);
     if (!savedDrive) throw new Error("drive_selection_required");
     const driveFiles = JSON.parse(savedDrive) as DriveFile[];
-    if (!Array.isArray(driveFiles) || !DEFAULT_FILES.every(name => driveFiles.some(file => file?.name === name))) {
+    const workbookSettings = await this.getWorkbookSettings(user);
+    const requiredFiles = [...new Set([...DEFAULT_FILES, ...requiredModelFiles(String(workbookSettings.MODEL_CHOICE))])];
+    if (!Array.isArray(driveFiles) || !requiredFiles.every(name => driveFiles.some(file => file?.name === name))) {
       throw new Error("drive_selection_incomplete");
     }
+    const filesToRestore = driveFiles.filter(file => requiredFiles.includes(file.name));
     const existing = await this.call("/gateway/v1/runtime/bootstrap", "GET", s.controlToken);
     if (existing.status !== "idle") throw new Error("bootstrap_result_pending");
     if (existing.workbook_transfer !== 1) throw new Error("gateway_workbook_update_required");
-    const workbook = await bundledWorkbook();
+    const workbook = await bundledWorkbook(workbookSettings);
     await this.call("/gateway/v1/runtime/workbook-check", "POST", s.controlToken, { workbook });
     await this.call("/gateway/v1/runtime/credentials", "POST", s.controlToken,
       { client_id: s.clientId, client_secret: s.clientSecret, refresh_token: s.refreshToken });
-    await this.call("/gateway/v1/runtime/cache-check", "POST", s.controlToken, { files: driveFiles });
+    await this.call("/gateway/v1/runtime/cache-check", "POST", s.controlToken, { files: filesToRestore });
     const idleMinutes = await this.getIdlePreference(user);
     if (idleMinutes !== null) await this.call("/gateway/v1/runtime/idle", "PUT", s.controlToken, { minutes: idleMinutes });
     const allocation = await this.call("/gateway/v1/runtime", "POST", s.controlToken, choice ? {
@@ -173,7 +192,7 @@ export class AutomationController {
     // Do not rerun notebook setup on a reused runtime that may contain work.
     if (allocation.reused) throw new Error("runtime_already_exists");
     await this.call("/gateway/v1/runtime/bootstrap", "POST", s.controlToken,
-      { ts_authkey: s.tailnetKey, basic_user: s.basicUser, basic_pass: s.basicPass, state, drive_files: driveFiles, workbook });
+      { ts_authkey: s.tailnetKey, basic_user: s.basicUser, basic_pass: s.basicPass, state, drive_files: filesToRestore, workbook });
   }
 
   async poll(user: string): Promise<{ status: string; workerHealthy?: boolean; error?: string }> {

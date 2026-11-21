@@ -1,6 +1,7 @@
 import type { SpindleFrontendContext } from "lumiverse-spindle-types";
 import { chooseDriveFiles } from "./drive-picker";
 import { driveSelectionIssue, validGpuPreference } from "./automation";
+import { workbookSettings } from "./workbook-settings";
 
 const ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.5"/><rect x="2.5" y="9" width="2" height="6"/><rect x="19.5" y="9" width="2" height="6"/><path d="M9.5 2.5v2M12 2.5v2M14.5 2.5v2M9.5 19.5v2M12 19.5v2M14.5 19.5v2"/></svg>`;
 
@@ -23,6 +24,7 @@ export function setup(ctx: SpindleFrontendContext) {
     .rgm-out { margin: 0; max-height: 220px; overflow: auto; white-space: pre-wrap; font-size: 11px; color: var(--lumiverse-text-muted); }
     .rgm-panel label { display: grid; gap: 4px; font-size: 12px; }
     .rgm-panel select { padding: 7px; }
+    .rgm-panel input[type=checkbox] { width: auto; }
   `;
   const removeStyle = ctx.dom.addStyle(STYLES);
 
@@ -63,7 +65,7 @@ export function setup(ctx: SpindleFrontendContext) {
         <button class="rgm-save-secrets" type="button">Save credentials</button>
       </details>
       <details><summary>Drive model cache</summary>
-        <p>Use a web OAuth client, browser API key, and project number from the same Google Cloud project as the Colab OAuth client. Select the three MOSS SFT model files, together or one at a time.</p>
+        <p>Use a web OAuth client, browser API key, and project number from the same Google Cloud project as the Colab OAuth client. Select the MOSS SFT cache files and any additional files required by your chosen model, together or one at a time.</p>
         <label>Google web OAuth client ID<input class="rgm-picker-client" type="password" autocomplete="off" /></label>
         <label>Google Picker API key<input class="rgm-picker-key" type="password" autocomplete="off" /></label>
         <label>Google Cloud project number<input class="rgm-picker-project" type="password" autocomplete="off" /></label>
@@ -72,6 +74,12 @@ export function setup(ctx: SpindleFrontendContext) {
         <p class="rgm-picker-settings-status" role="status"></p>
         <button class="rgm-picker" type="button">Select cache files</button>
         <p class="rgm-drive-status" role="status">No selection made in this session.</p>
+      </details>
+      <details><summary>Advanced workbook startup settings</summary>
+        <p>Saved for future starts. Changes do not modify an already running worker.</p>
+        <div class="rgm-workbook-settings"></div>
+        <button class="rgm-workbook-settings-save" type="button">Save advanced settings</button>
+        <p class="rgm-workbook-settings-status" role="status">Loading saved settings...</p>
       </details>
       <label>Colab GPU
         <select class="rgm-gpu"><option value="T4|SHAPE_STANDARD">T4 — standard (default)</option></select>
@@ -125,6 +133,39 @@ export function setup(ctx: SpindleFrontendContext) {
   let pendingSecrets: Record<string, string> | null = null;
   let pickerDirty = false;
   const send = (type: string, extra: object = {}) => ctx.sendToBackend({ type, ...extra });
+  const settingsRoot = drawer.root.querySelector(".rgm-workbook-settings") as HTMLDivElement;
+  const settingsStatus = drawer.root.querySelector(".rgm-workbook-settings-status") as HTMLParagraphElement;
+  let settingsDirty = false;
+  for (const field of workbookSettings) {
+    const label = document.createElement("label");
+    label.textContent = field.label;
+    const input = field.type === "select" ? document.createElement("select") : document.createElement("input");
+    input.dataset.workbookSetting = field.key;
+    if (field.type === "select") {
+      for (const value of field.options) { const option = document.createElement("option"); option.value = value; option.textContent = value; input.appendChild(option); }
+    } else {
+      const item = input as HTMLInputElement;
+      item.type = field.type === "boolean" ? "checkbox" : "number";
+      if (field.type === "integer") { item.min = String(field.min); item.max = String(field.max); item.step = "1"; }
+    }
+    input.addEventListener("change", () => { settingsDirty = true; });
+    label.appendChild(input); settingsRoot.appendChild(label);
+  }
+  function showWorkbookSettings(settings: Record<string, any>) {
+    for (const field of workbookSettings) {
+      const input = settingsRoot.querySelector(`[data-workbook-setting="${field.key}"]`) as HTMLInputElement;
+      if (field.type === "boolean") input.checked = settings[field.key]; else input.value = String(settings[field.key]);
+    }
+  }
+  showWorkbookSettings(Object.fromEntries(workbookSettings.map(field => [field.key, field.default])));
+  drawer.root.querySelector(".rgm-workbook-settings-save")?.addEventListener("click", () => {
+    const settings: Record<string, boolean | number | string> = {};
+    for (const field of workbookSettings) {
+      const input = settingsRoot.querySelector(`[data-workbook-setting="${field.key}"]`) as HTMLInputElement;
+      settings[field.key] = field.type === "boolean" ? input.checked : field.type === "integer" ? Number(input.value) : input.value;
+    }
+    send("automation_workbook_settings_save", { settings });
+  });
   const poll = () => send("automation_poll");
   const pickerConfig = () => {
     const field = (selector: string) => (drawer.root.querySelector(selector) as HTMLInputElement).value.trim();
@@ -228,6 +269,14 @@ export function setup(ctx: SpindleFrontendContext) {
   });
 
   const unsub = ctx.onBackendMessage((payload: any) => {
+    if (payload?.action === "automation_workbook_settings_get") {
+      if (payload.type === "automation_result" && !settingsDirty) { showWorkbookSettings(payload.result.settings); settingsStatus.textContent = "Saved settings loaded."; }
+      else if (payload.type === "automation_error") settingsStatus.textContent = "Could not load saved settings.";
+    }
+    if (payload?.action === "automation_workbook_settings_save") {
+      settingsStatus.textContent = payload.type === "automation_result" ? "Advanced settings saved for the next start." : "Could not save settings. Check the values and try again.";
+      if (payload.type === "automation_result") send("automation_drive_status");
+    }
     if (payload?.action === "automation_workbook_info") {
       const status = drawer.root.querySelector(".rgm-workbook-status");
       if (status) status.textContent = payload.type === "automation_result" && /^[a-f0-9]{64}$/.test(payload.result?.sha256)
@@ -302,7 +351,7 @@ export function setup(ctx: SpindleFrontendContext) {
     if (payload?.action === "automation_drive_status") {
       if (driveStatus) {
         if (payload.type === "automation_error") driveStatus.textContent = `Could not load saved cache selection: ${payload.error}.`;
-        else if (payload.result?.saved && payload.result.missing?.length === 0) driveStatus.textContent = "All three cache files are saved. You do not need to select them again.";
+        else if (payload.result?.saved && payload.result.missing?.length === 0) driveStatus.textContent = "Required cache files are saved. You do not need to select them again.";
         else if (payload.result?.saved) driveStatus.textContent = `Saved cache selection is incomplete. Still needed: ${payload.result.missing.join(", ")}.`;
         else driveStatus.textContent = "No cache files are saved yet.";
       }
@@ -352,7 +401,7 @@ export function setup(ctx: SpindleFrontendContext) {
       const result = payload.result ?? {};
       if (payload.action === "automation_save_drive" && result.saved && driveStatus) {
         driveStatus.textContent = result.complete
-          ? "All three cache files are saved. You can now start Colab."
+          ? "Required cache files are saved. You can now start Colab."
           : `Selection saved. Still needed: ${(result.missing ?? []).join(", ")}. Select the remaining files.`;
       }
       if (payload.action === "automation_save" && result.saved && credentialsStatus) credentialsStatus.textContent = "Credentials are saved for this account.";
@@ -404,6 +453,7 @@ export function setup(ctx: SpindleFrontendContext) {
   send("automation_credentials_status");
   send("automation_idle_get");
   send("automation_workbook_info");
+  send("automation_workbook_settings_get");
 
   return () => {
     if (pollTimer) clearTimeout(pollTimer);
