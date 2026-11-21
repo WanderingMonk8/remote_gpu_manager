@@ -532,6 +532,33 @@ describe("idle shutdown (PRD R-05 / R-06)", () => {
     expect(log.calls.some((c: any) => c.method === "DELETE" && c.path.includes("rgm-gw-"))).toBe(true);
   }, 30_000);
 
+  test("image generation resets the idle countdown after completion", async () => {
+    const port = PORT_BASE + 17;
+    const gateway = spawnGateway(port, COLAB_PORT, `http://127.0.0.1:${MOCK_PORT}`);
+    const url = `http://127.0.0.1:${port}`;
+    try {
+      await waitFor(async () => (await fetch(`${url}/system_stats`)).ok);
+      await ensureCreds(url);
+      expect((await fetch(`${url}/gateway/v1/runtime`, { method: "POST", headers: auth })).status).toBe(200);
+      await fetch(`${url}/gateway/v1/runtime/idle`, { method: "PUT", headers: { ...auth, "Content-Type": "application/json" }, body: JSON.stringify({ minutes: 0.05 }) });
+      await sleep(1800);
+      const submitted = await fetch(`${url}/prompt`, { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ client_id: "test", prompt: { "1": { class_type: "UNETLoader", inputs: { unet_name: "test.safetensors" } }, "7": { class_type: "KSampler", inputs: {} } } }) });
+      expect(submitted.status).toBe(200);
+      const job = await submitted.json();
+      await waitFor(async () => {
+        const history = await (await fetch(`${url}/history/${job.prompt_id}`)).json();
+        return history[job.prompt_id]?.status?.completed === true;
+      });
+      await sleep(1600); // the original three-second timeout has elapsed
+      expect((await (await fetch(`${url}/gateway/v1/runtime`, { headers: auth })).json()).state).toBe("ready");
+      await waitFor(async () => (await (await fetch(`${url}/gateway/v1/runtime`, { headers: auth })).json()).state === "offline", 8000);
+    } finally {
+      await fetch(`${url}/gateway/v1/runtime?force=1`, { method: "DELETE", headers: auth }).catch(() => {});
+      gateway.kill("SIGKILL");
+    }
+  }, 20000);
+
   test("queued jobs hold the runtime; disabling re-enables deletion", async () => {
     // gwBusy fronts a worker whose /queue reports 2 running jobs.
     await ensureCreds(baseBusy());
