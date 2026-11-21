@@ -571,6 +571,14 @@ export function setup(ctx: SpindleFrontendContext) {
         gateway_model_cache_update_required: "The gateway must be updated before starting this model. No runtime was allocated.",
         gateway_workbook_update_required: "The gateway must support extension-supplied workbooks before Colab can start. No runtime was allocated.",
       };
+      if (payload.action === "automation_start" && payload.error === "bootstrap_result_pending") {
+        automationStatus.dataset.tone = "unknown";
+        automationStatus.textContent = "Checking the previous Colab startup...";
+        if (pollTimer) clearTimeout(pollTimer);
+        pollTimer = null;
+        send("automation_poll");
+        return;
+      }
       automationStatus.textContent = messages[payload.error] ?? `${payload.action}: ${payload.error}`;
       if (payload.action === "automation_save") pendingSecrets = null;
       if (payload.action === "automation_save_drive" && driveStatus) {
@@ -596,6 +604,9 @@ export function setup(ctx: SpindleFrontendContext) {
       automationStatus.dataset.tone = result.status === "failed" || result.workerHealthy === false ? "bad" : "unknown";
       const display = result.status ?? result.state ?? (result.recovered ? "allocation recovered" : result.saved ? "saved" : result.confirmed ? "stopped" : "updated");
       automationStatus.textContent = `${payload.action}: ${display}${result.error ? ` (${result.error})` : ""}${result.workerHealthy === true ? " — worker healthy" : result.workerHealthy === false ? " — worker health check failed" : ""}`;
+      if (payload.action === "automation_poll" && result.status === "running") automationStatus.textContent = "Colab startup is still in progress. Checking again in 10 seconds.";
+      if (payload.action === "automation_poll" && result.status === "finished" && result.workerHealthy === true) automationStatus.textContent = "Colab is ready; worker is healthy.";
+      if (payload.action === "automation_poll" && result.status === "failed") automationStatus.textContent = `The previous Colab startup failed: ${result.error ?? "bootstrap_failed"}. Check runtime before trying again.`;
       if (payload.action === "automation_status") {
         if (result.worker) automationStatus.textContent += `; worker ${String(result.worker).replace(/_/g, " ")}`;
         if (result.jupyter) automationStatus.textContent += `; Jupyter connection ${result.jupyter}`;
