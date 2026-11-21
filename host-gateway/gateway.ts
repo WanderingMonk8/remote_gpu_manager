@@ -885,7 +885,7 @@ async function bootstrapRuntime(req: Request): Promise<Response> {
   } catch {
     return errJson(400, "invalid_json");
   }
-  const { ts_authkey, basic_user, basic_pass, state, drive_files, workbook } = body ?? {};
+  const { ts_authkey, basic_user, basic_pass, state, drive_files, workbook, civitai } = body ?? {};
   if (!await validateWorkbook(workbook)) return errJson(400, "workbook_invalid");
   if (typeof ts_authkey !== "string" || typeof basic_user !== "string" ||
       !/^[^:\s]+$/.test(basic_user) || typeof basic_pass !== "string" || !basic_pass ||
@@ -906,6 +906,7 @@ async function bootstrapRuntime(req: Request): Promise<Response> {
       workbook,
       credentials: { TS_AUTHKEY: ts_authkey, BASIC_AUTH_USER: basic_user, BASIC_AUTH_PASS: basic_pass },
       state,
+      ...(civitai ? { civitai } : {}),
       ...(Array.isArray(drive_files) && drive_files.length
         ? { drive: { token: await ensureAccessToken(), files: drive_files } } : {}),
     });
@@ -947,7 +948,7 @@ async function bootstrapControl(req: Request): Promise<Response> {
   if (!BOOTSTRAP_ENABLED) return errJson(403, "bootstrap_disabled");
   const headers = { "Cache-Control": "no-store" };
   if (req.method === "GET") {
-    return Response.json({ ...(bootstrapJob ?? { status: "idle" }), workbook_transfer: 1, model_cache: 3 }, { headers });
+    return Response.json({ ...(bootstrapJob ?? { status: "idle" }), workbook_transfer: 1, model_cache: 4 }, { headers });
   }
   if (req.method === "DELETE") {
     if (bootstrapJob?.status === "running") return errJson(409, "provisioning_in_progress");
@@ -1034,7 +1035,7 @@ async function handleRuntime(req: Request, path: string): Promise<Response> {
     const files = body?.files;
     if (!Array.isArray(files) || !files.length || files.length > 16 || files.some((f: any) =>
       typeof f?.id !== "string" || !/^[A-Za-z0-9_-]{1,256}$/.test(f.id) ||
-      typeof f.name !== "string" || !/^[A-Za-z0-9._-]+\.safetensors$/.test(f.name))) {
+      typeof f.name !== "string" || !(f.name.length <= 180 && /\.safetensors$/i.test(f.name) && !/[\x00-\x1f\x7f/\\]/.test(f.name)))) {
       return errJson(400, "drive_selection_invalid");
     }
     const token = await ensureAccessToken();

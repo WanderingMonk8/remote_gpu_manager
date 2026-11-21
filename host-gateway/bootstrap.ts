@@ -5,6 +5,7 @@ export interface BootstrapRequest {
   state: Record<string, string>;
   drive?: { token: string; files: Array<{ id: string; name: string }> };
   workbook: { content: string; sha256: string };
+  civitai?: unknown;
 }
 
 export interface BootstrapResult {

@@ -81,6 +81,24 @@ export function setup(ctx: SpindleFrontendContext) {
       <details><summary>Advanced workbook startup settings</summary>
         <p>Saved for future starts. Changes do not modify an already running worker. Choose the matching model and workflow in Lumiverse separately. BF16 weights need more memory. Anima 2.9B is a community model and requires a recent ComfyUI. Anima weights are licensed for non-commercial use.</p>
         <div class="rgm-workbook-settings"></div>
+        <div class="rgm-civitai-settings" hidden>
+          <details><summary>Civitai API token</summary>
+        <p>The API token is optional and saved privately. Leave the field blank to keep the saved token.</p>
+        <label>Civitai API token<input class="rgm-civitai-token" type="password" autocomplete="off" /></label>
+        <div class="rgm-actions"><button class="rgm-civitai-token-save" type="button">Save token</button><button class="rgm-civitai-token-remove" type="button">Remove token</button></div>
+        <p class="rgm-civitai-token-status" role="status">Checking saved token...</p>
+          </details>
+          <p>Paste a Civitai model or version URL. Only Anima and MOSS SafeTensors checkpoints are supported. After saving the checkpoint, save advanced settings to use Custom Civitai for the next start. Optionally select an existing Drive copy to avoid downloading the checkpoint on each fresh runtime. Civitai SHA-256 is checked when available; otherwise only Drive integrity and the filename can be verified.</p>
+          <label>Civitai model URL<input class="rgm-civitai-url" type="url" placeholder="https://civitai.com/models/..." /></label>
+          <button class="rgm-civitai-lookup" type="button">Find versions</button>
+          <label>Version<select class="rgm-civitai-versions"></select></label>
+          <button class="rgm-civitai-load-version" type="button">Load version files</button>
+          <label>Checkpoint file<select class="rgm-civitai-files"></select></label>
+          <p class="rgm-civitai-detail" role="status">No custom checkpoint selected.</p>
+          <button class="rgm-civitai-save" type="button">Save custom checkpoint</button>
+          <button class="rgm-civitai-cache-picker" type="button">Select checkpoint in Drive (optional)</button>
+          <p class="rgm-civitai-cache-status" role="status">Save a custom checkpoint first.</p>
+        </div>
         <button class="rgm-workbook-settings-save" type="button">Save advanced settings</button>
         <p class="rgm-workbook-settings-status" role="status">Loading saved settings...</p>
       </details>
@@ -139,17 +157,46 @@ export function setup(ctx: SpindleFrontendContext) {
   const settingsRoot = drawer.root.querySelector(".rgm-workbook-settings") as HTMLDivElement;
   const settingsStatus = drawer.root.querySelector(".rgm-workbook-settings-status") as HTMLParagraphElement;
   let settingsDirty = false;
+  let civitaiVersion: any = null;
+  let savedCivitaiSelection: any = null;
+  const civitaiSettings = drawer.root.querySelector(".rgm-civitai-settings") as HTMLDivElement;
+  const civitaiVersions = drawer.root.querySelector(".rgm-civitai-versions") as HTMLSelectElement;
+  const civitaiFiles = drawer.root.querySelector(".rgm-civitai-files") as HTMLSelectElement;
+  const civitaiDetail = drawer.root.querySelector(".rgm-civitai-detail") as HTMLParagraphElement;
+  function showCivitaiVersion(version: any, fileId?: number) {
+    civitaiVersion = version;
+    civitaiFiles.replaceChildren();
+    for (const file of version.files) {
+      const option = document.createElement("option"); option.value = String(file.id);
+      option.textContent = `${file.name} ? ${(file.sizeKB / 1048576).toFixed(2)} GiB`;
+      civitaiFiles.appendChild(option);
+    }
+    if (fileId) civitaiFiles.value = String(fileId);
+    civitaiDetail.textContent = `${version.modelName} / ${version.name}; base ${version.baseModel}. Verify it is compatible with your Lumiverse workflow.`;
+  }
+  drawer.root.querySelector(".rgm-civitai-lookup")?.addEventListener("click", () => {
+    const url = (drawer.root.querySelector(".rgm-civitai-url") as HTMLInputElement).value;
+    civitaiDetail.textContent = "Looking up Civitai metadata..."; send("automation_civitai_lookup", { url });
+  });
+  drawer.root.querySelector(".rgm-civitai-load-version")?.addEventListener("click", () => send("automation_civitai_version", { versionId: Number(civitaiVersions.value) }));
+  drawer.root.querySelector(".rgm-civitai-save")?.addEventListener("click", () => {
+    if (!civitaiVersion || !civitaiFiles.value) { civitaiDetail.textContent = "Load a version and select a file first."; return; }
+    send("automation_civitai_selection_save", { versionId: civitaiVersion.id, fileId: Number(civitaiFiles.value) });
+  });
   let savedCacheNames: Set<string> | null = null;
   const cacheFiles = drawer.root.querySelector(".rgm-cache-files") as HTMLDivElement;
   function renderCacheFiles() {
     const model = (settingsRoot.querySelector('[data-workbook-setting="MODEL_CHOICE"]') as HTMLSelectElement | null)?.value;
     if (!model) return;
+    civitaiSettings.hidden = model !== "Custom Civitai";
     cacheFiles.replaceChildren();
     const heading = document.createElement("strong");
     heading.textContent = `Files for ${model}:`;
     cacheFiles.appendChild(heading);
     const list = document.createElement("ul");
-    for (const name of requiredModelFiles(model)) {
+    const required = model === "Custom Civitai" ? (savedCivitaiSelection ? (savedCivitaiSelection.version.family === "anima" ? ["qwen_3_06b_base.safetensors", "qwen_image_vae.safetensors"] : ["qwen3.5_9b_w4a8_gptq.safetensors", "flux2-vae_small.safetensors"]) : []) : requiredModelFiles(model);
+    if (model === "Custom Civitai" && !savedCivitaiSelection) { const note = document.createElement("p"); note.textContent = "Save a custom checkpoint to see its required encoder and VAE."; cacheFiles.appendChild(note); }
+    for (const name of required) {
       const item = document.createElement("li");
       item.textContent = `${name} ? ${savedCacheNames === null ? "checking" : savedCacheNames.has(name) ? "saved" : "select this file"}`;
       list.appendChild(item);
@@ -186,6 +233,20 @@ export function setup(ctx: SpindleFrontendContext) {
       settings[field.key] = field.type === "boolean" ? input.checked : field.type === "integer" ? Number(input.value) : input.value;
     }
     send("automation_workbook_settings_save", { settings });
+  });
+  const civitaiToken = drawer.root.querySelector(".rgm-civitai-token") as HTMLInputElement;
+  const civitaiTokenStatus = drawer.root.querySelector(".rgm-civitai-token-status") as HTMLParagraphElement;
+  drawer.root.querySelector(".rgm-civitai-token-save")?.addEventListener("click", () => send("automation_civitai_token_save", { token: civitaiToken.value }));
+  drawer.root.querySelector(".rgm-civitai-token-remove")?.addEventListener("click", () => send("automation_civitai_token_remove"));
+  const civitaiCacheStatus = drawer.root.querySelector(".rgm-civitai-cache-status") as HTMLParagraphElement;
+  drawer.root.querySelector(".rgm-civitai-cache-picker")?.addEventListener("click", async () => {
+    try {
+      if (!savedCivitaiSelection) { civitaiCacheStatus.textContent = "Save the custom checkpoint first."; return; }
+      const config = pickerConfig();
+      if (!config.clientId || !config.apiKey || !/^\d+$/.test(config.projectNumber)) { civitaiCacheStatus.textContent = "Enter and save your Google Picker settings first."; return; }
+      const files = await chooseDriveFiles(config);
+      send("automation_civitai_cache_save", { files });
+    } catch { civitaiCacheStatus.textContent = "Drive selection did not complete."; }
   });
   const poll = () => send("automation_poll");
   const pickerConfig = () => {
@@ -290,6 +351,33 @@ export function setup(ctx: SpindleFrontendContext) {
   });
 
   const unsub = ctx.onBackendMessage((payload: any) => {
+    if (["automation_civitai_cache_get", "automation_civitai_cache_save"].includes(payload?.action)) {
+      civitaiCacheStatus.textContent = payload.type === "automation_result" ? (payload.result?.saved ? "A Drive copy is saved for this checkpoint; it will be verified before use." : "No Drive copy is saved; the checkpoint will download from Civitai.") : "Could not save that file. Select exactly the checkpoint filename shown above.";
+      return;
+    }
+    if (["automation_civitai_lookup", "automation_civitai_version", "automation_civitai_selection_get", "automation_civitai_selection_save"].includes(payload?.action)) {
+      if (payload.type === "automation_error") { civitaiDetail.textContent = `Civitai: ${String(payload.error).replace(/_/g, " ")}.`; return; }
+      if (payload.result?.versions) {
+        civitaiVersions.replaceChildren();
+        for (const version of payload.result.versions) { const option = document.createElement("option"); option.value = String(version.id); option.textContent = version.name; civitaiVersions.appendChild(option); }
+        civitaiDetail.textContent = "Choose a version, then load its files.";
+      }
+      if (payload.result?.version) showCivitaiVersion(payload.result.version);
+      if (payload.result?.selection) {
+        savedCivitaiSelection = payload.result.selection;
+        showCivitaiVersion(savedCivitaiSelection.version, savedCivitaiSelection.fileId);
+        civitaiDetail.textContent += " Saved for the next start.";
+        renderCacheFiles(); send("automation_drive_status"); send("automation_civitai_cache_get");
+      }
+      return;
+    }
+    if (["automation_civitai_token_save", "automation_civitai_token_remove", "automation_civitai_token_status"].includes(payload?.action)) {
+      if (payload.type === "automation_result") {
+        civitaiToken.value = "";
+        civitaiTokenStatus.textContent = payload.result?.saved ? "A Civitai token is saved." : "No Civitai token is saved.";
+      } else if (payload.type === "automation_error") civitaiTokenStatus.textContent = "Could not update the Civitai token.";
+      return;
+    }
     if (payload?.action === "automation_workbook_settings_get") {
       if (payload.type === "automation_result" && !settingsDirty) { showWorkbookSettings(payload.result.settings); renderCacheFiles(); settingsStatus.textContent = "Saved settings loaded."; }
       else if (payload.type === "automation_error") settingsStatus.textContent = "Could not load saved settings.";
@@ -411,6 +499,8 @@ export function setup(ctx: SpindleFrontendContext) {
         invalid_credentials: "Check the credential fields and try again.",
         recovery_runtime_present: "A manager runtime is still present. Stop it before recovery.",
         recovery_intent_required: "No recoverable allocation record was found.",
+        civitai_metadata_changed: "Civitai changed this file?s metadata. Look up and save the version again before starting.",
+        civitai_selection_required: "Select and save a compatible Civitai checkpoint before starting Colab.",
         gateway_model_cache_update_required: "The gateway must be updated before starting this model. No runtime was allocated.",
         gateway_workbook_update_required: "The gateway must support extension-supplied workbooks before Colab can start. No runtime was allocated.",
       };
@@ -471,6 +561,8 @@ export function setup(ctx: SpindleFrontendContext) {
     }
   });
 
+  send("automation_civitai_selection_get");
+  send("automation_civitai_token_status");
   send("automation_picker_config_get");
   send("automation_gpu_choice_get");
   send("automation_drive_status");

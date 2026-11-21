@@ -53,6 +53,8 @@ def main():
         hooks = {"credentials": credentials, "state": state}
         if request.get("drive"):
             hooks["drive"] = request["drive"]
+        if request.get("civitai"):
+            hooks["civitai"] = request["civitai"]
         # Notebook output is untrusted and may contain secrets; do not log it.
         with open(os.devnull, "w", encoding="utf-8") as null:
             with contextlib.redirect_stdout(null), contextlib.redirect_stderr(null):

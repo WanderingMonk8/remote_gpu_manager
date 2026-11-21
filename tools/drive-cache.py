@@ -43,24 +43,41 @@ def workbook_model(source):
         model = ast.literal_eval(matches[0])
     except (ValueError, SyntaxError):
         raise ValueError("invalid workbook model") from None
-    if not isinstance(model, str) or model not in MODELS:
+    if not isinstance(model, str) or (model not in MODELS and model != "Custom Civitai"):
         raise ValueError("invalid workbook model")
     return model
 
 
-def build_restore_cell(token, files, model="MOSS SFT INT8"):
+def build_restore_cell(token, files, model="MOSS SFT INT8", family=None, custom=None):
 
     if not token or not isinstance(files, list) or not files:
         raise ValueError("drive cache and access token required")
+    custom_name = None
+    custom_dest = None
+    custom_sha = None
+    if custom is not None:
+        version = custom.get("version", {}) if isinstance(custom, dict) else {}
+        vid, fid = version.get("id"), custom.get("fileId")
+        candidates = [f for f in version.get("files", []) if isinstance(f, dict) and f.get("id") == fid]
+        if type(vid) is not int or type(fid) is not int or not 0 < vid < 10**15 or not 0 < fid < 10**15 or len(candidates) != 1:
+            raise ValueError("invalid custom cache metadata")
+        custom_name, custom_sha = candidates[0].get("name"), candidates[0].get("sha256")
+        if not isinstance(custom_name, str) or (len(custom_name) > 180 or not custom_name.lower().endswith(".safetensors") or re.search(r"[\x00-\x1f\x7f/\\]", custom_name)): raise ValueError("invalid custom cache name")
+        if custom_sha is not None and (not isinstance(custom_sha, str) or not re.fullmatch(r"[a-fA-F0-9]{64}", custom_sha)): raise ValueError("invalid custom cache hash")
+        custom_dest = f"civitai-{vid}-{fid}.safetensors"
     names = set()
     selected = []
     for item in files:
         name, file_id = item.get("name"), item.get("id")
-        if name not in FILES or name in names or not isinstance(file_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,256}", file_id):
+        if (name not in FILES and name != custom_name) or name in names or not isinstance(file_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,256}", file_id):
             raise ValueError("invalid drive cache selection")
         names.add(name)
-        selected.append({"name": name, "id": file_id, "category": FILES[name]})
-    if model not in MODELS or not set(MODELS[model]).issubset(names):
+        selected.append({"name": name, "id": file_id, "category": FILES.get(name, "diffusion_models"), **({"destination": custom_dest, "sha256": custom_sha} if name == custom_name else {})})
+    if model == "Custom Civitai":
+        required = {"qwen_3_06b_base.safetensors", "qwen_image_vae.safetensors"} if family == "anima" else {"qwen3.5_9b_w4a8_gptq.safetensors", "flux2-vae_small.safetensors"} if family == "moss" else None
+    else:
+        required = MODELS.get(model)
+    if not required or not set(required).issubset(names):
         raise ValueError("incomplete selected model cache")
     payload = base64.b64encode(json.dumps({"token": token, "files": selected}).encode()).decode()
     return f'''
@@ -75,17 +92,17 @@ try:
         _meta.raise_for_status(); _m = _meta.json()
         if _m.get("name") != _f["name"] or not _m.get("md5Checksum") or not _m.get("size"):
             raise RuntimeError("Drive cache metadata mismatch")
-        _dest = MODELS / _f["category"] / _f["name"]
+        _dest = MODELS / _f["category"] / _f.get("destination", _f["name"])
         _dest.parent.mkdir(parents=True, exist_ok=True)
         _tmp = _dest.with_suffix(_dest.suffix + ".part")
         try:
-            _hash = hashlib.md5(); _size = 0
+            _hash = hashlib.md5(); _sha = hashlib.sha256(); _size = 0
             with requests.get(_url, headers=_headers, params={{"alt":"media"}}, stream=True, timeout=(30,120)) as _r:
                 _r.raise_for_status()
                 with _tmp.open("wb") as _out:
                     for _chunk in _r.iter_content(8 * 1024 * 1024):
-                        if _chunk: _out.write(_chunk); _hash.update(_chunk); _size += len(_chunk)
-            if _size != int(_m["size"]) or _hash.hexdigest() != _m["md5Checksum"]:
+                        if _chunk: _out.write(_chunk); _hash.update(_chunk); _sha.update(_chunk); _size += len(_chunk)
+            if _size != int(_m["size"]) or _hash.hexdigest() != _m["md5Checksum"] or (_f.get("sha256") and _sha.hexdigest().lower() != _f["sha256"].lower()):
                 raise RuntimeError("Drive cache verification failed")
             os.replace(_tmp, _dest)
         finally:
