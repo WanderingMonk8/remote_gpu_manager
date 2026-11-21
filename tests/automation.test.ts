@@ -195,7 +195,7 @@ describe("automation controller", () => {
     expect(last.complete).toBe(true);
     expect(last.missing).toEqual([]);
     expect(JSON.parse(entries.get("owner:automation-drive-cache-v1")!)).toHaveLength(3);
-    expect(await controller.driveStatus("owner")).toEqual({ saved: true, missing: [] });
+    expect(await controller.driveStatus("owner")).toEqual({ saved: true, missing: [], savedNames: ["moss_image_sft_int8_convrot.safetensors", "qwen3.5_9b_w4a8_gptq.safetensors", "flux2-vae_small.safetensors"] });
     expect((await controller.driveStatus("other")).saved).toBe(false);
   });
 
