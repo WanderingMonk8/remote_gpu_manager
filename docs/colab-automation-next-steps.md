@@ -88,6 +88,35 @@ reachable through its API instead:
 - Add a "Adopt URL" step so start does not require a Space restart: the controller calls
   `PUT /gateway/v1/upstream` with the returned URL and Basic Auth.
 
+### Planned: model selection in the extension
+
+- Save a per-user model preference and present the supported MOSS and Anima variants
+  before starting a runtime. Display the configured current worker model separately
+  from the preference for the next start.
+- Map each model to its checkpoint, encoder and VAE. Show saved selections and missing
+  files, allow choosing only the missing Drive files, and retain prior selections when
+  switching models. Validate the chosen model's requirements before allocating; remove
+  the current unconditional MOSS SFT requirement for other model choices.
+- Pass the chosen model to the committed final workbook without modifying stored user
+  data. Test the model mapping, Drive access preflight and workbook configuration with
+  mocks before a minimal-cost live check.
+- First release: allow changing the next-start preference while a worker is running.
+  Separately investigate an explicit active-worker switch, including queue-idle checks,
+  weight restoration, workflow compatibility, rollback and whether the existing worker
+  can change model without restarting the runtime. Do not interrupt active jobs.
+
+### Investigate: unexpected runtime expiration
+
+- Distinguish a gateway idle stop, Colab provider termination, a ComfyUI/supervisor
+  restart and tunnel or connectivity failure using timestamps and nonsecret logs.
+- Verify that actual generation requests use the gateway and update its last-work time,
+  that queue activity protects long jobs, and that the saved timeout is applied. Test
+  offline with mocks before using any Colab runtime. Check that browser or worker-only
+  traffic that bypasses the gateway is not misidentified as gateway-observed work.
+- The notebook supervisor monitors child processes; it does not override provider
+  lifetime or idle policies. Inspect the official Colab API and plan limits before
+  proposing any provider-specific change; do not promise indefinite availability.
+
 ## 4. Decision criteria
 
 Resume only if at least one is wanted:
