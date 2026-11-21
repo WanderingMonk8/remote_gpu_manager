@@ -213,7 +213,7 @@ export function setup(ctx: SpindleFrontendContext) {
   drawer.root.querySelector(".rgm-recover")?.addEventListener("click", () => {
     if (window.confirm("Only continue if you verified in Google Colab that the previous runtime was terminated and no allocation is still in progress. A delayed allocation could still appear and incur charges. Recover the allocation safeguard?")) send("automation_recover");
   });
-  drawer.root.querySelector(".rgm-runtime-status")?.addEventListener("click", () => { send("automation_status"); poll(); });
+  drawer.root.querySelector(".rgm-runtime-status")?.addEventListener("click", () => { send("automation_status"); });
   drawer.root.querySelector(".rgm-set-idle")?.addEventListener("click", () => {
     idleDirty = true;
     send("automation_idle", { minutes: Number(idleSelect.value) });
@@ -366,6 +366,12 @@ export function setup(ctx: SpindleFrontendContext) {
       automationStatus.dataset.tone = result.status === "failed" || result.workerHealthy === false ? "bad" : "unknown";
       const display = result.status ?? result.state ?? (result.recovered ? "allocation recovered" : result.saved ? "saved" : result.confirmed ? "stopped" : "updated");
       automationStatus.textContent = `${payload.action}: ${display}${result.error ? ` (${result.error})` : ""}${result.workerHealthy === true ? " — worker healthy" : result.workerHealthy === false ? " — worker health check failed" : ""}`;
+      if (payload.action === "automation_status") {
+        if (result.worker) automationStatus.textContent += `; worker ${String(result.worker).replace(/_/g, " ")}`;
+        if (result.job) automationStatus.textContent += `; jobs ${result.job.state}${result.job.lastActivity ? `, last activity ${new Date(result.job.lastActivity).toLocaleTimeString()}` : ""}`;
+        if (result.idle?.lastWorkAt) automationStatus.textContent += `; last gateway work ${new Date(result.idle.lastWorkAt).toLocaleTimeString()}`;
+        if (result.lastRuntimeObservation) automationStatus.textContent += `; last runtime observation ${String(result.lastRuntimeObservation.event).replace(/_/g, " ")} at ${new Date(result.lastRuntimeObservation.at).toLocaleTimeString()}`;
+      }
       if (payload.action === "automation_start" || (payload.action === "automation_poll" && result.status === "running")) {
         if (pollTimer) clearTimeout(pollTimer);
         pollTimer = setTimeout(poll, 3000);
