@@ -76,7 +76,7 @@ export function setup(ctx: SpindleFrontendContext) {
         <p class="rgm-drive-status" role="status">No selection made in this session.</p>
       </details>
       <details><summary>Advanced workbook startup settings</summary>
-        <p>Saved for future starts. Changes do not modify an already running worker.</p>
+        <p>Saved for future starts. Changes do not modify an already running worker. Choose the matching model and workflow in Lumiverse separately.</p>
         <div class="rgm-workbook-settings"></div>
         <button class="rgm-workbook-settings-save" type="button">Save advanced settings</button>
         <p class="rgm-workbook-settings-status" role="status">Loading saved settings...</p>
