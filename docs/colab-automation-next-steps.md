@@ -119,24 +119,20 @@ reachable through its API instead:
 
 ### Remaining workbook controls
 
-The owner wants Lumiverse's normal generation flow as the default, with the
-workbook's inline generation retained as an optional diagnostic. Native Lumiverse
-currently has no extension hook for intercepting generation or updating saved
-workflow mappings. Its host image-generation service does have the per-user ID
-and can read the extension's namespaced encrypted settings, so a narrowly scoped
-host integration is a possible path; it requires review and tests against the
-actual deployed Lumiverse revision. Do not globally rewrite gateway requests:
-they lack reliable per-user identity. Lumiverse values take priority over saved advanced preferences when they conflict.
+Lumiverse owns generation settings. Do not expose prompt, dimensions, sampler,
+seed, or other generation controls in the extension, and do not override native
+Lumiverse generation values. The notebook's inline generation remains available
+for manual diagnostics; it is disabled during automated startup.
 
 - The advanced panel currently covers next-start model, installation, supervisor,
-  VRAM, and startup LoRA download settings. The updated gateway restores only files required by the chosen model.
-  Until that gateway is deployed, non-default model starts fail before allocation
-  with an update-required message; the original MOSS SFT model remains compatible.
-- The remaining notebook fields include generation prompts, dimensions, sampler,
-  seed, reference and LoRA controls, and interactive actions such as generation,
+  VRAM, and startup LoRA download settings. The updated gateway restores only files
+  required by the chosen model. Until that gateway is deployed, non-default model
+  starts fail before allocation with an update-required message; the original MOSS
+  SFT model remains compatible.
+- Remaining non-generation controls include reference and LoRA asset management,
   file upload, workflow download, and cleanup. They require functional UI and
-  explicit runtime actions, not merely saved fields: the automation skips the
-  notebook's generation and cleanup cells and cannot use its browser pickers.
+  explicit runtime actions rather than merely saved fields: automation skips the
+  notebook's cleanup cells and cannot use its browser pickers.
 - Changing settings in the current panel applies on the next startup; switching
   an active model or applying live settings requires additional runtime controls.
 - Keep credentials masked and user-specific; validate all input and check the
