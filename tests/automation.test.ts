@@ -66,7 +66,7 @@ describe("automation controller", () => {
     expect(workbook.sha256).toHaveLength(64);
   });
 
-  test("requires the selected model cache before allocating", async () => {
+  test("uses optional cache files and downloads missing files for a different model", async () => {
     const entries = new Map<string, string>();
     const calls: string[] = [];
     const c = new AutomationController({ async get(key, user) { return entries.get(`${user}:${key}`) ?? null; },
@@ -80,8 +80,9 @@ describe("automation controller", () => {
     ]);
     await c.saveWorkbookSettings("owner", { MODEL_CHOICE: "Anima Base v1.0" });
     expect((await c.driveStatus("owner")).missing).toEqual(["anima-base-v1.0.safetensors", "qwen_3_06b_base.safetensors", "qwen_image_vae.safetensors"]);
-    await expect(c.start("owner")).rejects.toThrow("drive_selection_incomplete");
-    expect(calls).toEqual([]);
+    await c.start("owner");
+    expect(calls).toContain("/gateway/v1/runtime");
+    expect(calls).not.toContain("/gateway/v1/runtime/cache-check");
     const oldGateway = new AutomationController({ async get(key, user) { return entries.get(`${user}:${key}`) ?? null; },
       async put(key, value, user) { entries.set(`${user}:${key}`, value); } },
       async path => { if (path.endsWith("/bootstrap")) return { status: "idle", workbook_transfer: 1 }; throw new Error("unexpected_gateway_call"); });
@@ -205,7 +206,7 @@ describe("automation controller", () => {
     expect(await controller.getPickerConfig("owner")).toEqual(config);
   });
 
-  test("saves Picker selections across visits and refuses an incomplete cache", async () => {
+  test("saves partial Picker selections across visits", async () => {
     const entries = new Map<string, string>();
     const calls: string[] = [];
     const controller = new AutomationController({
@@ -216,8 +217,7 @@ describe("automation controller", () => {
     const first = await controller.saveDriveFiles("owner", [{ id: "a", name: "moss_image_sft_int8_convrot.safetensors" }]);
     expect(first.complete).toBe(false);
     expect(first.missing).toEqual(["qwen3.5_9b_w4a8_gptq.safetensors", "flux2-vae_small.safetensors"]);
-    await expect(controller.start("owner")).rejects.toThrow("drive_selection_incomplete");
-    expect(calls).toEqual([]);
+    expect(first.missing).toHaveLength(2);
     await controller.saveDriveFiles("owner", [{ id: "b", name: "qwen3.5_9b_w4a8_gptq.safetensors" }]);
     const last = await controller.saveDriveFiles("owner", [{ id: "c", name: "flux2-vae_small.safetensors" }]);
     expect(last.complete).toBe(true);
