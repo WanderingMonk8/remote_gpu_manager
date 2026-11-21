@@ -126,13 +126,12 @@ workflow mappings. Its host image-generation service does have the per-user ID
 and can read the extension's namespaced encrypted settings, so a narrowly scoped
 host integration is a possible path; it requires review and tests against the
 actual deployed Lumiverse revision. Do not globally rewrite gateway requests:
-they lack reliable per-user identity. Decide conflict priority between Lumiverse
-values and saved advanced preferences before implementing generation overrides.
+they lack reliable per-user identity. Lumiverse values take priority over saved advanced preferences when they conflict.
 
 - The advanced panel currently covers next-start model, installation, supervisor,
-  VRAM, and startup LoRA download settings. The current gateway still requires the original MOSS SFT
-  cache even when a different model is selected; only files required by the
-  chosen model and that compatibility requirement are restored.
+  VRAM, and startup LoRA download settings. The updated gateway restores only files required by the chosen model.
+  Until that gateway is deployed, non-default model starts fail before allocation
+  with an update-required message; the original MOSS SFT model remains compatible.
 - The remaining notebook fields include generation prompts, dimensions, sampler,
   seed, reference and LoRA controls, and interactive actions such as generation,
   file upload, workflow download, and cleanup. They require functional UI and

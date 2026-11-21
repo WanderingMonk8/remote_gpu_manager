@@ -1,4 +1,5 @@
 """Build a kernel cell that restores Picker-authorized model files from Drive."""
+import ast
 import base64
 import json
 import re
@@ -16,7 +17,30 @@ FILES = {
 }
 
 
-def build_restore_cell(token, files):
+MODELS = {
+    "MOSS SFT INT8": ("moss_image_sft_int8_convrot.safetensors", "qwen3.5_9b_w4a8_gptq.safetensors", "flux2-vae_small.safetensors"),
+    "MOSS Base INT8": ("moss_image_base_int8_convrot.safetensors", "qwen3.5_9b_w4a8_gptq.safetensors", "flux2-vae_small.safetensors"),
+    **{label: (f"anima-{name}.safetensors", "qwen_3_06b_base.safetensors", "qwen_image_vae.safetensors") for label, name in {
+        "Anima Base v1.0": "base-v1.0", "Anima Turbo v1.0": "turbo-v1.0", "Anima Turbo v1.1": "turbo-v1.1",
+        "Anima Aesthetic v1.0": "aesthetic-v1.0", "Anima Aesthetic v1.0b": "aesthetic-v1.0b", "Anima Aesthetic v1.1": "aesthetic-v1.1"}.items()},
+}
+
+
+def workbook_model(source):
+    matches = re.findall(r"^MODEL_CHOICE\s*=\s*(.+?)\s*#\s*@param", source, re.MULTILINE)
+    if len(matches) != 1:
+        raise ValueError("invalid workbook model")
+    try:
+        model = ast.literal_eval(matches[0])
+    except (ValueError, SyntaxError):
+        raise ValueError("invalid workbook model") from None
+    if not isinstance(model, str) or model not in MODELS:
+        raise ValueError("invalid workbook model")
+    return model
+
+
+def build_restore_cell(token, files, model="MOSS SFT INT8"):
+
     if not token or not isinstance(files, list) or not files:
         raise ValueError("drive cache and access token required")
     names = set()
@@ -27,10 +51,8 @@ def build_restore_cell(token, files):
             raise ValueError("invalid drive cache selection")
         names.add(name)
         selected.append({"name": name, "id": file_id, "category": FILES[name]})
-    # Fail before downloading if the configured notebook's default model is incomplete.
-    required = {"moss_image_sft_int8_convrot.safetensors", "qwen3.5_9b_w4a8_gptq.safetensors", "flux2-vae_small.safetensors"}
-    if not required.issubset(names):
-        raise ValueError("incomplete default model cache")
+    if model not in MODELS or not set(MODELS[model]).issubset(names):
+        raise ValueError("incomplete selected model cache")
     payload = base64.b64encode(json.dumps({"token": token, "files": selected}).encode()).decode()
     return f'''
 import base64, hashlib, json, os, requests

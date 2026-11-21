@@ -122,7 +122,7 @@ export class AutomationController {
     for (const file of files) merged.set(file.name, { id: file.id, name: file.name });
     const allFiles = [...merged.values()];
     const model = String((await this.getWorkbookSettings(user)).MODEL_CHOICE);
-    const missing = [...new Set([...DEFAULT_FILES, ...requiredModelFiles(model)])].filter(name => !merged.has(name));
+    const missing = requiredModelFiles(model).filter(name => !merged.has(name));
     await this.store.put(DRIVE, JSON.stringify(allFiles), user);
     return { saved: true, complete: missing.length === 0, missing };
   }
@@ -138,7 +138,7 @@ export class AutomationController {
     const files: DriveFile[] = saved ? JSON.parse(saved) : [];
     if (!Array.isArray(files) || (files.length > 0 && driveSelectionIssue(files))) throw new Error("drive_selection_invalid");
     const model = String((await this.getWorkbookSettings(user)).MODEL_CHOICE);
-    return { saved: files.length > 0, missing: [...new Set([...DEFAULT_FILES, ...requiredModelFiles(model)])].filter(name => !files.some(file => file.name === name)) };
+    return { saved: files.length > 0, missing: requiredModelFiles(model).filter(name => !files.some(file => file.name === name)) };
   }
 
   private async secrets(user: string): Promise<AutomationSecrets> {
@@ -171,7 +171,7 @@ export class AutomationController {
     if (!savedDrive) throw new Error("drive_selection_required");
     const driveFiles = JSON.parse(savedDrive) as DriveFile[];
     const workbookSettings = await this.getWorkbookSettings(user);
-    const requiredFiles = [...new Set([...DEFAULT_FILES, ...requiredModelFiles(String(workbookSettings.MODEL_CHOICE))])];
+    const requiredFiles = requiredModelFiles(String(workbookSettings.MODEL_CHOICE));
     if (!Array.isArray(driveFiles) || !requiredFiles.every(name => driveFiles.some(file => file?.name === name))) {
       throw new Error("drive_selection_incomplete");
     }
@@ -179,6 +179,7 @@ export class AutomationController {
     const existing = await this.call("/gateway/v1/runtime/bootstrap", "GET", s.controlToken);
     if (existing.status !== "idle") throw new Error("bootstrap_result_pending");
     if (existing.workbook_transfer !== 1) throw new Error("gateway_workbook_update_required");
+    if (existing.model_cache !== 2 && workbookSettings.MODEL_CHOICE !== "MOSS SFT INT8") throw new Error("gateway_model_cache_update_required");
     const workbook = await bundledWorkbook(workbookSettings);
     await this.call("/gateway/v1/runtime/workbook-check", "POST", s.controlToken, { workbook });
     await this.call("/gateway/v1/runtime/credentials", "POST", s.controlToken,

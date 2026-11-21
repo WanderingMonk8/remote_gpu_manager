@@ -43,7 +43,7 @@ describe("automation controller", () => {
     const calls: string[] = [];
     const c = new AutomationController({ async get(key, user) { return entries.get(`${user}:${key}`) ?? null; },
       async put(key, value, user) { entries.set(`${user}:${key}`, value); } },
-      async path => { calls.push(path); return { status: "idle", workbook_transfer: 1 }; });
+      async path => { calls.push(path); return { status: "idle", workbook_transfer: 1, model_cache: 2 }; });
     await c.save("owner", secrets);
     await c.saveDriveFiles("owner", [
       { id: "a", name: "moss_image_sft_int8_convrot.safetensors" },
@@ -54,12 +54,16 @@ describe("automation controller", () => {
     expect((await c.driveStatus("owner")).missing).toEqual(["anima-base-v1.0.safetensors", "qwen_3_06b_base.safetensors", "qwen_image_vae.safetensors"]);
     await expect(c.start("owner")).rejects.toThrow("drive_selection_incomplete");
     expect(calls).toEqual([]);
+    const oldGateway = new AutomationController({ async get(key, user) { return entries.get(`${user}:${key}`) ?? null; },
+      async put(key, value, user) { entries.set(`${user}:${key}`, value); } },
+      async path => { if (path.endsWith("/bootstrap")) return { status: "idle", workbook_transfer: 1 }; throw new Error("unexpected_gateway_call"); });
     const result = await c.saveDriveFiles("owner", [
       { id: "d", name: "anima-base-v1.0.safetensors" },
       { id: "e", name: "qwen_3_06b_base.safetensors" },
       { id: "f", name: "qwen_image_vae.safetensors" },
     ]);
     expect(result.complete).toBe(true);
+    await expect(oldGateway.start("owner")).rejects.toThrow("gateway_model_cache_update_required");
     await c.start("owner");
     expect(calls).toContain("/gateway/v1/runtime");
   });

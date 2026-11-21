@@ -395,7 +395,8 @@ def bootstrap_runtime(args, cells, name, runtime, hooks=None):
             drive_module = importlib.util.module_from_spec(drive_spec)
             drive_spec.loader.exec_module(drive_module)
             drive = hooks["drive"]
-            code = drive_module.build_restore_cell(drive["token"], drive["files"])
+            model = drive_module.workbook_model(cells[6])
+            code = drive_module.build_restore_cell(drive["token"], drive["files"], model)
             ok, _, _ = execute_live(ws, session_id, code, timeout=args.timeout, echo=False)
             if not ok:
                 raise RuntimeError("Drive cache restore failed")
