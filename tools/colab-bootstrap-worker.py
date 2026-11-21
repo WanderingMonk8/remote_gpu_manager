@@ -59,7 +59,7 @@ def main():
                 code = module.bootstrap_runtime(args, cells, runtime["name"], runtime, hooks)
         if code != 0 or not hooks.get("funnel") or not hooks.get("state", {}).get("tailscaled.state"):
             raise ValueError("bootstrap failed")
-        response = {"ok": True, "funnel": hooks["funnel"], "state": hooks["state"]}
+        response = {"ok": True, "funnel": hooks["funnel"], "state": hooks["state"], "kernelId": hooks["kernel_id"]}
     except Exception:
         response = {"ok": False, "error": "bootstrap_failed"}
     sys.stdout.write(json.dumps(response, separators=(",", ":")) + "\n")

@@ -352,6 +352,8 @@ def bootstrap_runtime(args, cells, name, runtime, hooks=None):
     )
     with urllib.request.urlopen(req, timeout=60) as r:
         kernel_id = json.loads(r.read().decode())["id"]
+    if hooks is not None:
+        hooks["kernel_id"] = kernel_id
     print(f"[2] kernel {kernel_id}")
     if not probe.wait_for_kernel(host, ptoken, scheme, kernel_id):
         print("    kernel did not report idle; continuing")

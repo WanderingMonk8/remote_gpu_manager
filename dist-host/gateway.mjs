@@ -28,15 +28,118 @@ async function runBootstrap(command, request, timeoutMs = 30 * 60000) {
     if (exit !== 0)
       throw new Error("bootstrap_failed");
     const result = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-    if (result?.ok !== true || typeof result.funnel !== "string" || !result.state || typeof result.state !== "object" || Array.isArray(result.state)) {
+    if (result?.ok !== true || typeof result.funnel !== "string" || !result.state || typeof result.state !== "object" || Array.isArray(result.state) || typeof result.kernelId !== "string" || !/^[a-zA-Z0-9-]{1,100}$/.test(result.kernelId)) {
       throw new Error("bootstrap_invalid_response");
     }
-    return { funnel: result.funnel, state: result.state };
+    return { funnel: result.funnel, state: result.state, kernelId: result.kernelId };
   } catch {
     throw new Error("bootstrap_failed");
   } finally {
     clearTimeout(timeout);
     proc.kill();
+  }
+}
+
+// host-gateway/jupyter-connection.ts
+class JupyterConnection {
+  credentials;
+  openSocket;
+  socket = null;
+  timer = null;
+  generation = 0;
+  failures = 0;
+  current = "stopped";
+  constructor(credentials, openSocket = (url, token) => new WebSocket(url, { headers: { "X-Colab-Runtime-Proxy-Token": token } })) {
+    this.credentials = credentials;
+    this.openSocket = openSocket;
+  }
+  status() {
+    return this.current;
+  }
+  start(kernelId) {
+    this.stop();
+    const generation = this.generation;
+    this.current = "connecting";
+    this.connect(kernelId, generation);
+  }
+  stop() {
+    this.generation++;
+    if (this.timer)
+      clearTimeout(this.timer);
+    this.timer = null;
+    const socket = this.socket;
+    this.socket = null;
+    if (socket)
+      socket.close();
+    this.failures = 0;
+    this.current = "stopped";
+  }
+  retry(kernelId, generation) {
+    if (generation !== this.generation || this.timer)
+      return;
+    this.current = "reconnecting";
+    const delay = Math.min(300000, 5000 * 2 ** Math.min(this.failures++, 6));
+    this.timer = setTimeout(() => {
+      this.timer = null;
+      this.connect(kernelId, generation);
+    }, delay);
+  }
+  async connect(kernelId, generation) {
+    try {
+      const info = await this.credentials();
+      if (generation !== this.generation)
+        return;
+      const base = new URL(info.url);
+      if (base.protocol !== "https:" || !/^[a-z0-9.-]+\.colab\.dev$/i.test(base.hostname) || !info.token)
+        throw new Error("invalid connection");
+      const url = new URL(`/api/kernels/${encodeURIComponent(kernelId)}/channels`, base);
+      url.protocol = "wss:";
+      url.searchParams.set("session_id", crypto.randomUUID());
+      url.searchParams.set("colab-runtime-proxy-token", info.token);
+      const socket = this.openSocket(url.toString(), info.token);
+      this.socket = socket;
+      this.timer = setTimeout(() => {
+        this.timer = null;
+        if (this.socket === socket) {
+          this.socket = null;
+          socket.close();
+          this.retry(kernelId, generation);
+        }
+      }, 30000);
+      socket.onopen = () => {
+        if (generation !== this.generation || this.socket !== socket)
+          return;
+        if (this.timer)
+          clearTimeout(this.timer);
+        this.timer = null;
+        this.current = "connected";
+        this.failures = 0;
+        const expiry = Date.parse(info.expireTime || "");
+        const delay = Number.isFinite(expiry) ? Math.max(30000, Math.min(3600000, expiry - Date.now() - 60000)) : 3600000;
+        this.timer = setTimeout(() => {
+          this.timer = null;
+          if (this.socket === socket) {
+            this.socket = null;
+            socket.close();
+            this.retry(kernelId, generation);
+          }
+        }, delay);
+      };
+      const failed = () => {
+        if (generation !== this.generation || this.socket !== socket)
+          return;
+        this.socket = null;
+        if (this.timer)
+          clearTimeout(this.timer);
+        this.timer = null;
+        socket.close();
+        this.retry(kernelId, generation);
+      };
+      socket.onerror = failed;
+      socket.onclose = failed;
+    } catch {
+      this.retry(kernelId, generation);
+    }
   }
 }
 
@@ -430,6 +533,15 @@ async function handleControl(req, path) {
 var creds = null;
 var accessToken = null;
 var owned = null;
+var jupyter = new JupyterConnection(async () => {
+  if (!owned)
+    throw new Error("runtime unavailable");
+  const name = owned.name;
+  const got = await colabRequest("GET", `/v1beta/${name}`);
+  if (got.status !== 200 || owned?.name !== name || typeof got.json?.connectionInfo?.url !== "string" || typeof got.json?.connectionInfo?.token !== "string")
+    throw new Error("connection unavailable");
+  return got.json.connectionInfo;
+});
 var provisioning = false;
 var stopping = false;
 var workInFlight = 0;
@@ -711,6 +823,7 @@ async function statusRuntime() {
     const got = await colabRequest("GET", `/v1beta/${owned.name}`);
     if (got.status === 404) {
       recordDiagnostic("provider_runtime_missing");
+      jupyter.stop();
       owned = null;
       jobs.reset();
     } else if (got.status !== 200) {
@@ -739,6 +852,7 @@ async function statusRuntime() {
     runtime: owned ? maskRuntime(owned) : null,
     state: provisioning || owned && !owned.url ? "starting" : owned ? "ready" : "offline",
     worker,
+    jupyter: jupyter.status(),
     job: jobs.snapshot(),
     lastDiagnostic,
     lastRuntimeObservation,
@@ -797,6 +911,7 @@ async function recoverAllocation(req) {
       return errJson(409, "recovery_intent_changed");
     await rename(INTENT_FILE, `${INTENT_FILE}.resolved-${crypto.randomUUID()}`);
     owned = null;
+    jupyter.stop();
     uncertainCreate = false;
     jobs.reset();
     return Response.json({ recovered: true });
@@ -843,6 +958,7 @@ async function stopRuntime(force = false, reason = "manual") {
     const check = await colabRequest("GET", `/v1beta/${name}`);
     if (check.status === 404) {
       owned = null;
+      jupyter.stop();
       recordDiagnostic(force ? "force_stop_confirmed" : reason === "idle" ? "idle_stop_confirmed" : "manual_stop_confirmed");
       jobs.reset();
       if (INTENT_FILE) {
@@ -920,6 +1036,7 @@ async function bootstrapRuntime(req) {
       state,
       ...Array.isArray(drive_files) && drive_files.length ? { drive: { token: await ensureAccessToken(), files: drive_files } } : {}
     });
+    jupyter.start(result.kernelId);
     const adopted = await handleControl(new Request("http://127.0.0.1/gateway/v1/upstream", {
       method: "PUT",
       headers: { Authorization: `Bearer ${CONTROL_TOKEN}`, "Content-Type": "application/json" },

@@ -142,6 +142,12 @@ or reset the manager's own idle shutdown timer. Never silently allocate another
 runtime or retry a generation. Keep the manager's stop/recovery protections and
 user-selected idle timeout in force.
 
+The first implementation keeps the kernel identifier in gateway memory only.
+If the gateway restarts while a runtime is running, the Jupyter status reports
+`stopped`; it does not guess which existing kernel belongs to the worker. A new
+bootstrap establishes a connection. A connected status confirms a WebSocket,
+not that Colab will extend the runtime's lifetime.
+
 Verify connection lifecycle and idle behavior with mocks first. Then, with the
 owner's authorization, use one L4 runtime for approximately the 30-40 minute
 period in which previous sessions disappeared. Record nonsecret connection,
