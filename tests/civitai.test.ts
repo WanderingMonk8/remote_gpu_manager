@@ -62,6 +62,28 @@ describe("Civitai checkpoint selection", () => {
     expect([...map.values()].every(value => /^[\x00-\x7f]*$/.test(value))).toBe(true);
   });
 
+  test("model, token, checkpoint and Drive cache survive reinstall and switching models", async () => {
+    const map = new Map<string, string>();
+    const store = { async get(k: string, u: string) { return map.get(`${u}:${k}`) ?? null; }, async put(k: string, v: string, u: string) { map.set(`${u}:${k}`, v); }, async delete(k: string, u: string) { map.delete(`${u}:${k}`); } };
+    const before = new AutomationController(store, async () => ({}));
+    await before.saveCivitaiToken("owner", "secret");
+    await before.saveCivitaiSelection("owner", { version: parseCivitaiVersion(raw), fileId: 67 });
+    await before.saveCivitaiCache("owner", [{ id: "drive-id", name: "model.safetensors" }]);
+    await before.saveWorkbookSettings("owner", { MODEL_CHOICE: "Custom Civitai", VRAM_MODE: "lowvram" });
+    const reinstalled = new AutomationController(store, async () => ({}));
+    expect((await reinstalled.getWorkbookSettings("owner")).MODEL_CHOICE).toBe("Custom Civitai");
+    expect((await reinstalled.getWorkbookSettings("owner")).VRAM_MODE).toBe("lowvram");
+    expect((await reinstalled.getCivitaiSelection("owner"))?.fileId).toBe(67);
+    expect((await reinstalled.getCivitaiCache("owner"))?.id).toBe("drive-id");
+    expect(await reinstalled.civitaiTokenStatus("owner")).toEqual({ saved: true });
+    await reinstalled.saveWorkbookSettings("owner", { MODEL_CHOICE: "MOSS SFT INT8" });
+    await reinstalled.saveWorkbookSettings("owner", { MODEL_CHOICE: "Custom Civitai" });
+    const afterSwitch = new AutomationController(store, async () => ({}));
+    expect((await afterSwitch.getCivitaiSelection("owner"))?.fileId).toBe(67);
+    expect((await afterSwitch.getCivitaiCache("owner"))?.id).toBe("drive-id");
+    expect(await afterSwitch.civitaiTokenStatus("owner")).toEqual({ saved: true });
+  });
+
   test("token and custom selection survive controller reinstalls and remain per user", async () => {
     const map = new Map<string, string>();
     const store = { async get(k: string, u: string) { return map.get(`${u}:${k}`) ?? null; },
