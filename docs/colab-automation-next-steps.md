@@ -117,6 +117,44 @@ reachable through its API instead:
   lifetime or idle policies. Inspect the official Colab API and plan limits before
   proposing any provider-specific change; do not promise indefinite availability.
 
+### Investigate: preserving the Colab connection
+
+The current headless bootstrap opens a Jupyter kernel connection to execute the
+workbook, then closes it while ComfyUI continues in a separate process. Google
+Colab CLI maintainers say the service considers kernel activity and active
+connections; they removed a retired client-side keep-alive ping. This is evidence
+for testing a connection, not a guarantee that a particular connection will
+prevent Colab from reclaiming the runtime.
+
+| Option | Proposed approach | Key uncertainty or tradeoff |
+|---|---|---|
+| Persistent Jupyter connection | Keep the authenticated kernel connection open from the Space while the worker is running; refresh credentials and reconnect when necessary. | Colab may not count this exact connection as active, and provider limits still apply. No browser is needed. |
+| Active notebook task | Run and supervise the actual worker as a foreground notebook execution rather than returning after launching it. | Requires changes to startup, cancellation, and shutdown; its effect on lifetime must be measured. |
+| Browser automation | Keep a signed-in Colab notebook open and interact with it, as in [Keep-Colab-Alive](https://github.com/Samyak2/Keep-Colab-Alive). | Requires a maintained browser and Google login; it is unverified whether that notebook attaches to the API-created runtime. Avoid rerunning cells unintentionally. |
+| SSH connection | Maintain an authenticated SSH tunnel to the runtime, potentially inspired by [remocolab](https://github.com/demotomohiro/remocolab). | Adds an exposed service and credentials. The archived repository does not establish that SSH keeps today's managed runtimes alive. |
+| ComfyUI keep-alive node | Evaluate [ColabKeepAlive](https://github.com/huyl3-cpu/comfyui-sortlist/blob/main/nodes/utility/colab_nodes.py), which can perform GPU/file activity and attempt notebook interactions. | ComfyUI runs outside the notebook kernel in our setup, so notebook calls may fail silently. Its cache cleanup and synthetic GPU work may affect performance and costs. |
+
+**First experiment:** implement the persistent Jupyter connection behind an
+explicit, observable lifecycle; expose connected/disconnected status, refresh the
+short-lived proxy token, use bounded reconnection, and close it when the user stops
+the runtime. The connection and monitoring must not count as generation activity
+or reset the manager's own idle shutdown timer. Never silently allocate another
+runtime or retry a generation. Keep the manager's stop/recovery protections and
+user-selected idle timeout in force.
+
+Verify connection lifecycle and idle behavior with mocks first. Then, with the
+owner's authorization, use one L4 runtime for approximately the 30-40 minute
+period in which previous sessions disappeared. Record nonsecret connection,
+provider and worker state; use actual generation as appropriate, stop promptly
+when the comparison is complete, and report compute-unit use if available. A
+single successful run is evidence, not a lifetime guarantee. If it still fails,
+consider the active notebook task next; evaluate browser automation, SSH and the
+node as separate experiments rather than changing multiple variables at once.
+
+References: [Google's Colab CLI change](https://github.com/googlecolab/google-colab-cli/pull/144),
+[Colab runtime API](https://developers.google.com/colab/api/reference/rest/v1beta/runtimes),
+and [Colab FAQ](https://research.google.com/colaboratory/faq.html).
+
 ## 4. Decision criteria
 
 Resume only if at least one is wanted:
