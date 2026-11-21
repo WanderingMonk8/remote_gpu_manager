@@ -22,6 +22,7 @@ class FinalNotebookTests(unittest.TestCase):
         for index in (2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 25):
             self.assertTrue(cells[index].strip(), f"missing bootstrap cell {index}")
         self.assertEqual(cells[4].count('USE_DRIVE = True # @param {type:"boolean"}'), 1)
+        self.assertIn("RESTART_HUNG_COMFY = False", cells[8])
         for cell in notebook["cells"]:
             if cell["cell_type"] == "code":
                 self.assertEqual(cell.get("outputs", []), [])
