@@ -119,8 +119,18 @@ reachable through its API instead:
 
 ### Remaining workbook controls
 
+The owner wants Lumiverse's normal generation flow as the default, with the
+workbook's inline generation retained as an optional diagnostic. Native Lumiverse
+currently has no extension hook for intercepting generation or updating saved
+workflow mappings. Its host image-generation service does have the per-user ID
+and can read the extension's namespaced encrypted settings, so a narrowly scoped
+host integration is a possible path; it requires review and tests against the
+actual deployed Lumiverse revision. Do not globally rewrite gateway requests:
+they lack reliable per-user identity. Decide conflict priority between Lumiverse
+values and saved advanced preferences before implementing generation overrides.
+
 - The advanced panel currently covers next-start model, installation, supervisor,
-  and VRAM settings. The current gateway still requires the original MOSS SFT
+  VRAM, and startup LoRA download settings. The current gateway still requires the original MOSS SFT
   cache even when a different model is selected; only files required by the
   chosen model and that compatibility requirement are restored.
 - The remaining notebook fields include generation prompts, dimensions, sampler,
