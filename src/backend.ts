@@ -158,7 +158,15 @@ spindle.onFrontendMessage(async (payload: any, userId?: string) => {
           await automation.saveGpuPreference(userId, payload.choice);
           result = { saved: true };
           break;
-        case "automation_poll": result = await automation.poll(userId); break;
+        case "automation_poll": {
+          const pollResult = await automation.poll(userId);
+          result = pollResult;
+          if (pollResult.status === "finished" && pollResult.workerHealthy === true) {
+            try { spindle.toast.success("Your Colab worker is ready.", { title: "Colab ready", userId }); }
+            catch { /* A toast failure must not hide the completed bootstrap result. */ }
+          }
+          break;
+        }
         case "automation_status": result = await automation.status(userId); break;
         case "automation_recover": result = await automation.recover(userId); break;
         case "automation_stop": result = await automation.stop(userId, payload.force === true); break;
