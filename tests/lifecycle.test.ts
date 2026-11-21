@@ -275,7 +275,9 @@ describe("start / status / stop", () => {
       expect((await recover(true)).status).toBe(409);
       expect(readFileSync(file, "utf8")).toBe(original);
       await fetch(`${colabBase()}/v1beta/${name}`, { method: "DELETE" });
-      expect((await (await fetch(`${url}/gateway/v1/runtime`, { headers: auth })).json()).state).toBe("offline");
+      const gone = await (await fetch(`${url}/gateway/v1/runtime`, { headers: auth })).json();
+      expect(gone.state).toBe("offline");
+      expect(gone.lastRuntimeObservation.event).toBe("provider_runtime_missing");
       expect((await (await fetch(`${url}/gateway/v1/runtime`, { method: "POST", headers: auth })).json()).error).toBe("allocation_uncertain");
       expect((await recover(true)).status).toBe(200);
       expect(existsSync(file)).toBe(false);
@@ -291,6 +293,92 @@ describe("start / status / stop", () => {
       for (const entry of readdirSync(tmpdir()).filter(entry => entry.startsWith(file.split(/[\\/]/).pop()! + ".resolved-"))) unlinkSync(join(tmpdir(), entry));
     }
   });
+
+  test("accepted jobs block normal stop until completion is observed", async () => {
+    const port = PORT_BASE + 13;
+    const gateway = spawnGateway(port, COLAB_PORT, `http://127.0.0.1:${MOCK_PORT}`);
+    const url = `http://127.0.0.1:${port}`;
+    try {
+      await waitFor(async () => (await fetch(`${url}/system_stats`)).ok);
+      await ensureCreds(url);
+      expect((await fetch(`${url}/gateway/v1/runtime`, { method: "POST", headers: auth })).status).toBe(200);
+      const submitted = await fetch(`${url}/prompt`, { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ client_id: "test", prompt: { "1": { class_type: "UNETLoader", inputs: { unet_name: "test.safetensors" } }, "7": { class_type: "KSampler", inputs: {} } } }) });
+      expect(submitted.status).toBe(200);
+      const job = await submitted.json();
+      const state = await (await fetch(`${url}/gateway/v1/runtime`, { headers: auth })).json();
+      expect(state.job.state).toBe("active");
+      expect(state.worker).toBe("reachable");
+      expect((await fetch(`${url}/gateway/v1/runtime`, { method: "DELETE", headers: auth })).status).toBe(409);
+      await waitFor(async () => {
+        const history = await (await fetch(`${url}/history/${job.prompt_id}`)).json();
+        return history[job.prompt_id]?.status?.completed === true;
+      });
+      expect((await (await fetch(`${url}/gateway/v1/runtime`, { headers: auth })).json()).job.state).toBe("idle");
+      expect((await fetch(`${url}/gateway/v1/runtime`, { method: "DELETE", headers: auth })).status).toBe(200);
+    } finally {
+      await fetch(`${url}/gateway/v1/runtime?force=1`, { method: "DELETE", headers: auth }).catch(() => {});
+      gateway.kill("SIGKILL");
+    }
+  });
+
+  test("unfinished job diagnostics survive restart without storing prompts or tokens", async () => {
+    const file = join(tmpdir(), `rgm-diagnostic-${crypto.randomUUID()}.json`);
+    const diagnostic = `${file}.diagnostics.jsonl`;
+    const port = PORT_BASE + 14;
+    const env = { RUNTIME_INTENT_FILE: file };
+    let gateway = spawnGateway(port, COLAB_PORT, `http://127.0.0.1:${MOCK_PORT}`, env);
+    const url = `http://127.0.0.1:${port}`;
+    try {
+      await waitFor(async () => (await fetch(`${url}/system_stats`)).ok);
+      await ensureCreds(url);
+      expect((await fetch(`${url}/gateway/v1/runtime`, { method: "POST", headers: auth })).status).toBe(200);
+      const submission = await fetch(`${url}/prompt`, { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ client_id: "private-client", prompt: { "1": { class_type: "UNETLoader", inputs: { unet_name: "private-prompt-marker" } }, "7": { class_type: "KSampler", inputs: {} } } }) });
+      expect(submission.status).toBe(200);
+      await waitFor(async () => existsSync(diagnostic) && readFileSync(diagnostic, "utf8").includes("job_accepted"));
+      const saved = readFileSync(diagnostic, "utf8");
+      expect(saved).not.toContain("private-prompt-marker");
+      expect(saved).not.toContain("private-client");
+      expect(saved).not.toContain("mock-proxy-token");
+      gateway.kill("SIGKILL"); await gateway.exited;
+      const nextPort = PORT_BASE + 15;
+      const nextUrl = `http://127.0.0.1:${nextPort}`;
+      gateway = spawnGateway(nextPort, COLAB_PORT, `http://127.0.0.1:${MOCK_PORT}`, env);
+      await waitFor(async () => (await fetch(`${nextUrl}/system_stats`)).ok);
+      await ensureCreds(nextUrl);
+      const state = await (await fetch(`${nextUrl}/gateway/v1/runtime`, { headers: auth })).json();
+      expect(state.job.state).toBe("uncertain");
+      expect((await fetch(`${nextUrl}/gateway/v1/runtime`, { method: "DELETE", headers: auth })).status).toBe(409);
+      expect((await fetch(`${nextUrl}/gateway/v1/runtime?force=1`, { method: "DELETE", headers: auth })).status).toBe(200);
+    } finally {
+      gateway.kill("SIGKILL");
+      if (existsSync(file)) unlinkSync(file);
+      if (existsSync(diagnostic)) unlinkSync(diagnostic);
+    }
+  });
+
+  test("read-only monitor records a missing Colab runtime", async () => {
+    const file = join(tmpdir(), `rgm-monitor-${crypto.randomUUID()}.json`);
+    const diagnostic = `${file}.diagnostics.jsonl`;
+    const port = PORT_BASE + 16;
+    const gateway = spawnGateway(port, COLAB_PORT, `http://127.0.0.1:${MOCK_PORT}`, { RUNTIME_INTENT_FILE: file, RUNTIME_MONITOR_CHECK_MS: "10000" });
+    const url = `http://127.0.0.1:${port}`;
+    try {
+      await waitFor(async () => (await fetch(`${url}/system_stats`)).ok);
+      await ensureCreds(url);
+      const created = await (await fetch(`${url}/gateway/v1/runtime`, { method: "POST", headers: auth })).json();
+      await fetch(`${colabBase()}/v1beta/${created.runtime.name}`, { method: "DELETE" });
+      await waitFor(async () => existsSync(diagnostic) && readFileSync(diagnostic, "utf8").includes("provider_runtime_missing"), 15000);
+      const status = await (await fetch(`${url}/gateway/v1/runtime`, { headers: auth })).json();
+      expect(status.state).toBe("offline");
+      expect(status.lastRuntimeObservation.event).toBe("provider_runtime_missing");
+    } finally {
+      gateway.kill("SIGKILL");
+      if (existsSync(file)) unlinkSync(file);
+      if (existsSync(diagnostic)) unlinkSync(diagnostic);
+    }
+  }, 20000);
 
   test("unreadable queue prevents normal stop", async () => {
     const port = PORT_BASE + 10;

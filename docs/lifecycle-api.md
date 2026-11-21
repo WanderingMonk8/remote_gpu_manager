@@ -179,6 +179,14 @@ PUT /gateway/v1/runtime/idle   {"minutes": 10}
 - Before deleting, the timer re-reads `/queue` and holds the runtime if anything is
   running or pending (PRD R-05).
 - If the queue cannot be read, the runtime is **kept**. Fail-safe, never fail-open.
+- Accepted jobs and ambiguous prompt submissions hold the gateway idle shutdown until
+  completion is observed or the operator explicitly force-stops the runtime. This can
+  consume compute units longer if job status remains uncertain.
+- Read-only monitoring checks the existing Colab runtime and worker health periodically;
+  it never allocates a runtime or counts monitoring requests as work. The bounded
+  append-only diagnostic file beside the intent file records event names and timestamps,
+  not prompts, images, job IDs, credentials, or connection tokens. Once full, it stops
+  recording; on restart the gateway conservatively treats prior job state as uncertain.
 - No heartbeat traffic is generated to defeat Colab's own idle enforcement.
 
 ## Configuration
@@ -193,6 +201,7 @@ PUT /gateway/v1/runtime/idle   {"minutes": 10}
 | `RUNTIME_IDLE_MINUTES` | `10` | Initial idle timeout |
 | `RUNTIME_CREATE_TIMEOUT_MS` | `300000` | How long to wait for `connectionInfo` |
 | `RUNTIME_IDLE_CHECK_MS` | `30000` | Timer resolution |
+| `RUNTIME_MONITOR_CHECK_MS` | `60000` | Read-only provider and worker monitoring interval (minimum 10000) |
 | `RUNTIME_INTENT_FILE` | unset | Absolute persistent file path for allocation intent; parent directory must exist |
 
 ## Typed errors (PRD §5)

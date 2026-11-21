@@ -21,8 +21,9 @@
  */
 
 import { timingSafeEqual } from "node:crypto";
-import { open, readFile, rename, unlink } from "node:fs/promises";
+import { appendFile, open, readFile, rename, stat, unlink } from "node:fs/promises";
 import { runBootstrap } from "./bootstrap";
+import { JobTracker } from "./job-tracker";
 
 const VERSION = "0.2.0-m4";
 
@@ -68,6 +69,7 @@ const SPEC_ACCELERATOR = process.env.RUNTIME_ACCELERATOR ?? "T4";
 const SPEC_SHAPE = process.env.RUNTIME_SHAPE ?? "STANDARD";
 const CREATE_TIMEOUT_MS = Number(process.env.RUNTIME_CREATE_TIMEOUT_MS ?? 300_000);
 const IDLE_CHECK_MS = Math.max(1_000, Number(process.env.RUNTIME_IDLE_CHECK_MS ?? 30_000));
+const MONITOR_CHECK_MS = Math.max(10_000, Number(process.env.RUNTIME_MONITOR_CHECK_MS ?? 60_000));
 
 // PRD R-06 default: 10 min after last real work; 0 disables. The dashboard
 // offers 5/10/15/30; PUT accepts those, plus sub-minute values for tests.
@@ -438,6 +440,26 @@ let owned: OwnedRuntime | null = null;
 let provisioning = false;
 let stopping = false;
 let workInFlight = 0;
+// Append-only, bounded diagnostic records contain no prompt, image, token, or job ID.
+const DIAGNOSTICS_FILE = INTENT_FILE ? `${INTENT_FILE}.diagnostics.jsonl` : "";
+let diagnosticWrites: Promise<void> = Promise.resolve();
+let lastDiagnostic: { at: string; event: string } | null = null;
+let lastRuntimeObservation: { at: string; event: string } | null = null;
+function recordDiagnostic(event: string) {
+  if (!DIAGNOSTICS_FILE || event === "job_progress") return;
+  const job = jobs.snapshot();
+  const at = new Date().toISOString();
+  lastDiagnostic = { at, event };
+  if (event.startsWith("provider_") || event.startsWith("worker_") || event.endsWith("stop_confirmed") || event === "idle_stop_requested") lastRuntimeObservation = { at, event };
+  const entry = JSON.stringify({ at, event, jobState: job.state, pendingJobs: job.pendingJobs }) + "\n";
+  diagnosticWrites = diagnosticWrites.then(async () => {
+    let size = 0;
+    try { size = (await stat(DIAGNOSTICS_FILE)).size; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+    if (size < 1024 * 1024 - 4096) await appendFile(DIAGNOSTICS_FILE, entry, { mode: 0o600 });
+  }).catch(() => { console.warn("[rgm-gateway] diagnostic record unavailable"); });
+}
+const jobs = new JobTracker(recordDiagnostic);
 let bootstrapJob: { status: "running" | "finished"; httpStatus?: number; result?: unknown } | null = null;
 // An interrupted create may still succeed at Google. Never issue another create
 // in this process until the ambiguous operation is resolved by an operator.
@@ -584,6 +606,7 @@ async function reconcile(): Promise<void> {
       adoptedAt: new Date().toISOString(),
       tokenExpireTime: r.connectionInfo?.expireTime ?? "",
     };
+    lastMonitorState = "";
     console.log(`[rgm-gateway] lifecycle: adopted existing runtime ${owned.name}`);
   }
 }
@@ -648,6 +671,7 @@ async function startRuntime(req: Request): Promise<Response> {
     const name = `runtimes/${runtimeId}`;
     // Preserve the allocation handle even if connectionInfo polling fails.
     owned = { name, url: "", spec, adoptedAt: new Date().toISOString(), tokenExpireTime: "" };
+    lastMonitorState = "";
     const deadline = Date.now() + CREATE_TIMEOUT_MS;
     for (;;) {
       const got = await colabRequest("GET", `/v1beta/${name}`);
@@ -682,7 +706,9 @@ async function statusRuntime(): Promise<Response> {
     // Refresh the short-lived proxy token and catch external deletion.
     const got = await colabRequest("GET", `/v1beta/${owned.name}`);
     if (got.status === 404) {
+      recordDiagnostic("provider_runtime_missing");
       owned = null; // deleted outside the gateway (e.g. Colab-side idle reaping)
+      jobs.reset();
     } else if (got.status !== 200) {
       throw colabError(got.status, got.json);
     } else {
@@ -695,10 +721,21 @@ async function statusRuntime(): Promise<Response> {
   } else {
     await reconcile(); // adopt a runtime this gateway created before a restart
   }
+  let worker = "not_checked";
+  if (owned?.url) {
+    try {
+      const response = await fetch(`${GATEWAY_UPSTREAM}/system_stats`, { headers: upstreamHeaders(), signal: AbortSignal.timeout(3000) });
+      worker = response.ok ? "reachable" : "unreachable";
+    } catch { worker = "unreachable"; }
+  }
   const remaining = idleMinutes > 0 ? Math.max(0, idleMinutes * 60_000 - (Date.now() - lastWorkAt)) : null;
   return Response.json({
     runtime: owned ? maskRuntime(owned) : null,
     state: provisioning || (owned && !owned.url) ? "starting" : owned ? "ready" : "offline",
+    worker,
+    job: jobs.snapshot(),
+    lastDiagnostic,
+    lastRuntimeObservation,
     idle: {
       minutes: idleMinutes,
       lastWorkAt: new Date(lastWorkAt).toISOString(),
@@ -742,6 +779,7 @@ async function recoverAllocation(req: Request): Promise<Response> {
     await rename(INTENT_FILE, `${INTENT_FILE}.resolved-${crypto.randomUUID()}`);
     owned = null;
     uncertainCreate = false;
+    jobs.reset();
     return Response.json({ recovered: true });
   } finally { provisioning = false; }
 }
@@ -756,13 +794,13 @@ async function queueIsIdle(): Promise<boolean> {
   return data.queue_running.length === 0 && data.queue_pending.length === 0;
 }
 
-async function stopRuntime(force = false): Promise<Response> {
+async function stopRuntime(force = false, reason: "manual" | "idle" = "manual"): Promise<Response> {
   if (provisioning || bootstrapJob?.status === "running" || stopping) return errJson(409, "provisioning_in_progress");
   if (!owned) return errJson(404, "no_owned_runtime");
   stopping = true;
   try {
   if (!force) {
-    if (workInFlight) return errJson(409, "runtime_busy");
+    if (workInFlight || jobs.blocksIdle()) return errJson(409, "runtime_busy");
     const observedWork = lastWorkAt;
     try {
       if (!await queueIsIdle()) return errJson(409, "runtime_busy");
@@ -778,6 +816,8 @@ async function stopRuntime(force = false): Promise<Response> {
   const check = await colabRequest("GET", `/v1beta/${name}`);
   if (check.status === 404) {
     owned = null;
+    recordDiagnostic(force ? "force_stop_confirmed" : reason === "idle" ? "idle_stop_confirmed" : "manual_stop_confirmed");
+    jobs.reset();
     if (INTENT_FILE) {
       // Only clear a matching intent after confirmed deletion.
       try {
@@ -1030,15 +1070,16 @@ if (LIFECYCLE_ENABLED) {
   setInterval(() => {
     void (async () => {
       try {
-        if (!owned || idleMinutes <= 0 || provisioning || bootstrapJob?.status === "running") return;
+        if (!owned || idleMinutes <= 0 || provisioning || bootstrapJob?.status === "running" || jobs.blocksIdle()) return;
         if (Date.now() - lastWorkAt < idleMinutes * 60_000) return;
         // Same injected auth as the proxy path — a bare GET here returns 401.
         if (!await queueIsIdle()) {
           noteWork();
           return;
         }
+        recordDiagnostic("idle_stop_requested");
         console.log(`[rgm-gateway] lifecycle: idle ${idleMinutes} min without work; deleting ${owned.name}`);
-        await stopRuntime();
+        await stopRuntime(false, "idle");
       } catch (err) {
         console.warn(`[rgm-gateway] lifecycle idle check skipped: ${String((err as Error)?.message ?? err).slice(0, 120)}`);
       }
@@ -1046,9 +1087,57 @@ if (LIFECYCLE_ENABLED) {
   }, IDLE_CHECK_MS);
 }
 
+// Read-only monitoring; it does not allocate, retry jobs, or reset idle time.
+let monitorInFlight = false;
+let lastMonitorState = "";
+if (LIFECYCLE_ENABLED) setInterval(() => {
+  if (monitorInFlight || !owned || !creds || provisioning || stopping) return;
+  monitorInFlight = true;
+  const name = owned.name;
+  void (async () => {
+    let observation = "provider_status_unavailable";
+    try {
+      const response = await colabRequest("GET", `/v1beta/${name}`);
+      if (response.status === 404) observation = "provider_runtime_missing";
+      else if (response.status === 200) {
+        try {
+          const health = await fetch(`${GATEWAY_UPSTREAM}/system_stats`, { headers: upstreamHeaders(), signal: AbortSignal.timeout(3000) });
+          observation = health.ok ? "worker_reachable" : "worker_unreachable";
+        } catch { observation = "worker_unreachable"; }
+      }
+    } catch { /* Distinguish an unavailable provider check from a confirmed 404. */ }
+    if (owned?.name === name && !stopping && observation !== lastMonitorState) {
+      lastMonitorState = observation; recordDiagnostic(observation);
+    }
+  })().finally(() => { monitorInFlight = false; });
+}, MONITOR_CHECK_MS);
+
 /* ---------------- server ---------------- */
 
 type WsData = { upstream: WebSocket | null; clientId: string };
+
+// A prior unfinished submission remains uncertain across a gateway restart.
+if (DIAGNOSTICS_FILE) {
+  try {
+    const info = await stat(DIAGNOSTICS_FILE);
+    if (info.size >= 1024 * 1024 - 4096) jobs.restoreUncertain();
+    else {
+      const lines = (await readFile(DIAGNOSTICS_FILE, "utf8")).trim().split("\n");
+      const last = JSON.parse(lines[lines.length - 1]);
+      if (typeof last.at === "string" && typeof last.event === "string") lastDiagnostic = { at: last.at, event: last.event };
+      for (const line of lines.toReversed()) {
+        const entry = JSON.parse(line);
+        if (typeof entry.at === "string" && typeof entry.event === "string" &&
+            (entry.event.startsWith("provider_") || entry.event.startsWith("worker_") || entry.event.endsWith("stop_confirmed") || entry.event === "idle_stop_requested")) {
+          lastRuntimeObservation = { at: entry.at, event: entry.event }; break;
+        }
+      }
+      if (["active", "submitting", "uncertain"].includes(last.jobState)) jobs.restoreUncertain();
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") jobs.restoreUncertain();
+  }
+}
 
 const server = Bun.serve<WsData>({
   hostname: "127.0.0.1",
@@ -1073,6 +1162,7 @@ const server = Bun.serve<WsData>({
     const path = url.pathname.replace(/\/+$/, "") || "/";
     const ms = () => Date.now() - started;
     let countedWork = false;
+    let submissionPending = false;
 
     try {
       /* ---- control plane ---- */
@@ -1152,7 +1242,17 @@ const server = Bun.serve<WsData>({
         return res;
       }
 
+      if (req.method === "POST" && path === "/prompt") { jobs.submissionStarted(); submissionPending = true; await diagnosticWrites; }
       const upstream = await fetchUpstream(path + (req.method === "GET" ? url.search : ""), upstreamInit, rule);
+      if (submissionPending) {
+        let data: unknown;
+        try { data = JSON.parse(new TextDecoder().decode(upstream.body)); } catch { data = null; }
+        jobs.submissionFinished(upstream.status, data); submissionPending = false;
+      }
+      const historyMatch = path.match(/^\/history\/([0-9a-fA-F-]{36})$/);
+      if (historyMatch && upstream.status >= 200 && upstream.status < 300) {
+        try { jobs.history(historyMatch[1], JSON.parse(new TextDecoder().decode(upstream.body))); } catch { /* Ignore malformed results. */ }
+      }
 
       if (upstream.status >= 200 && upstream.status < 300 && isWorkRoute(req.method, path)) {
         noteWork(); // submission / result retrieval / authorized asset install
@@ -1183,6 +1283,7 @@ const server = Bun.serve<WsData>({
       audit(req.method, path, status, ms());
       return res;
     } finally {
+      if (submissionPending) jobs.submissionFinished(null);
       if (countedWork) workInFlight--;
     }
   },
@@ -1211,6 +1312,7 @@ const server = Bun.serve<WsData>({
         try { ws.close(event.code === 1005 ? 1000 : event.code, "upstream_closed"); } catch { /* ignore */ }
       });
       upstream.addEventListener("message", (event) => {
+        if (jobs.websocket(event.data)) noteWork();
         try {
           const data = event.data as string | Uint8Array;
           const bytes = typeof data === "string" ? new TextEncoder().encode(data).length : (data?.byteLength ?? 0);

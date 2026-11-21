@@ -1,7 +1,7 @@
 // @bun
 // host-gateway/gateway.ts
 import { timingSafeEqual } from "crypto";
-import { open, readFile, rename, unlink } from "fs/promises";
+import { appendFile, open, readFile, rename, stat, unlink } from "fs/promises";
 
 // host-gateway/bootstrap.ts
 async function runBootstrap(command, request, timeoutMs = 30 * 60000) {
@@ -40,6 +40,85 @@ async function runBootstrap(command, request, timeoutMs = 30 * 60000) {
   }
 }
 
+// host-gateway/job-tracker.ts
+class JobTracker {
+  onEvent;
+  pending = new Set;
+  uncertain = false;
+  submitting = 0;
+  lastActivity = null;
+  lastEvent = "none";
+  constructor(onEvent = () => {}) {
+    this.onEvent = onEvent;
+  }
+  mark(event) {
+    this.lastActivity = new Date().toISOString();
+    this.lastEvent = event;
+    this.onEvent(event);
+  }
+  restoreUncertain() {
+    this.uncertain = true;
+    this.mark("restored_uncertain");
+  }
+  submissionStarted() {
+    this.submitting++;
+    this.mark("submission_started");
+  }
+  submissionFinished(status, body) {
+    this.submitting = Math.max(0, this.submitting - 1);
+    if (status !== null && status >= 400 && status < 500) {
+      this.mark("submission_rejected");
+      return;
+    }
+    const id = body?.prompt_id;
+    if (status !== null && status >= 200 && status < 300 && typeof id === "string" && /^[0-9a-fA-F-]{36}$/.test(id)) {
+      this.pending.add(id);
+      this.mark("job_accepted");
+    } else {
+      this.uncertain = true;
+      this.mark("submission_uncertain");
+    }
+  }
+  websocket(message) {
+    if (typeof message !== "string" || message.length > 65536)
+      return false;
+    try {
+      const event = JSON.parse(message);
+      const id = event?.data?.prompt_id;
+      if (typeof id !== "string" || !this.pending.has(id))
+        return false;
+      if (event.type === "execution_success" || event.type === "execution_error" || event.type === "execution_interrupted" || event.type === "executing" && event.data.node === null) {
+        this.pending.delete(id);
+        this.mark("job_finished");
+        return true;
+      } else if (["executing", "progress", "execution_start", "execution_cached"].includes(event.type)) {
+        this.mark("job_progress");
+        return true;
+      }
+    } catch {}
+    return false;
+  }
+  history(id, body) {
+    const entry = body?.[id];
+    if (this.pending.has(id) && entry?.status?.completed === true) {
+      this.pending.delete(id);
+      this.mark("job_finished");
+    }
+  }
+  reset() {
+    this.pending.clear();
+    this.uncertain = false;
+    this.submitting = 0;
+    this.mark("runtime_ended");
+  }
+  snapshot() {
+    return { state: this.uncertain ? "uncertain" : this.submitting ? "submitting" : this.pending.size ? "active" : "idle", pendingJobs: this.pending.size, lastActivity: this.lastActivity, lastEvent: this.lastEvent };
+  }
+  blocksIdle() {
+    return this.uncertain || this.submitting > 0 || this.pending.size > 0;
+  }
+}
+
 // host-gateway/gateway.ts
 var VERSION = "0.2.0-m4";
 var env = (name, fallback) => {
@@ -73,6 +152,7 @@ var SPEC_ACCELERATOR = process.env.RUNTIME_ACCELERATOR ?? "T4";
 var SPEC_SHAPE = process.env.RUNTIME_SHAPE ?? "STANDARD";
 var CREATE_TIMEOUT_MS = Number(process.env.RUNTIME_CREATE_TIMEOUT_MS ?? 300000);
 var IDLE_CHECK_MS = Math.max(1000, Number(process.env.RUNTIME_IDLE_CHECK_MS ?? 30000));
+var MONITOR_CHECK_MS = Math.max(1e4, Number(process.env.RUNTIME_MONITOR_CHECK_MS ?? 60000));
 var idleMinutes = Number(process.env.RUNTIME_IDLE_MINUTES ?? 10);
 if (!Number.isFinite(idleMinutes) || idleMinutes < 0)
   idleMinutes = 10;
@@ -353,6 +433,35 @@ var owned = null;
 var provisioning = false;
 var stopping = false;
 var workInFlight = 0;
+var DIAGNOSTICS_FILE = INTENT_FILE ? `${INTENT_FILE}.diagnostics.jsonl` : "";
+var diagnosticWrites = Promise.resolve();
+var lastDiagnostic = null;
+var lastRuntimeObservation = null;
+function recordDiagnostic(event) {
+  if (!DIAGNOSTICS_FILE || event === "job_progress")
+    return;
+  const job = jobs.snapshot();
+  const at = new Date().toISOString();
+  lastDiagnostic = { at, event };
+  if (event.startsWith("provider_") || event.startsWith("worker_") || event.endsWith("stop_confirmed") || event === "idle_stop_requested")
+    lastRuntimeObservation = { at, event };
+  const entry = JSON.stringify({ at, event, jobState: job.state, pendingJobs: job.pendingJobs }) + `
+`;
+  diagnosticWrites = diagnosticWrites.then(async () => {
+    let size = 0;
+    try {
+      size = (await stat(DIAGNOSTICS_FILE)).size;
+    } catch (error) {
+      if (error.code !== "ENOENT")
+        throw error;
+    }
+    if (size < 1024 * 1024 - 4096)
+      await appendFile(DIAGNOSTICS_FILE, entry, { mode: 384 });
+  }).catch(() => {
+    console.warn("[rgm-gateway] diagnostic record unavailable");
+  });
+}
+var jobs = new JobTracker(recordDiagnostic);
 var bootstrapJob = null;
 var uncertainCreate = false;
 var lastWorkAt = Date.now();
@@ -490,6 +599,7 @@ async function reconcile() {
       adoptedAt: new Date().toISOString(),
       tokenExpireTime: r.connectionInfo?.expireTime ?? ""
     };
+    lastMonitorState = "";
     console.log(`[rgm-gateway] lifecycle: adopted existing runtime ${owned.name}`);
   }
 }
@@ -567,6 +677,7 @@ async function startRuntime(req) {
     }
     const name = `runtimes/${runtimeId}`;
     owned = { name, url: "", spec, adoptedAt: new Date().toISOString(), tokenExpireTime: "" };
+    lastMonitorState = "";
     const deadline = Date.now() + CREATE_TIMEOUT_MS;
     for (;; ) {
       const got = await colabRequest("GET", `/v1beta/${name}`);
@@ -599,7 +710,9 @@ async function statusRuntime() {
   if (owned) {
     const got = await colabRequest("GET", `/v1beta/${owned.name}`);
     if (got.status === 404) {
+      recordDiagnostic("provider_runtime_missing");
       owned = null;
+      jobs.reset();
     } else if (got.status !== 200) {
       throw colabError(got.status, got.json);
     } else {
@@ -612,10 +725,23 @@ async function statusRuntime() {
   } else {
     await reconcile();
   }
+  let worker = "not_checked";
+  if (owned?.url) {
+    try {
+      const response = await fetch(`${GATEWAY_UPSTREAM}/system_stats`, { headers: upstreamHeaders(), signal: AbortSignal.timeout(3000) });
+      worker = response.ok ? "reachable" : "unreachable";
+    } catch {
+      worker = "unreachable";
+    }
+  }
   const remaining = idleMinutes > 0 ? Math.max(0, idleMinutes * 60000 - (Date.now() - lastWorkAt)) : null;
   return Response.json({
     runtime: owned ? maskRuntime(owned) : null,
     state: provisioning || owned && !owned.url ? "starting" : owned ? "ready" : "offline",
+    worker,
+    job: jobs.snapshot(),
+    lastDiagnostic,
+    lastRuntimeObservation,
     idle: {
       minutes: idleMinutes,
       lastWorkAt: new Date(lastWorkAt).toISOString(),
@@ -672,6 +798,7 @@ async function recoverAllocation(req) {
     await rename(INTENT_FILE, `${INTENT_FILE}.resolved-${crypto.randomUUID()}`);
     owned = null;
     uncertainCreate = false;
+    jobs.reset();
     return Response.json({ recovered: true });
   } finally {
     provisioning = false;
@@ -689,7 +816,7 @@ async function queueIsIdle() {
     throw new Error("queue_unavailable");
   return data.queue_running.length === 0 && data.queue_pending.length === 0;
 }
-async function stopRuntime(force = false) {
+async function stopRuntime(force = false, reason = "manual") {
   if (provisioning || bootstrapJob?.status === "running" || stopping)
     return errJson(409, "provisioning_in_progress");
   if (!owned)
@@ -697,7 +824,7 @@ async function stopRuntime(force = false) {
   stopping = true;
   try {
     if (!force) {
-      if (workInFlight)
+      if (workInFlight || jobs.blocksIdle())
         return errJson(409, "runtime_busy");
       const observedWork = lastWorkAt;
       try {
@@ -716,6 +843,8 @@ async function stopRuntime(force = false) {
     const check = await colabRequest("GET", `/v1beta/${name}`);
     if (check.status === 404) {
       owned = null;
+      recordDiagnostic(force ? "force_stop_confirmed" : reason === "idle" ? "idle_stop_confirmed" : "manual_stop_confirmed");
+      jobs.reset();
       if (INTENT_FILE) {
         try {
           const intent = JSON.parse(await readFile(INTENT_FILE, "utf8"));
@@ -965,7 +1094,7 @@ if (LIFECYCLE_ENABLED) {
   setInterval(() => {
     (async () => {
       try {
-        if (!owned || idleMinutes <= 0 || provisioning || bootstrapJob?.status === "running")
+        if (!owned || idleMinutes <= 0 || provisioning || bootstrapJob?.status === "running" || jobs.blocksIdle())
           return;
         if (Date.now() - lastWorkAt < idleMinutes * 60000)
           return;
@@ -973,13 +1102,71 @@ if (LIFECYCLE_ENABLED) {
           noteWork();
           return;
         }
+        recordDiagnostic("idle_stop_requested");
         console.log(`[rgm-gateway] lifecycle: idle ${idleMinutes} min without work; deleting ${owned.name}`);
-        await stopRuntime();
+        await stopRuntime(false, "idle");
       } catch (err) {
         console.warn(`[rgm-gateway] lifecycle idle check skipped: ${String(err?.message ?? err).slice(0, 120)}`);
       }
     })();
   }, IDLE_CHECK_MS);
+}
+var monitorInFlight = false;
+var lastMonitorState = "";
+if (LIFECYCLE_ENABLED)
+  setInterval(() => {
+    if (monitorInFlight || !owned || !creds || provisioning || stopping)
+      return;
+    monitorInFlight = true;
+    const name = owned.name;
+    (async () => {
+      let observation = "provider_status_unavailable";
+      try {
+        const response = await colabRequest("GET", `/v1beta/${name}`);
+        if (response.status === 404)
+          observation = "provider_runtime_missing";
+        else if (response.status === 200) {
+          try {
+            const health = await fetch(`${GATEWAY_UPSTREAM}/system_stats`, { headers: upstreamHeaders(), signal: AbortSignal.timeout(3000) });
+            observation = health.ok ? "worker_reachable" : "worker_unreachable";
+          } catch {
+            observation = "worker_unreachable";
+          }
+        }
+      } catch {}
+      if (owned?.name === name && !stopping && observation !== lastMonitorState) {
+        lastMonitorState = observation;
+        recordDiagnostic(observation);
+      }
+    })().finally(() => {
+      monitorInFlight = false;
+    });
+  }, MONITOR_CHECK_MS);
+if (DIAGNOSTICS_FILE) {
+  try {
+    const info = await stat(DIAGNOSTICS_FILE);
+    if (info.size >= 1024 * 1024 - 4096)
+      jobs.restoreUncertain();
+    else {
+      const lines = (await readFile(DIAGNOSTICS_FILE, "utf8")).trim().split(`
+`);
+      const last = JSON.parse(lines[lines.length - 1]);
+      if (typeof last.at === "string" && typeof last.event === "string")
+        lastDiagnostic = { at: last.at, event: last.event };
+      for (const line of lines.toReversed()) {
+        const entry = JSON.parse(line);
+        if (typeof entry.at === "string" && typeof entry.event === "string" && (entry.event.startsWith("provider_") || entry.event.startsWith("worker_") || entry.event.endsWith("stop_confirmed") || entry.event === "idle_stop_requested")) {
+          lastRuntimeObservation = { at: entry.at, event: entry.event };
+          break;
+        }
+      }
+      if (["active", "submitting", "uncertain"].includes(last.jobState))
+        jobs.restoreUncertain();
+    }
+  } catch (error) {
+    if (error.code !== "ENOENT")
+      jobs.restoreUncertain();
+  }
 }
 var server = Bun.serve({
   hostname: "127.0.0.1",
@@ -991,6 +1178,7 @@ var server = Bun.serve({
     const path = url.pathname.replace(/\/+$/, "") || "/";
     const ms = () => Date.now() - started;
     let countedWork = false;
+    let submissionPending = false;
     try {
       if (path.startsWith("/gateway/")) {
         const res = await handleControl(req, path);
@@ -1075,7 +1263,28 @@ var server = Bun.serve({
         }
         return res;
       }
+      if (req.method === "POST" && path === "/prompt") {
+        jobs.submissionStarted();
+        submissionPending = true;
+        await diagnosticWrites;
+      }
       const upstream = await fetchUpstream(path + (req.method === "GET" ? url.search : ""), upstreamInit, rule);
+      if (submissionPending) {
+        let data;
+        try {
+          data = JSON.parse(new TextDecoder().decode(upstream.body));
+        } catch {
+          data = null;
+        }
+        jobs.submissionFinished(upstream.status, data);
+        submissionPending = false;
+      }
+      const historyMatch = path.match(/^\/history\/([0-9a-fA-F-]{36})$/);
+      if (historyMatch && upstream.status >= 200 && upstream.status < 300) {
+        try {
+          jobs.history(historyMatch[1], JSON.parse(new TextDecoder().decode(upstream.body)));
+        } catch {}
+      }
       if (upstream.status >= 200 && upstream.status < 300 && isWorkRoute(req.method, path)) {
         noteWork();
       }
@@ -1102,6 +1311,8 @@ var server = Bun.serve({
       audit(req.method, path, status, ms());
       return res;
     } finally {
+      if (submissionPending)
+        jobs.submissionFinished(null);
       if (countedWork)
         workInFlight--;
     }
@@ -1136,6 +1347,8 @@ var server = Bun.serve({
         } catch {}
       });
       upstream.addEventListener("message", (event) => {
+        if (jobs.websocket(event.data))
+          noteWork();
         try {
           const data = event.data;
           const bytes = typeof data === "string" ? new TextEncoder().encode(data).length : data?.byteLength ?? 0;
