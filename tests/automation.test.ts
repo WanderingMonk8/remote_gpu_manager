@@ -1,10 +1,38 @@
 import { describe, expect, test } from "bun:test";
 import { AutomationController, driveSelectionIssue, type AutomationSecrets } from "../src/automation";
+import { requiredModelCacheVersion, requiredModelFiles, workbookSettings } from "../src/workbook-settings";
 
 const secrets: AutomationSecrets = { controlToken: "control", clientId: "id", clientSecret: "oauth-secret",
   refreshToken: "refresh", tailnetKey: "ts-secret", basicUser: "user", basicPass: "password" };
 
 describe("automation controller", () => {
+  test("new model choices map to supported cache files and require gateway v3", () => {
+    const models = ["MOSS SFT BF16", "MOSS Base BF16", "Anima Preview", "Anima Preview 2", "Anima Preview 3 Base", "Anima 2.9B Preview BF16", "Anima 2.9B Preview INT8"];
+    const field = workbookSettings.find(field => field.key === "MODEL_CHOICE")!;
+    for (const model of models) {
+      expect((field.options as readonly string[])).toContain(model);
+      expect(requiredModelCacheVersion(model)).toBe(3);
+      const files = requiredModelFiles(model);
+      expect(files).toHaveLength(3);
+      expect(driveSelectionIssue(files.map((name, i) => ({ name, id: `id${i}` })))).toBeNull();
+    }
+    expect(requiredModelCacheVersion("MOSS SFT INT8")).toBe(1);
+    expect(requiredModelCacheVersion("Anima Base v1.0")).toBe(2);
+  });
+
+  test("blocks newly added models on an older gateway before allocating", async () => {
+    const entries = new Map<string, string>();
+    const calls: string[] = [];
+    const c = new AutomationController({ async get(key, user) { return entries.get(`${user}:${key}`) ?? null; },
+      async put(key, value, user) { entries.set(`${user}:${key}`, value); } },
+      async path => { calls.push(path); return { status: "idle", workbook_transfer: 1, model_cache: 2 }; });
+    await c.save("owner", secrets);
+    await c.saveWorkbookSettings("owner", { MODEL_CHOICE: "Anima Preview 2" });
+    await c.saveDriveFiles("owner", requiredModelFiles("Anima Preview 2").map((name, i) => ({ name, id: `file${i}` })));
+    await expect(c.start("owner")).rejects.toThrow("gateway_model_cache_update_required");
+    expect(calls).toEqual(["/gateway/v1/runtime/bootstrap"]);
+  });
+
   test("persists advanced workbook settings per user and applies them before allocation", async () => {
     const entries = new Map<string, string>();
     const calls: Array<{ path: string; body: any }> = [];

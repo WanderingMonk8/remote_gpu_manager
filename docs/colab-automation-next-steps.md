@@ -117,6 +117,22 @@ reachable through its API instead:
   lifetime or idle policies. Inspect the official Colab API and plan limits before
   proposing any provider-specific change; do not promise indefinite availability.
 
+### Expanded model catalog
+
+The workbook and extension list CircleStone's Anima Preview, Preview 2, and
+Preview 3 Base, plus the community Anima 2.9B Preview v1 in BF16 and INT8.
+Comfy-Org's MOSS-Image Base and SFT are offered in both INT8 and BF16; all MOSS
+choices use the current W4A8 text encoder and small VAE. BF16 weights need more
+GPU/system memory and may not fit the selected GPU. Anima 2.9B is a community
+layer expansion, not an official CircleStone version, and requires an up-to-date
+ComfyUI. Anima and its derivatives are under CircleStone's non-commercial license.
+The added models require gateway model-cache capability 3; earlier gateways are
+rejected before allocation. Select the required Drive files before starting.
+
+Sources: [CircleStone model files](https://huggingface.co/circlestone-labs/Anima/tree/main/split_files/diffusion_models),
+[Anima 2.9B model card](https://huggingface.co/Gazingstars123/Anima-2.9B),
+and [Comfy-Org MOSS-Image model card](https://huggingface.co/Comfy-Org/MOSS-Image).
+
 ### Remaining workbook controls
 
 Lumiverse owns generation settings. Do not expose prompt, dimensions, sampler,

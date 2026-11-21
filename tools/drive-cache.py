@@ -7,20 +7,29 @@ import re
 FILES = {
     "moss_image_sft_int8_convrot.safetensors": "diffusion_models",
     "moss_image_base_int8_convrot.safetensors": "diffusion_models",
+    "moss_image_base_bf16.safetensors": "diffusion_models",
+    "moss_image_sft_bf16.safetensors": "diffusion_models",
+    "Anima-2.9B-preview-v1.safetensors": "diffusion_models",
+    "Anima-2.9B-preview-v1_int8_convrot.safetensors": "diffusion_models",
     "qwen3.5_9b_w4a8_gptq.safetensors": "text_encoders",
     "flux2-vae_small.safetensors": "vae",
     "qwen_3_06b_base.safetensors": "text_encoders",
     "qwen_image_vae.safetensors": "vae",
     **{f"anima-{name}.safetensors": "diffusion_models" for name in (
         "base-v1.0", "turbo-v1.0", "turbo-v1.1", "aesthetic-v1.0",
-        "aesthetic-v1.0b", "aesthetic-v1.1")},
+        "aesthetic-v1.0b", "aesthetic-v1.1", "preview", "preview2", "preview3-base")},
 }
 
 
 MODELS = {
     "MOSS SFT INT8": ("moss_image_sft_int8_convrot.safetensors", "qwen3.5_9b_w4a8_gptq.safetensors", "flux2-vae_small.safetensors"),
+    "MOSS SFT BF16": ("moss_image_sft_bf16.safetensors", "qwen3.5_9b_w4a8_gptq.safetensors", "flux2-vae_small.safetensors"),
+    "MOSS Base BF16": ("moss_image_base_bf16.safetensors", "qwen3.5_9b_w4a8_gptq.safetensors", "flux2-vae_small.safetensors"),
+    "Anima 2.9B Preview BF16": ("Anima-2.9B-preview-v1.safetensors", "qwen_3_06b_base.safetensors", "qwen_image_vae.safetensors"),
+    "Anima 2.9B Preview INT8": ("Anima-2.9B-preview-v1_int8_convrot.safetensors", "qwen_3_06b_base.safetensors", "qwen_image_vae.safetensors"),
     "MOSS Base INT8": ("moss_image_base_int8_convrot.safetensors", "qwen3.5_9b_w4a8_gptq.safetensors", "flux2-vae_small.safetensors"),
     **{label: (f"anima-{name}.safetensors", "qwen_3_06b_base.safetensors", "qwen_image_vae.safetensors") for label, name in {
+        "Anima Preview": "preview", "Anima Preview 2": "preview2", "Anima Preview 3 Base": "preview3-base",
         "Anima Base v1.0": "base-v1.0", "Anima Turbo v1.0": "turbo-v1.0", "Anima Turbo v1.1": "turbo-v1.1",
         "Anima Aesthetic v1.0": "aesthetic-v1.0", "Anima Aesthetic v1.0b": "aesthetic-v1.0b", "Anima Aesthetic v1.1": "aesthetic-v1.1"}.items()},
 }

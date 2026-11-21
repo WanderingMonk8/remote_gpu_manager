@@ -79,7 +79,7 @@ export function setup(ctx: SpindleFrontendContext) {
         <p class="rgm-drive-status" role="status">No selection made in this session.</p>
       </details>
       <details><summary>Advanced workbook startup settings</summary>
-        <p>Saved for future starts. Changes do not modify an already running worker. Choose the matching model and workflow in Lumiverse separately.</p>
+        <p>Saved for future starts. Changes do not modify an already running worker. Choose the matching model and workflow in Lumiverse separately. BF16 weights need more memory. Anima 2.9B is a community model and requires a recent ComfyUI. Anima weights are licensed for non-commercial use.</p>
         <div class="rgm-workbook-settings"></div>
         <button class="rgm-workbook-settings-save" type="button">Save advanced settings</button>
         <p class="rgm-workbook-settings-status" role="status">Loading saved settings...</p>
@@ -220,7 +220,7 @@ export function setup(ctx: SpindleFrontendContext) {
           const selected = files.map(file => typeof file?.name === "string" ? file.name : "(name not provided)").join(", ");
           const guidance: Record<string, string> = {
             drive_selection_empty: "No files were returned by Google Picker.",
-            drive_selection_too_many: "Select no more than 16 files at once.",
+            drive_selection_too_many: "Select no more than 64 files at once.",
             drive_selection_metadata_missing: "Google Picker did not provide valid file information.",
             drive_selection_unrecognized: "At least one selected filename does not match a supported model file.",
             drive_selection_duplicate: "Two selected files have the same name. Select only one copy of each file.",

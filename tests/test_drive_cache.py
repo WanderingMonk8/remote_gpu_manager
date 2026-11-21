@@ -1,4 +1,6 @@
+import ast
 import hashlib
+import json
 import importlib.util
 import tempfile
 import unittest
@@ -39,6 +41,30 @@ class DriveCacheTests(unittest.TestCase):
             drive.workbook_model("MODEL_CHOICE = __import__('os') # @param []")
         with self.assertRaises(ValueError):
             drive.workbook_model("MODEL_CHOICE = 'MOSS SFT INT8' # @param []\nMODEL_CHOICE = 'MOSS Base INT8' # @param []")
+
+    def test_workbook_profiles_match_all_cache_requirements(self):
+        notebook = json.loads((path.parents[1] / "Unified_MOSS_Anima_Colab_Studio_Tailscale_Final.ipynb").read_text(encoding="utf-8"))
+        cell = "".join(notebook["cells"][6]["source"])
+        tree = ast.parse(cell)
+        selected = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "make_profile"]
+        ns = {"ANIMA_REPO": "circlestone-labs/Anima", "MOSS_REPO": "Comfy-Org/MOSS-Image"}
+        exec(compile(ast.Module(body=selected, type_ignores=[]), "<profile>", "exec"), ns)
+        for model, required in drive.MODELS.items():
+            with self.subTest(model=model):
+                profile = ns["make_profile"](model)
+                self.assertEqual((profile["checkpoint"], profile["encoder"], profile["vae"]), required)
+                self.assertTrue(set(required).issubset(drive.FILES))
+
+    def test_community_checkpoint_uses_its_own_repository(self):
+        notebook = json.loads((path.parents[1] / "Unified_MOSS_Anima_Colab_Studio_Tailscale_Final.ipynb").read_text(encoding="utf-8"))
+        tree = ast.parse("".join(notebook["cells"][6]["source"]))
+        loop = next(node for node in tree.body if isinstance(node, ast.For) and isinstance(node.target, ast.Tuple)
+                    and [item.id for item in node.target.elts] == ["category", "key"])
+        calls = []
+        profile = {"repo": "circlestone-labs/Anima", "root": "split_files/", "checkpoint": "Anima-2.9B-preview-v1.safetensors", "encoder": "qwen_3_06b_base.safetensors", "vae": "qwen_image_vae.safetensors"}
+        exec(compile(ast.Module(body=[loop], type_ignores=[]), "<loop>", "exec"), {"p": profile, "MODEL_CHOICE": "Anima 2.9B Preview BF16", "acquire_weight": lambda *args: calls.append(args)})
+        self.assertEqual(calls[0], ("Gazingstars123/Anima-2.9B", profile["checkpoint"], "diffusion_models"))
+        self.assertEqual(calls[1], ("circlestone-labs/Anima", "split_files/text_encoders/qwen_3_06b_base.safetensors", "text_encoders"))
 
     def test_restores_only_verified_files(self):
         by_id = {f["id"]: f["name"] for f in files}
