@@ -45,7 +45,6 @@ export function setup(ctx: SpindleFrontendContext) {
       <p>Check connectivity to the configured worker or manage an enabled Colab runtime below.</p>
       <input class="rgm-gw-url" type="text" spellcheck="false" placeholder="Gateway URL, e.g. http://127.0.0.1:8189" />
       <div class="rgm-actions">
-        <button class="rgm-save-url" type="button">Save URL</button>
         <button class="rgm-check rgm-primary" type="button">Check worker</button>
       </div>
       <div class="rgm-status" data-tone="unknown">Not checked yet.</div>
@@ -63,7 +62,6 @@ export function setup(ctx: SpindleFrontendContext) {
         <label>Tailscale auth key<input data-secret="tailnetKey" type="password" autocomplete="off" /></label>
         <label>Tunnel Basic Auth username<input data-secret="basicUser" type="text" autocomplete="off" /></label>
         <label>Tunnel Basic Auth password<input data-secret="basicPass" type="password" autocomplete="off" /></label>
-        <button class="rgm-save-secrets" type="button">Save credentials</button>
       </details>
       <details><summary>Drive model cache</summary>
         <p>Use a web OAuth client, browser API key, and project number from the same Google Cloud project as the Colab OAuth client. Select the cache files required by your chosen model, together or one at a time.</p>
@@ -71,7 +69,6 @@ export function setup(ctx: SpindleFrontendContext) {
         <label>Google Picker API key<input class="rgm-picker-key" type="password" autocomplete="off" /></label>
         <label>Google Cloud project number<input class="rgm-picker-project" type="password" autocomplete="off" /></label>
         <p>Saved Picker settings are masked. You can replace them when needed.</p>
-        <button class="rgm-save-picker" type="button">Save Picker settings</button>
         <p class="rgm-picker-settings-status" role="status"></p>
         <p>Choose the exact filenames shown below in Google Picker. Saved means the file was selected previously; access is checked before Colab starts.</p>
         <div class="rgm-cache-files" role="status"></div>
@@ -85,7 +82,7 @@ export function setup(ctx: SpindleFrontendContext) {
           <details><summary>Civitai API token</summary>
         <p>The API token is optional and saved privately. Leave the field blank to keep the saved token.</p>
         <label>Civitai API token<input class="rgm-civitai-token" type="password" autocomplete="off" /></label>
-        <div class="rgm-actions"><button class="rgm-civitai-token-save" type="button">Save token</button><button class="rgm-civitai-token-remove" type="button">Remove token</button></div>
+        <div class="rgm-actions"><button class="rgm-civitai-token-remove" type="button">Remove token</button></div>
         <p class="rgm-civitai-token-status" role="status">Checking saved token...</p>
           </details>
           <p>Paste a Civitai model or version URL. Only Anima and MOSS SafeTensors checkpoints are supported. Selections are saved automatically for the next start. Optionally select an existing Drive copy to avoid downloading the checkpoint on each fresh runtime. Civitai SHA-256 is checked when available; otherwise only Drive integrity and the filename can be verified.</p>
@@ -95,11 +92,9 @@ export function setup(ctx: SpindleFrontendContext) {
           <button class="rgm-civitai-load-version" type="button">Load version files</button>
           <label>Checkpoint file<select class="rgm-civitai-files"></select></label>
           <p class="rgm-civitai-detail" role="status">No custom checkpoint selected.</p>
-          <button class="rgm-civitai-save" type="button">Save custom checkpoint</button>
           <button class="rgm-civitai-cache-picker" type="button">Select checkpoint in Drive (optional)</button>
-          <p class="rgm-civitai-cache-status" role="status">Save a custom checkpoint first.</p>
+          <p class="rgm-civitai-cache-status" role="status">Choose a custom checkpoint first.</p>
         </div>
-        <button class="rgm-workbook-settings-save" type="button">Save advanced settings</button>
         <p class="rgm-workbook-settings-status" role="status">Loading saved settings...</p>
       </details>
       <label>Colab GPU
@@ -117,7 +112,6 @@ export function setup(ctx: SpindleFrontendContext) {
       <label>Idle shutdown
         <select class="rgm-idle"><option value="0">Disabled</option><option value="5">5 minutes</option><option value="10" selected>10 minutes</option><option value="15">15 minutes</option><option value="30">30 minutes</option></select>
       </label>
-      <button class="rgm-set-idle" type="button">Set idle timeout</button>
       <p class="rgm-idle-status" role="status">Default: 10 minutes. Changes are saved automatically.</p>
       <div class="rgm-automation-status rgm-status" data-tone="unknown">Automation not checked.</div>
     </div>`;
@@ -206,7 +200,6 @@ export function setup(ctx: SpindleFrontendContext) {
     if (!civitaiVersion || !civitaiFiles.value) { civitaiDetail.textContent = "Load a version and select a file first."; return; }
     queueSave("automation_civitai_selection_save", () => ({ versionId: civitaiVersion.id, fileId: Number(civitaiFiles.value) }));
   };
-  drawer.root.querySelector(".rgm-civitai-save")?.addEventListener("click", saveCivitaiSelection);
   civitaiFiles.addEventListener("change", saveCivitaiSelection);
   let savedCacheNames: Set<string> | null = null;
   const cacheFiles = drawer.root.querySelector(".rgm-cache-files") as HTMLDivElement;
@@ -220,7 +213,7 @@ export function setup(ctx: SpindleFrontendContext) {
     cacheFiles.appendChild(heading);
     const list = document.createElement("ul");
     const required = model === "Custom Civitai" ? (savedCivitaiSelection ? (savedCivitaiSelection.version.family === "anima" ? ["qwen_3_06b_base.safetensors", "qwen_image_vae.safetensors"] : ["qwen3.5_9b_w4a8_gptq.safetensors", "flux2-vae_small.safetensors"]) : []) : requiredModelFiles(model);
-    if (model === "Custom Civitai" && !savedCivitaiSelection) { const note = document.createElement("p"); note.textContent = "Save a custom checkpoint to see its required encoder and VAE."; cacheFiles.appendChild(note); }
+    if (model === "Custom Civitai" && !savedCivitaiSelection) { const note = document.createElement("p"); note.textContent = "Choose a custom checkpoint to see its required encoder and VAE."; cacheFiles.appendChild(note); }
     for (const name of required) {
       const item = document.createElement("li");
       item.textContent = `${name} ? ${savedCacheNames === null ? "checking" : savedCacheNames.has(name) ? "saved" : "select this file"}`;
@@ -242,8 +235,8 @@ export function setup(ctx: SpindleFrontendContext) {
       item.type = field.type === "boolean" ? "checkbox" : field.type === "text" ? "text" : "number";
       if (field.type === "integer") { item.min = String(field.min); item.max = String(field.max); item.step = "1"; }
     }
-    input.addEventListener("input", () => { settingsDirty = true; if (field.type === "text" || field.type === "integer") { if (settingsTimer) clearTimeout(settingsTimer); settingsTimer = setTimeout(() => saveWorkbookSettings.click(), 700); } });
-    input.addEventListener("change", () => { settingsDirty = true; if (field.key === "MODEL_CHOICE") renderCacheFiles(); saveWorkbookSettings.click(); });
+    input.addEventListener("input", () => { settingsDirty = true; if (field.type === "text" || field.type === "integer") { if (settingsTimer) clearTimeout(settingsTimer); settingsTimer = setTimeout(() => saveWorkbookSettings(), 700); } });
+    input.addEventListener("change", () => { settingsDirty = true; if (field.key === "MODEL_CHOICE") renderCacheFiles(); saveWorkbookSettings(); });
     label.appendChild(input); settingsRoot.appendChild(label);
   }
   function showWorkbookSettings(settings: Record<string, any>) {
@@ -254,9 +247,7 @@ export function setup(ctx: SpindleFrontendContext) {
   }
   showWorkbookSettings(Object.fromEntries(workbookSettings.map(field => [field.key, field.default])));
   renderCacheFiles();
-  const saveWorkbookSettings = drawer.root.querySelector(".rgm-workbook-settings-save") as HTMLButtonElement;
-  saveWorkbookSettings.disabled = true;
-  saveWorkbookSettings.addEventListener("click", () => {
+  function saveWorkbookSettings() {
     const settings: Record<string, boolean | number | string> = {};
     for (const field of workbookSettings) {
       const input = settingsRoot.querySelector(`[data-workbook-setting="${field.key}"]`) as HTMLInputElement;
@@ -264,14 +255,13 @@ export function setup(ctx: SpindleFrontendContext) {
     }
     settingsStatus.textContent = "Saving advanced settings...";
     queueSave("automation_workbook_settings_save", () => ({ settings }));
-  });
+  }
   const civitaiToken = drawer.root.querySelector(".rgm-civitai-token") as HTMLInputElement;
   const civitaiTokenStatus = drawer.root.querySelector(".rgm-civitai-token-status") as HTMLParagraphElement;
   const saveToken = () => { if (civitaiToken.value.trim()) { const token = civitaiToken.value; civitaiTokenStatus.textContent = "Saving token..."; queueSave("automation_civitai_token_save", () => ({ token })); } };
   let tokenTimer: ReturnType<typeof setTimeout> | null = null;
   civitaiToken.addEventListener("input", () => { if (tokenTimer) clearTimeout(tokenTimer); tokenTimer = setTimeout(saveToken, 700); });
   civitaiToken.addEventListener("change", () => { if (tokenTimer) clearTimeout(tokenTimer); saveToken(); });
-  drawer.root.querySelector(".rgm-civitai-token-save")?.addEventListener("click", saveToken);
   let removeTokenAfterSave = false;
   drawer.root.querySelector(".rgm-civitai-token-remove")?.addEventListener("click", () => {
     if (tokenTimer) clearTimeout(tokenTimer);
@@ -283,9 +273,9 @@ export function setup(ctx: SpindleFrontendContext) {
   const civitaiCacheStatus = drawer.root.querySelector(".rgm-civitai-cache-status") as HTMLParagraphElement;
   drawer.root.querySelector(".rgm-civitai-cache-picker")?.addEventListener("click", async () => {
     try {
-      if (!savedCivitaiSelection) { civitaiCacheStatus.textContent = "Save the custom checkpoint first."; return; }
+      if (!savedCivitaiSelection) { civitaiCacheStatus.textContent = "Choose a custom checkpoint first."; return; }
       const config = pickerConfig();
-      if (!config.clientId || !config.apiKey || !/^\d+$/.test(config.projectNumber)) { civitaiCacheStatus.textContent = "Enter and save your Google Picker settings first."; return; }
+      if (!config.clientId || !config.apiKey || !/^\d+$/.test(config.projectNumber)) { civitaiCacheStatus.textContent = "Enter your Google Picker settings first."; return; }
       const files = await chooseDriveFiles(config);
       send("automation_civitai_cache_save", { files });
     } catch { civitaiCacheStatus.textContent = "Drive selection did not complete."; }
@@ -297,27 +287,24 @@ export function setup(ctx: SpindleFrontendContext) {
   };
   drawer.root.querySelectorAll<HTMLInputElement>(".rgm-picker-client, .rgm-picker-key, .rgm-picker-project")
     .forEach(input => input.addEventListener("input", () => { pickerDirty = true; const config = pickerConfig(); if (!config.projectNumber || /^\d+$/.test(config.projectNumber)) queueSave("automation_picker_config_save", () => ({ config }), 700); }));
-  drawer.root.querySelector(".rgm-save-picker")?.addEventListener("click", () => {
-    const config = pickerConfig(); queueSave("automation_picker_config_save", () => ({ config }));
-  });
-  drawer.root.querySelector(".rgm-save-secrets")?.addEventListener("click", () => {
+  function saveSecrets() {
     const secrets: Record<string, string> = {};
     drawer.root.querySelectorAll<HTMLInputElement>("[data-secret]").forEach(input => {
       secrets[input.dataset.secret!] = input.value;
     });
     pendingSecrets = secrets;
     queueSave("automation_save", () => ({ secrets }));
-  });
+  }
   let secretsTimer: ReturnType<typeof setTimeout> | null = null;
   drawer.root.querySelectorAll<HTMLInputElement>("[data-secret]").forEach(input => input.addEventListener("input", () => {
     if (secretsTimer) clearTimeout(secretsTimer);
-    secretsTimer = setTimeout(() => (drawer.root.querySelector(".rgm-save-secrets") as HTMLButtonElement).click(), 700);
+    secretsTimer = setTimeout(saveSecrets, 700);
   }));
   drawer.root.querySelector(".rgm-picker")?.addEventListener("click", async () => {
     try {
       const config = pickerConfig();
       if (!config.clientId || !config.apiKey || !/^\d+$/.test(config.projectNumber)) {
-        if (driveStatus) driveStatus.textContent = "Enter the Picker settings and save them before selecting files.";
+        if (driveStatus) driveStatus.textContent = "Enter the Picker settings before selecting files.";
         return;
       }
       queueSave("automation_picker_config_save", () => ({ config }));
@@ -384,15 +371,9 @@ export function setup(ctx: SpindleFrontendContext) {
     if (window.confirm("Only continue if you verified in Google Colab that the previous runtime was terminated and no allocation is still in progress. A delayed allocation could still appear and incur charges. Recover the allocation safeguard?")) send("automation_recover");
   });
   drawer.root.querySelector(".rgm-runtime-status")?.addEventListener("click", () => { send("automation_status"); });
-  drawer.root.querySelector(".rgm-set-idle")?.addEventListener("click", () => {
-    idleDirty = true;
-    queueSave("automation_idle", () => ({ minutes: Number(idleSelect.value) }));
+  urlInput?.addEventListener("change", () => {
+    if (urlInput.value.trim()) ctx.sendToBackend({ type: "set_gateway_url", url: urlInput.value.trim() });
   });
-
-  drawer.root.querySelector(".rgm-save-url")?.addEventListener("click", () => {
-    if (urlInput?.value.trim()) ctx.sendToBackend({ type: "set_gateway_url", url: urlInput.value.trim() });
-  });
-  urlInput?.addEventListener("change", () => { if (urlInput.value.trim()) (drawer.root.querySelector(".rgm-save-url") as HTMLButtonElement).click(); });
   drawer.root.querySelector(".rgm-check")?.addEventListener("click", () => {
     if (statusBox) { statusBox.dataset.tone = "unknown"; statusBox.textContent = "Probing…"; }
     ctx.sendToBackend({ type: "status" });
@@ -440,7 +421,7 @@ export function setup(ctx: SpindleFrontendContext) {
       return;
     }
     if (payload?.action === "automation_workbook_settings_get") {
-      if (payload.type === "automation_result") { if (!settingsDirty) showWorkbookSettings(payload.result.settings); settingsRoot.querySelectorAll<HTMLInputElement | HTMLSelectElement>("[data-workbook-setting]").forEach(input => { input.disabled = false; }); renderCacheFiles(); settingsStatus.textContent = "Saved settings loaded."; saveWorkbookSettings.disabled = false; }
+      if (payload.type === "automation_result") { if (!settingsDirty) showWorkbookSettings(payload.result.settings); settingsRoot.querySelectorAll<HTMLInputElement | HTMLSelectElement>("[data-workbook-setting]").forEach(input => { input.disabled = false; }); renderCacheFiles(); settingsStatus.textContent = "Saved settings loaded."; }
       else if (payload.type === "automation_error") settingsStatus.textContent = "Could not load saved settings; reopen the panel to retry.";
     }
     if (payload?.action === "automation_workbook_settings_save") {
