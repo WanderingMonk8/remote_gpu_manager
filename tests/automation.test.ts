@@ -5,6 +5,63 @@ const secrets: AutomationSecrets = { controlToken: "control", clientId: "id", cl
   refreshToken: "refresh", tailnetKey: "ts-secret", basicUser: "user", basicPass: "password" };
 
 describe("automation controller", () => {
+  test("persists advanced workbook settings per user and applies them before allocation", async () => {
+    const entries = new Map<string, string>();
+    const calls: Array<{ path: string; body: any }> = [];
+    const store = { async get(key: string, user: string) { return entries.get(`${user}:${key}`) ?? null; },
+      async put(key: string, value: string, user: string) { entries.set(`${user}:${key}`, value); } };
+    const call = async (path: string, _method: string, _token: string, body?: any) => {
+      calls.push({ path, body });
+      if (path.endsWith("/bootstrap") && body === undefined) return { status: "idle", workbook_transfer: 1 };
+      return {};
+    };
+    const c = new AutomationController(store, call);
+    await c.save("owner", secrets);
+    await c.saveDriveFiles("owner", [
+      { id: "a", name: "moss_image_sft_int8_convrot.safetensors" },
+      { id: "b", name: "qwen3.5_9b_w4a8_gptq.safetensors" },
+      { id: "c", name: "flux2-vae_small.safetensors" },
+    ]);
+    await c.saveWorkbookSettings("owner", { VRAM_MODE: "lowvram", BEAT_SECONDS: 15 });
+    const reinstalled = new AutomationController(store, call);
+    expect((await reinstalled.getWorkbookSettings("owner")).VRAM_MODE).toBe("lowvram");
+    expect((await reinstalled.getWorkbookSettings("other")).VRAM_MODE).toBe("normalvram");
+    await expect(c.saveWorkbookSettings("owner", { BEAT_SECONDS: 0 })).rejects.toThrow("workbook_settings_invalid");
+    await c.start("owner");
+    const workbook = calls.find(c => c.path.endsWith("/workbook-check"))?.body.workbook;
+    const cells = JSON.parse(workbook.content).cells.map((cell: any) => cell.source?.join("") ?? "");
+    expect(cells[8]).toContain("BEAT_SECONDS = 15");
+    expect(cells[10]).toContain('VRAM_MODE = "lowvram"');
+    expect(cells[22]).toContain("GENERATE=False");
+    expect(workbook.sha256).toHaveLength(64);
+  });
+
+  test("requires the selected model cache before allocating", async () => {
+    const entries = new Map<string, string>();
+    const calls: string[] = [];
+    const c = new AutomationController({ async get(key, user) { return entries.get(`${user}:${key}`) ?? null; },
+      async put(key, value, user) { entries.set(`${user}:${key}`, value); } },
+      async path => { calls.push(path); return { status: "idle", workbook_transfer: 1 }; });
+    await c.save("owner", secrets);
+    await c.saveDriveFiles("owner", [
+      { id: "a", name: "moss_image_sft_int8_convrot.safetensors" },
+      { id: "b", name: "qwen3.5_9b_w4a8_gptq.safetensors" },
+      { id: "c", name: "flux2-vae_small.safetensors" },
+    ]);
+    await c.saveWorkbookSettings("owner", { MODEL_CHOICE: "Anima Base v1.0" });
+    expect((await c.driveStatus("owner")).missing).toEqual(["anima-base-v1.0.safetensors", "qwen_3_06b_base.safetensors", "qwen_image_vae.safetensors"]);
+    await expect(c.start("owner")).rejects.toThrow("drive_selection_incomplete");
+    expect(calls).toEqual([]);
+    const result = await c.saveDriveFiles("owner", [
+      { id: "d", name: "anima-base-v1.0.safetensors" },
+      { id: "e", name: "qwen_3_06b_base.safetensors" },
+      { id: "f", name: "qwen_image_vae.safetensors" },
+    ]);
+    expect(result.complete).toBe(true);
+    await c.start("owner");
+    expect(calls).toContain("/gateway/v1/runtime");
+  });
+
   test("loads eligible GPUs without allocating and forwards an explicit GPU choice", async () => {
     const entries = new Map<string, string>();
     const calls: Array<{ path: string; body: any }> = [];

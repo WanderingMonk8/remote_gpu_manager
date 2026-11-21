@@ -11,9 +11,9 @@ describe("bootstrap worker stdio", () => {
   test("passes credentials privately and returns the worker result", async () => {
     const script = `const req = await Bun.stdin.json();
       if (req.credentials.TS_AUTHKEY !== 'tailnet-secret') process.exit(1);
-      console.log(JSON.stringify({ok:true, funnel:'https://worker.example', state:req.state}));`;
+      console.log(JSON.stringify({ok:true, funnel:'https://worker.example', state:req.state, kernelId:'kernel-1'}));`;
     const result = await runBootstrap([process.execPath, "-e", script], request, 5000);
-    expect(result).toEqual({ funnel: "https://worker.example", state: request.state });
+    expect(result).toEqual({ funnel: "https://worker.example", state: request.state, kernelId: "kernel-1" });
   });
 
   test("does not expose worker output or secrets in an error", async () => {

@@ -82,6 +82,11 @@ spindle.onFrontendMessage(async (payload: any, userId?: string) => {
           await automation.start(userId, payload.choice);
           result = { status: "running" };
           break;
+        case "automation_workbook_settings_get":
+          result = { settings: await automation.getWorkbookSettings(userId) }; break;
+        case "automation_workbook_settings_save":
+          await automation.saveWorkbookSettings(userId, payload.settings);
+          result = { saved: true }; break;
         case "automation_workbook_info":
           result = { sha256: (await bundledWorkbook()).sha256 };
           break;
