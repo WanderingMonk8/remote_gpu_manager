@@ -158,11 +158,14 @@ export function setup(ctx: SpindleFrontendContext) {
   const settingsStatus = drawer.root.querySelector(".rgm-workbook-settings-status") as HTMLParagraphElement;
   let settingsDirty = false;
   let civitaiVersion: any = null;
+  let civitaiLookupDirty = false;
   let savedCivitaiSelection: any = null;
   const civitaiSettings = drawer.root.querySelector(".rgm-civitai-settings") as HTMLDivElement;
   const civitaiVersions = drawer.root.querySelector(".rgm-civitai-versions") as HTMLSelectElement;
   const civitaiFiles = drawer.root.querySelector(".rgm-civitai-files") as HTMLSelectElement;
   const civitaiDetail = drawer.root.querySelector(".rgm-civitai-detail") as HTMLParagraphElement;
+  const civitaiUrl = drawer.root.querySelector(".rgm-civitai-url") as HTMLInputElement;
+  civitaiUrl.addEventListener("input", () => { civitaiLookupDirty = true; });
   function showCivitaiVersion(version: any, fileId?: number) {
     civitaiVersion = version;
     civitaiFiles.replaceChildren();
@@ -175,7 +178,8 @@ export function setup(ctx: SpindleFrontendContext) {
     civitaiDetail.textContent = `${version.modelName} / ${version.name}; base ${version.baseModel}. Verify it is compatible with your Lumiverse workflow.`;
   }
   drawer.root.querySelector(".rgm-civitai-lookup")?.addEventListener("click", () => {
-    const url = (drawer.root.querySelector(".rgm-civitai-url") as HTMLInputElement).value;
+    civitaiLookupDirty = true;
+    const url = civitaiUrl.value;
     civitaiDetail.textContent = "Looking up Civitai metadata..."; send("automation_civitai_lookup", { url });
   });
   drawer.root.querySelector(".rgm-civitai-load-version")?.addEventListener("click", () => send("automation_civitai_version", { versionId: Number(civitaiVersions.value) }));
@@ -208,6 +212,7 @@ export function setup(ctx: SpindleFrontendContext) {
     label.textContent = field.label;
     const input = field.type === "select" ? document.createElement("select") : document.createElement("input");
     input.dataset.workbookSetting = field.key;
+    input.disabled = true;
     if (field.type === "select") {
       for (const value of field.options) { const option = document.createElement("option"); option.value = value; option.textContent = value; input.appendChild(option); }
     } else {
@@ -215,6 +220,7 @@ export function setup(ctx: SpindleFrontendContext) {
       item.type = field.type === "boolean" ? "checkbox" : field.type === "text" ? "text" : "number";
       if (field.type === "integer") { item.min = String(field.min); item.max = String(field.max); item.step = "1"; }
     }
+    input.addEventListener("input", () => { settingsDirty = true; });
     input.addEventListener("change", () => { settingsDirty = true; if (field.key === "MODEL_CHOICE") renderCacheFiles(); });
     label.appendChild(input); settingsRoot.appendChild(label);
   }
@@ -226,7 +232,9 @@ export function setup(ctx: SpindleFrontendContext) {
   }
   showWorkbookSettings(Object.fromEntries(workbookSettings.map(field => [field.key, field.default])));
   renderCacheFiles();
-  drawer.root.querySelector(".rgm-workbook-settings-save")?.addEventListener("click", () => {
+  const saveWorkbookSettings = drawer.root.querySelector(".rgm-workbook-settings-save") as HTMLButtonElement;
+  saveWorkbookSettings.disabled = true;
+  saveWorkbookSettings.addEventListener("click", () => {
     const settings: Record<string, boolean | number | string> = {};
     for (const field of workbookSettings) {
       const input = settingsRoot.querySelector(`[data-workbook-setting="${field.key}"]`) as HTMLInputElement;
@@ -365,22 +373,29 @@ export function setup(ctx: SpindleFrontendContext) {
       if (payload.result?.version) showCivitaiVersion(payload.result.version);
       if (payload.result?.selection) {
         savedCivitaiSelection = payload.result.selection;
-        showCivitaiVersion(savedCivitaiSelection.version, savedCivitaiSelection.fileId);
-        civitaiDetail.textContent += " Saved for the next start.";
+        if (payload.action === "automation_civitai_selection_save" || !civitaiLookupDirty) {
+          const version = savedCivitaiSelection.version;
+          civitaiVersions.replaceChildren();
+          const option = document.createElement("option"); option.value = String(version.id); option.textContent = version.name; civitaiVersions.appendChild(option);
+          civitaiUrl.value = `https://civitai.com/models/${version.modelId}?modelVersionId=${version.id}`;
+          showCivitaiVersion(version, savedCivitaiSelection.fileId);
+          civitaiDetail.textContent += " Saved for the next start.";
+          civitaiLookupDirty = false;
+        }
         renderCacheFiles(); send("automation_drive_status"); send("automation_civitai_cache_get");
       }
       return;
     }
     if (["automation_civitai_token_save", "automation_civitai_token_remove", "automation_civitai_token_status"].includes(payload?.action)) {
       if (payload.type === "automation_result") {
-        civitaiToken.value = "";
+        if (payload.action !== "automation_civitai_token_status") civitaiToken.value = "";
         civitaiTokenStatus.textContent = payload.result?.saved ? "A Civitai token is saved." : "No Civitai token is saved.";
       } else if (payload.type === "automation_error") civitaiTokenStatus.textContent = "Could not update the Civitai token.";
       return;
     }
     if (payload?.action === "automation_workbook_settings_get") {
-      if (payload.type === "automation_result" && !settingsDirty) { showWorkbookSettings(payload.result.settings); renderCacheFiles(); settingsStatus.textContent = "Saved settings loaded."; }
-      else if (payload.type === "automation_error") settingsStatus.textContent = "Could not load saved settings.";
+      if (payload.type === "automation_result") { if (!settingsDirty) showWorkbookSettings(payload.result.settings); settingsRoot.querySelectorAll<HTMLInputElement | HTMLSelectElement>("[data-workbook-setting]").forEach(input => { input.disabled = false; }); renderCacheFiles(); settingsStatus.textContent = "Saved settings loaded."; saveWorkbookSettings.disabled = false; }
+      else if (payload.type === "automation_error") settingsStatus.textContent = "Could not load saved settings; reopen the panel to retry.";
     }
     if (payload?.action === "automation_workbook_settings_save") {
       settingsStatus.textContent = payload.type === "automation_result" ? "Advanced settings saved for the next start." : "Could not save settings. Check the values and try again.";
