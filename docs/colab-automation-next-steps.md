@@ -88,9 +88,9 @@ reachable through its API instead:
 - Add a "Adopt URL" step so start does not require a Space restart: the controller calls
   `PUT /gateway/v1/upstream` with the returned URL and Basic Auth.
 
-### Planned: model selection in the extension
+### In progress: advanced workbook controls
 
-- Save a per-user model preference and present the supported MOSS and Anima variants
+- Implemented locally: save a per-user model preference and present the supported MOSS and Anima variants
   before starting a runtime. Display the configured current worker model separately
   from the preference for the next start.
 - Map each model to its checkpoint, encoder and VAE. Show saved selections and missing
@@ -116,6 +116,22 @@ reachable through its API instead:
 - The notebook supervisor monitors child processes; it does not override provider
   lifetime or idle policies. Inspect the official Colab API and plan limits before
   proposing any provider-specific change; do not promise indefinite availability.
+
+### Remaining workbook controls
+
+- The advanced panel currently covers next-start model, installation, supervisor,
+  and VRAM settings. The current gateway still requires the original MOSS SFT
+  cache even when a different model is selected; only files required by the
+  chosen model and that compatibility requirement are restored.
+- The remaining notebook fields include generation prompts, dimensions, sampler,
+  seed, reference and LoRA controls, and interactive actions such as generation,
+  file upload, workflow download, and cleanup. They require functional UI and
+  explicit runtime actions, not merely saved fields: the automation skips the
+  notebook's generation and cleanup cells and cannot use its browser pickers.
+- Changing settings in the current panel applies on the next startup; switching
+  an active model or applying live settings requires additional runtime controls.
+- Keep credentials masked and user-specific; validate all input and check the
+  active queue before disruptive operations. Keep the existing idle protections.
 
 ### Investigate: preserving the Colab connection
 
