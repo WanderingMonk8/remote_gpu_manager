@@ -64,13 +64,13 @@ export function setup(ctx: SpindleFrontendContext) {
         <label>Tunnel Basic Auth password<input data-secret="basicPass" type="password" autocomplete="off" /></label>
       </details>
       <details><summary>Drive model cache</summary>
-        <p>Use a web OAuth client, browser API key, and project number from the same Google Cloud project as the Colab OAuth client. Select the cache files required by your chosen model, together or one at a time.</p>
+        <p>Use a web OAuth client, browser API key, and project number from the same Google Cloud project as the Colab OAuth client. Optionally select existing cache files for your chosen model. Missing files are downloaded on startup, which can increase Colab runtime costs.</p>
         <label>Google web OAuth client ID<input class="rgm-picker-client" type="password" autocomplete="off" /></label>
         <label>Google Picker API key<input class="rgm-picker-key" type="password" autocomplete="off" /></label>
         <label>Google Cloud project number<input class="rgm-picker-project" type="password" autocomplete="off" /></label>
         <p>Saved Picker settings are masked. You can replace them when needed.</p>
         <p class="rgm-picker-settings-status" role="status"></p>
-        <p>Choose the exact filenames shown below in Google Picker. Saved means the file was selected previously; access is checked before Colab starts.</p>
+        <p>Choose existing files by their exact filenames. Saved files are checked before Colab starts; missing files are downloaded.</p>
         <div class="rgm-cache-files" role="status"></div>
         <button class="rgm-picker" type="button">Select cache files</button>
         <p class="rgm-drive-status" role="status">No selection made in this session.</p>
@@ -217,7 +217,7 @@ export function setup(ctx: SpindleFrontendContext) {
     if (model === "Custom Civitai" && !savedCivitaiSelection) { const note = document.createElement("p"); note.textContent = "Choose a custom checkpoint to see its required encoder and VAE."; cacheFiles.appendChild(note); }
     for (const name of required) {
       const item = document.createElement("li");
-      item.textContent = `${name} ? ${savedCacheNames === null ? "checking" : savedCacheNames.has(name) ? "saved" : "select this file"}`;
+      item.textContent = `${name} ? ${savedCacheNames === null ? "checking" : savedCacheNames.has(name) ? "saved" : "will download unless selected"}`;
       list.appendChild(item);
     }
     cacheFiles.appendChild(list);
@@ -505,8 +505,8 @@ export function setup(ctx: SpindleFrontendContext) {
       if (driveStatus) {
         if (payload.type === "automation_error") driveStatus.textContent = `Could not load saved cache selection: ${payload.error}.`;
         else if (payload.result?.saved && payload.result.missing?.length === 0) driveStatus.textContent = "Required cache files are saved. You do not need to select them again.";
-        else if (payload.result?.saved) driveStatus.textContent = `Saved cache selection is incomplete. Still needed: ${payload.result.missing.join(", ")}.`;
-        else driveStatus.textContent = "No cache files are saved yet.";
+        else if (payload.result?.saved) driveStatus.textContent = `Not cached in Drive; will download on startup: ${payload.result.missing.join(", ")}.`;
+        else driveStatus.textContent = "No cache files are saved yet. Required files will download on startup.";
       }
       return;
     }
@@ -559,7 +559,7 @@ export function setup(ctx: SpindleFrontendContext) {
       if (payload.action === "automation_save_drive" && result.saved && driveStatus) {
         driveStatus.textContent = result.complete
           ? "Required cache files are saved. You can now start Colab."
-          : `Selection saved. Still needed: ${(result.missing ?? []).join(", ")}. Select the remaining files.`;
+          : `Selection saved. Missing files will download on startup: ${(result.missing ?? []).join(", ")}.`;
       }
       if (payload.action === "automation_save" && result.saved && credentialsStatus) { credentialsStatus.textContent = "Credentials saved."; send("automation_credentials_status"); }
       if (payload.action === "automation_save" && result.saved && pendingSecrets) {

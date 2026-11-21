@@ -240,15 +240,12 @@ export class AutomationController {
     const savedState = await this.store.get(STATE, user);
     const state = savedState ? JSON.parse(savedState) : {};
     const savedDrive = await this.store.get(DRIVE, user);
-    if (!savedDrive) throw new Error("drive_selection_required");
-    const driveFiles = JSON.parse(savedDrive) as DriveFile[];
+    const driveFiles = savedDrive ? JSON.parse(savedDrive) as DriveFile[] : [];
+    if (!Array.isArray(driveFiles) || (driveFiles.length > 0 && driveSelectionIssue(driveFiles))) throw new Error("drive_selection_invalid");
     const workbookSettings = await this.getWorkbookSettings(user);
     const custom = workbookSettings.MODEL_CHOICE === "Custom Civitai" ? await this.getCivitaiSelection(user) : null;
     if (workbookSettings.MODEL_CHOICE === "Custom Civitai" && !custom) throw new Error("civitai_selection_required");
     const requiredFiles = await this.cacheRequirements(user, String(workbookSettings.MODEL_CHOICE));
-    if (!Array.isArray(driveFiles) || !requiredFiles.every(name => driveFiles.some(file => file?.name === name))) {
-      throw new Error("drive_selection_incomplete");
-    }
     const customCache = custom ? await this.getCivitaiCache(user) : null;
     const filesToRestore = driveFiles.filter(file => requiredFiles.includes(file.name));
     if (customCache) filesToRestore.push(customCache);
@@ -260,7 +257,7 @@ export class AutomationController {
     await this.call("/gateway/v1/runtime/workbook-check", "POST", s.controlToken, { workbook });
     await this.call("/gateway/v1/runtime/credentials", "POST", s.controlToken,
       { client_id: s.clientId, client_secret: s.clientSecret, refresh_token: s.refreshToken });
-    await this.call("/gateway/v1/runtime/cache-check", "POST", s.controlToken, { files: filesToRestore });
+    if (filesToRestore.length) await this.call("/gateway/v1/runtime/cache-check", "POST", s.controlToken, { files: filesToRestore });
     const idleMinutes = await this.getIdlePreference(user);
     if (idleMinutes !== null) await this.call("/gateway/v1/runtime/idle", "PUT", s.controlToken, { minutes: idleMinutes });
     const allocation = await this.call("/gateway/v1/runtime", "POST", s.controlToken, choice ? {
