@@ -581,7 +581,7 @@ export function setup(ctx: SpindleFrontendContext) {
       }
       if (payload.action === "automation_start" || (payload.action === "automation_poll" && result.status === "running")) {
         if (pollTimer) clearTimeout(pollTimer);
-        pollTimer = setTimeout(poll, 3000);
+        pollTimer = setTimeout(poll, 10_000);
       }
     }
     if (!statusBox || !out) return;
