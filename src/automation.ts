@@ -145,9 +145,9 @@ export class AutomationController {
   }
 
   async savePickerConfig(user: string, config: PickerConfig): Promise<void> {
-    if (!user || !config || typeof config.clientId !== "string" || !config.clientId.trim() ||
-        typeof config.apiKey !== "string" || !config.apiKey.trim() ||
-        typeof config.projectNumber !== "string" || !/^\d+$/.test(config.projectNumber.trim())) {
+    if (!user || !config || typeof config.clientId !== "string" ||
+        typeof config.apiKey !== "string" || typeof config.projectNumber !== "string" ||
+        (config.projectNumber.trim() !== "" && !/^\d+$/.test(config.projectNumber.trim()))) {
       throw new Error("picker_config_invalid");
     }
     await this.store.put(PICKER, JSON.stringify({ clientId: config.clientId.trim(), apiKey: config.apiKey.trim(),
@@ -172,10 +172,9 @@ export class AutomationController {
       const incoming = secrets[key];
       if (incoming !== undefined && typeof incoming !== "string") throw new Error("invalid_credentials");
       const value = incoming?.trim() ? incoming : previous[key];
-      if (!value || !value.trim()) throw new Error(`missing_${key.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`)}`);
-      merged[key] = value;
+      merged[key] = value || "";
     }
-    if (!/^[^:\s]+$/.test(merged.basicUser)) throw new Error("invalid_basic_user");
+    if (merged.basicUser && !/^[^:\s]+$/.test(merged.basicUser)) throw new Error("invalid_basic_user");
     await this.store.put(SECRETS, JSON.stringify(merged), user);
   }
 
@@ -196,7 +195,9 @@ export class AutomationController {
 
   async credentialsStatus(user: string): Promise<{ saved: boolean }> {
     if (!user) throw new Error("user_required");
-    return { saved: (await this.store.get(SECRETS, user)) !== null };
+    const saved = await this.store.get(SECRETS, user);
+    const values = saved ? JSON.parse(saved) : {};
+    return { saved: ["controlToken", "clientId", "clientSecret", "refreshToken", "tailnetKey", "basicUser", "basicPass"].every(key => typeof values[key] === "string" && values[key].trim()) };
   }
 
   async driveStatus(user: string): Promise<{ saved: boolean; missing: string[]; savedNames: string[] }> {
@@ -212,7 +213,11 @@ export class AutomationController {
     if (!user) throw new Error("user_required");
     const saved = await this.store.get(SECRETS, user);
     if (!saved) throw new Error("credentials_required");
-    return JSON.parse(saved) as AutomationSecrets;
+    const values = JSON.parse(saved) as AutomationSecrets;
+    for (const key of ["controlToken", "clientId", "clientSecret", "refreshToken", "tailnetKey", "basicUser", "basicPass"] as const) {
+      if (typeof values[key] !== "string" || !values[key].trim()) throw new Error(`missing_${key.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`)}`);
+    }
+    return values;
   }
 
   async status(user: string): Promise<any> {
