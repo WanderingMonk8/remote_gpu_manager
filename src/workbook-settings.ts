@@ -1,6 +1,6 @@
 /** Supported noninteractive workbook startup preferences. */
 export const workbookSettings = [
-  { key: "MODEL_CHOICE", label: "Model for next startup", type: "select", default: "MOSS SFT INT8", options: ["Anima Turbo v1.1", "Anima Aesthetic v1.1", "Anima Base v1.0", "Anima Turbo v1.0", "Anima Aesthetic v1.0", "Anima Aesthetic v1.0b", "MOSS SFT INT8", "MOSS Base INT8", "MOSS SFT BF16", "MOSS Base BF16", "Anima Preview", "Anima Preview 2", "Anima Preview 3 Base", "Anima 2.9B Preview BF16", "Anima 2.9B Preview INT8"] },
+  { key: "MODEL_CHOICE", label: "Model for next startup", type: "select", default: "MOSS SFT INT8", options: ["Anima Preview", "Anima Preview 2", "Anima Preview 3 Base", "Anima Base v1.0", "Anima Aesthetic v1.0", "Anima Turbo v1.0", "Anima Aesthetic v1.0b", "Anima Aesthetic v1.1", "Anima 2.9B Preview BF16", "Anima 2.9B Preview INT8", "Anima Turbo v1.1", "MOSS Base BF16", "MOSS Base INT8", "MOSS SFT BF16", "MOSS SFT INT8"] },
   { key: "UPDATE_COMFYUI", label: "Update ComfyUI during startup", type: "boolean", default: false },
   { key: "INSTALL_ANIMA_ADAPTER", label: "Install Anima reference adapter", type: "boolean", default: true },
   { key: "DOWNLOAD_ADAPTER_WEIGHTS", label: "Download Anima adapter weights", type: "boolean", default: false },
