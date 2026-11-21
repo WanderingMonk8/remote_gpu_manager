@@ -65,7 +65,7 @@ export function setup(ctx: SpindleFrontendContext) {
         <button class="rgm-save-secrets" type="button">Save credentials</button>
       </details>
       <details><summary>Drive model cache</summary>
-        <p>Use a web OAuth client, browser API key, and project number from the same Google Cloud project as the Colab OAuth client. Select the MOSS SFT cache files and any additional files required by your chosen model, together or one at a time.</p>
+        <p>Use a web OAuth client, browser API key, and project number from the same Google Cloud project as the Colab OAuth client. Select the cache files required by your chosen model, together or one at a time.</p>
         <label>Google web OAuth client ID<input class="rgm-picker-client" type="password" autocomplete="off" /></label>
         <label>Google Picker API key<input class="rgm-picker-key" type="password" autocomplete="off" /></label>
         <label>Google Cloud project number<input class="rgm-picker-project" type="password" autocomplete="off" /></label>
@@ -389,6 +389,7 @@ export function setup(ctx: SpindleFrontendContext) {
         invalid_credentials: "Check the credential fields and try again.",
         recovery_runtime_present: "A manager runtime is still present. Stop it before recovery.",
         recovery_intent_required: "No recoverable allocation record was found.",
+        gateway_model_cache_update_required: "The gateway must be updated before starting this model. No runtime was allocated.",
         gateway_workbook_update_required: "The gateway must support extension-supplied workbooks before Colab can start. No runtime was allocated.",
       };
       automationStatus.textContent = messages[payload.error] ?? `${payload.action}: ${payload.error}`;

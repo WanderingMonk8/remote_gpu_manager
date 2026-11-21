@@ -28,6 +28,18 @@ class DriveCacheTests(unittest.TestCase):
         with self.assertRaises(ValueError): drive.build_restore_cell("token", files[:2])
         with self.assertRaises(ValueError): drive.build_restore_cell("token", files + [{"id":"../bad", "name":"bad"}])
 
+    def test_selected_model_requirements_and_workbook_parser(self):
+        for model, names in drive.MODELS.items():
+            selected = [{"id": f"id{i}", "name": name} for i, name in enumerate(names)]
+            self.assertEqual(drive.workbook_model(f"MODEL_CHOICE = {model!r} # @param []\n"), model)
+            self.assertTrue(drive.build_restore_cell("token", selected, model))
+            with self.assertRaises(ValueError):
+                drive.build_restore_cell("token", selected[:-1], model)
+        with self.assertRaises(ValueError):
+            drive.workbook_model("MODEL_CHOICE = __import__('os') # @param []")
+        with self.assertRaises(ValueError):
+            drive.workbook_model("MODEL_CHOICE = 'MOSS SFT INT8' # @param []\nMODEL_CHOICE = 'MOSS Base INT8' # @param []")
+
     def test_restores_only_verified_files(self):
         by_id = {f["id"]: f["name"] for f in files}
         def get(url, **kwargs): return Response(by_id[url.rsplit("/", 1)[-1]])

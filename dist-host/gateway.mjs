@@ -1068,7 +1068,7 @@ async function bootstrapControl(req) {
     return errJson(403, "bootstrap_disabled");
   const headers = { "Cache-Control": "no-store" };
   if (req.method === "GET") {
-    return Response.json({ ...bootstrapJob ?? { status: "idle" }, workbook_transfer: 1 }, { headers });
+    return Response.json({ ...bootstrapJob ?? { status: "idle" }, workbook_transfer: 1, model_cache: 2 }, { headers });
   }
   if (req.method === "DELETE") {
     if (bootstrapJob?.status === "running")
