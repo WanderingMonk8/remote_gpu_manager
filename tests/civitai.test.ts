@@ -26,7 +26,7 @@ describe("Civitai checkpoint selection", () => {
     const store = { async get(k: string, u: string) { return map.get(`${u}:${k}`) ?? null; }, async put(k: string, v: string, u: string) { map.set(`${u}:${k}`, v); } };
     const controller = new AutomationController(store, async (path, method, _token, body) => {
       calls.push({ path, method, body });
-      if (path.endsWith("/bootstrap") && method === "GET") return { status: "idle", workbook_transfer: 1, model_cache: 4 };
+      if (path.endsWith("/bootstrap") && method === "GET") return { status: "idle", workbook_transfer: 1, bootstrap_allocation: 1, model_cache: 4 };
       return {};
     });
     await controller.save("alice", { controlToken: "control", clientId: "id", clientSecret: "secret", refreshToken: "refresh", tailnetKey: "tailnet", basicUser: "user", basicPass: "pass" });
@@ -37,7 +37,7 @@ describe("Civitai checkpoint selection", () => {
     await expect(controller.saveCivitaiCache("alice", [{ id: "cache", name: "wrong.safetensors" }])).rejects.toThrow("civitai_cache_invalid");
     await controller.saveCivitaiCache("alice", [{ id: "cache", name: "model.safetensors" }]);
     const oldCalls: string[] = [];
-    const oldGateway = new AutomationController(store, async path => { oldCalls.push(path); return { status: "idle", workbook_transfer: 1, model_cache: 3 }; });
+    const oldGateway = new AutomationController(store, async path => { oldCalls.push(path); return { status: "idle", workbook_transfer: 1, bootstrap_allocation: 1, model_cache: 3 }; });
     await expect(oldGateway.start("alice")).rejects.toThrow("gateway_model_cache_update_required");
     expect(oldCalls).toEqual(["/gateway/v1/runtime/bootstrap"]);
     expect((await controller.getCivitaiCache("alice"))?.id).toBe("cache");

@@ -407,7 +407,6 @@ describe("start / status / stop", () => {
     try {
       await waitFor(async () => (await fetch(`${url}/system_stats`)).ok);
       await ensureCreds(url);
-      expect((await fetch(`${url}/gateway/v1/runtime`, { method: "POST", headers: auth })).status).toBe(200);
       const workbook = await bundledWorkbook();
       const headers = { ...auth, "Content-Type": "application/json" };
       expect((await fetch(`${url}/gateway/v1/runtime/workbook-check`, {
@@ -421,9 +420,10 @@ describe("start / status / stop", () => {
       })).status).toBe(401);
       const response = await fetch(`${url}/gateway/v1/runtime/bootstrap`, {
         method: "POST", headers: { ...auth, "Content-Type": "application/json" },
-        body: JSON.stringify({ ts_authkey: "key", basic_user: "lumiverse", basic_pass: "test-secret", state: {}, workbook }),
+        body: JSON.stringify({ allocate: {}, ts_authkey: "key", basic_user: "lumiverse", basic_pass: "test-secret", state: {}, workbook }),
       });
       expect(response.status).toBe(202);
+      expect((await (await fetch(`${url}/gateway/v1/runtime/bootstrap`, { headers: auth })).json()).bootstrap_allocation).toBe(1);
       await waitFor(async () => {
         const job = await (await fetch(`${url}/gateway/v1/runtime/bootstrap`, { headers: auth })).json();
         return job.status === "finished";
@@ -436,6 +436,14 @@ describe("start / status / stop", () => {
       expect(data.state["tailscaled.state"]).toBe("c2VjcmV0");
       expect(JSON.stringify(data)).not.toContain("mock-proxy-token-SECRET");
       expect((await fetch(`${url}/gateway/v1/runtime/bootstrap`, { method: "DELETE", headers: auth })).status).toBe(200);
+      const reused = await fetch(`${url}/gateway/v1/runtime/bootstrap`, {
+        method: "POST", headers, body: JSON.stringify({ allocate: {}, ts_authkey: "key", basic_user: "lumiverse", basic_pass: "test-secret", state: {}, workbook }),
+      });
+      expect(reused.status).toBe(202);
+      await waitFor(async () => (await (await fetch(`${url}/gateway/v1/runtime/bootstrap`, { headers: auth })).json()).status === "finished");
+      const refused = await (await fetch(`${url}/gateway/v1/runtime/bootstrap`, { headers: auth })).json();
+      expect(refused.result.error).toBe("runtime_already_exists");
+      await fetch(`${url}/gateway/v1/runtime/bootstrap`, { method: "DELETE", headers: auth });
     } finally {
       await fetch(`${url}/gateway/v1/runtime`, { method: "DELETE", headers: auth }).catch(() => {});
       gateway.kill("SIGKILL");

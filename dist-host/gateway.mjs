@@ -715,8 +715,8 @@ async function reconcile() {
     console.log(`[rgm-gateway] lifecycle: adopted existing runtime ${owned.name}`);
   }
 }
-async function startRuntime(req) {
-  if (provisioning || bootstrapJob?.status === "running")
+async function startRuntime(req, fromBootstrap = false) {
+  if (provisioning || !fromBootstrap && bootstrapJob?.status === "running")
     return errJson(409, "provisioning_in_progress");
   if (owned)
     return Response.json({ runtime: maskRuntime(owned), state: owned.url ? "ready" : "starting", reused: true });
@@ -1069,7 +1069,7 @@ async function bootstrapControl(req) {
     return errJson(403, "bootstrap_disabled");
   const headers = { "Cache-Control": "no-store" };
   if (req.method === "GET") {
-    return Response.json({ ...bootstrapJob ?? { status: "idle" }, workbook_transfer: 1, model_cache: 4 }, { headers });
+    return Response.json({ ...bootstrapJob ?? { status: "idle" }, workbook_transfer: 1, model_cache: 4, bootstrap_allocation: 1 }, { headers });
   }
   if (req.method === "DELETE") {
     if (bootstrapJob?.status === "running")
@@ -1089,13 +1089,40 @@ async function bootstrapControl(req) {
     bootstrapJob = null;
     return errJson(400, "bootstrap_input_invalid");
   }
+  let payload;
+  try {
+    payload = JSON.parse(new TextDecoder().decode(input));
+  } catch {
+    bootstrapJob = null;
+    return errJson(400, "invalid_json");
+  }
+  if (payload?.allocate !== undefined && (!await validateWorkbook(payload.workbook) || typeof payload.ts_authkey !== "string" || !payload.ts_authkey || typeof payload.basic_user !== "string" || !/^[^:\s]+$/.test(payload.basic_user) || typeof payload.basic_pass !== "string" || !payload.basic_pass || !payload.state || typeof payload.state !== "object" || Array.isArray(payload.state) || Object.values(payload.state).some((value) => typeof value !== "string"))) {
+    bootstrapJob = null;
+    return errJson(400, "bootstrap_input_invalid");
+  }
   const privateRequest = new Request("http://127.0.0.1/", { method: "POST", body: input });
   (async () => {
     try {
+      if (payload?.allocate !== undefined) {
+        const allocation = await startRuntime(new Request("http://127.0.0.1/", { method: "POST", body: JSON.stringify(payload.allocate) }), true);
+        const allocationResult = await allocation.json();
+        if (!allocation.ok || allocationResult.reused) {
+          bootstrapJob = {
+            status: "finished",
+            httpStatus: allocation.ok ? 409 : allocation.status,
+            result: { error: allocationResult.reused ? "runtime_already_exists" : allocationResult.error ?? "allocation_failed" }
+          };
+          return;
+        }
+      }
       const response = await bootstrapRuntime(privateRequest);
       bootstrapJob = { status: "finished", httpStatus: response.status, result: await response.json() };
-    } catch {
-      bootstrapJob = { status: "finished", httpStatus: 500, result: { error: "bootstrap_failed" } };
+    } catch (error) {
+      bootstrapJob = {
+        status: "finished",
+        httpStatus: error instanceof HttpError ? error.status : 500,
+        result: { error: error instanceof HttpError ? error.code : "bootstrap_failed" }
+      };
     }
   })();
   return Response.json({ status: "running" }, { status: 202, headers });

@@ -25,7 +25,7 @@ describe("automation controller", () => {
     const calls: string[] = [];
     const c = new AutomationController({ async get(key, user) { return entries.get(`${user}:${key}`) ?? null; },
       async put(key, value, user) { entries.set(`${user}:${key}`, value); } },
-      async path => { calls.push(path); return { status: "idle", workbook_transfer: 1, model_cache: 2 }; });
+      async path => { calls.push(path); return { status: "idle", workbook_transfer: 1, bootstrap_allocation: 1, model_cache: 2 }; });
     await c.save("owner", secrets);
     await c.saveWorkbookSettings("owner", { MODEL_CHOICE: "Anima Preview 2" });
     await c.saveDriveFiles("owner", requiredModelFiles("Anima Preview 2").map((name, i) => ({ name, id: `file${i}` })));
@@ -40,7 +40,7 @@ describe("automation controller", () => {
       async put(key: string, value: string, user: string) { entries.set(`${user}:${key}`, value); } };
     const call = async (path: string, _method: string, _token: string, body?: any) => {
       calls.push({ path, body });
-      if (path.endsWith("/bootstrap") && body === undefined) return { status: "idle", workbook_transfer: 1 };
+      if (path.endsWith("/bootstrap") && body === undefined) return { status: "idle", workbook_transfer: 1, bootstrap_allocation: 1 };
       return {};
     };
     const c = new AutomationController(store, call);
@@ -71,7 +71,7 @@ describe("automation controller", () => {
     const calls: string[] = [];
     const c = new AutomationController({ async get(key, user) { return entries.get(`${user}:${key}`) ?? null; },
       async put(key, value, user) { entries.set(`${user}:${key}`, value); } },
-      async path => { calls.push(path); return { status: "idle", workbook_transfer: 1, model_cache: 2 }; });
+      async path => { calls.push(path); return { status: "idle", workbook_transfer: 1, bootstrap_allocation: 1, model_cache: 2 }; });
     await c.save("owner", secrets);
     await c.saveDriveFiles("owner", [
       { id: "a", name: "moss_image_sft_int8_convrot.safetensors" },
@@ -81,11 +81,11 @@ describe("automation controller", () => {
     await c.saveWorkbookSettings("owner", { MODEL_CHOICE: "Anima Base v1.0" });
     expect((await c.driveStatus("owner")).missing).toEqual(["anima-base-v1.0.safetensors", "qwen_3_06b_base.safetensors", "qwen_image_vae.safetensors"]);
     await c.start("owner");
-    expect(calls).toContain("/gateway/v1/runtime");
+    expect(calls).toContain("/gateway/v1/runtime/bootstrap");
     expect(calls).not.toContain("/gateway/v1/runtime/cache-check");
     const oldGateway = new AutomationController({ async get(key, user) { return entries.get(`${user}:${key}`) ?? null; },
       async put(key, value, user) { entries.set(`${user}:${key}`, value); } },
-      async path => { if (path.endsWith("/bootstrap")) return { status: "idle", workbook_transfer: 1 }; throw new Error("unexpected_gateway_call"); });
+      async path => { if (path.endsWith("/bootstrap")) return { status: "idle", workbook_transfer: 1, bootstrap_allocation: 1 }; throw new Error("unexpected_gateway_call"); });
     const result = await c.saveDriveFiles("owner", [
       { id: "d", name: "anima-base-v1.0.safetensors" },
       { id: "e", name: "qwen_3_06b_base.safetensors" },
@@ -94,7 +94,7 @@ describe("automation controller", () => {
     expect(result.complete).toBe(true);
     await expect(oldGateway.start("owner")).rejects.toThrow("gateway_model_cache_update_required");
     await c.start("owner");
-    expect(calls).toContain("/gateway/v1/runtime");
+    expect(calls).toContain("/gateway/v1/runtime/bootstrap");
   });
 
   test("loads eligible GPUs without allocating and forwards an explicit GPU choice", async () => {
@@ -106,7 +106,7 @@ describe("automation controller", () => {
     }, async (path, _method, _token, body) => {
       calls.push({ path, body });
       if (path.endsWith("/specs")) return { specs: [{ accelerator: "L4", shape: "SHAPE_STANDARD" }] };
-      if (path.endsWith("/bootstrap") && body === undefined) return { status: "idle", workbook_transfer: 1 };
+      if (path.endsWith("/bootstrap") && body === undefined) return { status: "idle", workbook_transfer: 1, bootstrap_allocation: 1 };
       return {};
     });
     await controller.save("owner", secrets);
@@ -118,7 +118,7 @@ describe("automation controller", () => {
     expect((await controller.gpuSpecs("owner")).specs[0].accelerator).toBe("L4");
     expect(calls.some(call => call.path === "/gateway/v1/runtime")).toBe(false);
     await controller.start("owner", { accelerator: "L4", shape: "SHAPE_STANDARD", confirmNonDefault: true });
-    expect(calls.find(call => call.path === "/gateway/v1/runtime")?.body)
+    expect(calls.find(call => call.path.endsWith("/bootstrap") && call.body?.allocate)?.body.allocate)
       .toEqual({ accelerator: "L4", shape: "SHAPE_STANDARD", confirm_non_default: true });
   });
 
@@ -147,7 +147,7 @@ describe("automation controller", () => {
       async put(key, value, user) { entries.set(`${user}:${key}`, value); },
     }, async (path, method, _token, body) => {
       calls.push({ path, method, body });
-      if (path.endsWith("/bootstrap") && method === "GET") return { status: "idle", workbook_transfer: 1 };
+      if (path.endsWith("/bootstrap") && method === "GET") return { status: "idle", workbook_transfer: 1, bootstrap_allocation: 1 };
       return {};
     });
     await controller.save("owner", secrets);
@@ -163,7 +163,7 @@ describe("automation controller", () => {
     calls.length = 0;
     await controller.start("owner");
     const idle = calls.findIndex(call => call.path.endsWith("/idle"));
-    const allocation = calls.findIndex(call => call.path === "/gateway/v1/runtime" && call.method === "POST");
+    const allocation = calls.findIndex(call => call.path.endsWith("/bootstrap") && call.method === "POST");
     expect(calls[idle].body).toEqual({ minutes: 15 });
     expect(idle).toBeLessThan(allocation);
   });
@@ -182,7 +182,11 @@ describe("automation controller", () => {
       { id: "c", name: "flux2-vae_small.safetensors" },
     ]);
     await expect(controller.start("owner")).rejects.toThrow("gateway_workbook_update_required");
-    expect(calls.some(call => call.path === "/gateway/v1/runtime" && call.method === "POST")).toBe(false);
+    expect(calls.some(call => call.method === "POST" && call.path.endsWith("/bootstrap"))).toBe(false);
+    const older = new AutomationController({ async get(key, user) { return entries.get(`${user}:${key}`) ?? null; },
+      async put(key, value, user) { entries.set(`${user}:${key}`, value); } },
+      async () => ({ status: "idle", workbook_transfer: 1, model_cache: 4 }));
+    await expect(older.start("owner")).rejects.toThrow("gateway_workbook_update_required");
   });
 
   test("distinguishes Picker selection problems without exposing file IDs", () => {
@@ -254,7 +258,7 @@ describe("automation controller", () => {
       async put(key, value, user) { entries.set(`${user}:${key}`, value); },
     }, async (path, method) => {
       calls.push(`${method}:${path}`);
-      if (path.endsWith("bootstrap")) return { status: "idle", workbook_transfer: 1 };
+      if (path.endsWith("bootstrap")) return { status: "idle", workbook_transfer: 1, bootstrap_allocation: 1 };
       if (path.endsWith("cache-check")) throw new Error("drive_access_required");
       return {};
     });

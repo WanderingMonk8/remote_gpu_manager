@@ -251,7 +251,7 @@ export class AutomationController {
     if (customCache) filesToRestore.push(customCache);
     const existing = await this.call("/gateway/v1/runtime/bootstrap", "GET", s.controlToken);
     if (existing.status !== "idle") throw new Error("bootstrap_result_pending");
-    if (existing.workbook_transfer !== 1) throw new Error("gateway_workbook_update_required");
+    if (existing.workbook_transfer !== 1 || existing.bootstrap_allocation !== 1) throw new Error("gateway_workbook_update_required");
     if ((existing.model_cache ?? 1) < requiredModelCacheVersion(String(workbookSettings.MODEL_CHOICE))) throw new Error("gateway_model_cache_update_required");
     const workbook = await bundledWorkbook(workbookSettings);
     await this.call("/gateway/v1/runtime/workbook-check", "POST", s.controlToken, { workbook });
@@ -260,13 +260,9 @@ export class AutomationController {
     if (filesToRestore.length) await this.call("/gateway/v1/runtime/cache-check", "POST", s.controlToken, { files: filesToRestore });
     const idleMinutes = await this.getIdlePreference(user);
     if (idleMinutes !== null) await this.call("/gateway/v1/runtime/idle", "PUT", s.controlToken, { minutes: idleMinutes });
-    const allocation = await this.call("/gateway/v1/runtime", "POST", s.controlToken, choice ? {
-      accelerator: choice.accelerator, shape: choice.shape, confirm_non_default: choice.confirmNonDefault,
-    } : undefined);
-    // Do not rerun notebook setup on a reused runtime that may contain work.
-    if (allocation.reused) throw new Error("runtime_already_exists");
     await this.call("/gateway/v1/runtime/bootstrap", "POST", s.controlToken,
-      { ts_authkey: s.tailnetKey, basic_user: s.basicUser, basic_pass: s.basicPass, state, drive_files: filesToRestore, workbook, ...(custom ? { civitai: { ...custom, token: await this.civitaiToken(user) } } : {}) });
+      { allocate: choice ? { accelerator: choice.accelerator, shape: choice.shape, confirm_non_default: choice.confirmNonDefault } : {},
+        ts_authkey: s.tailnetKey, basic_user: s.basicUser, basic_pass: s.basicPass, state, drive_files: filesToRestore, workbook, ...(custom ? { civitai: { ...custom, token: await this.civitaiToken(user) } } : {}) });
   }
 
   async poll(user: string): Promise<{ status: string; workerHealthy?: boolean; error?: string }> {
