@@ -27,6 +27,7 @@ const IDLE = "automation-idle-preference-v1";
 const CIVITAI_SELECTION = "automation-civitai-selection-v1";
 const CIVITAI_TOKEN = "automation-civitai-token-v1";
 const WORKBOOK_SETTINGS = "automation-workbook-settings-v1";
+const LAST_STARTUP = "automation-last-startup-v1";
 const IDLE_CHOICES = new Set([0, 5, 10, 15, 30]);
 export type DriveFile = { id: string; name: string };
 export type PickerConfig = { clientId: string; apiKey: string; projectNumber: string };
@@ -265,13 +266,24 @@ export class AutomationController {
         ts_authkey: s.tailnetKey, basic_user: s.basicUser, basic_pass: s.basicPass, state, drive_files: filesToRestore, workbook, ...(custom ? { civitai: { ...custom, token: await this.civitaiToken(user) } } : {}) });
   }
 
+  async lastStartup(user: string): Promise<{ error: string; at: string } | null> {
+    if (!user) throw new Error("user_required");
+    const raw = await this.store.get(LAST_STARTUP, user);
+    if (!raw) return null;
+    const result = JSON.parse(raw);
+    if (!result || typeof result.error !== "string" || !/^[a-z_]{1,80}$/.test(result.error) ||
+        typeof result.at !== "string" || !Number.isFinite(Date.parse(result.at))) throw new Error("startup_record_invalid");
+    return { error: result.error, at: result.at };
+  }
+
   async poll(user: string): Promise<{ status: string; workerHealthy?: boolean; error?: string }> {
     const { controlToken } = await this.secrets(user);
     const job = await this.call("/gateway/v1/runtime/bootstrap", "GET", controlToken);
     if (job.status !== "finished") return { status: job.status };
     if (job.httpStatus !== 200 || !job.result?.ok) {
       // Clear only after capturing a nonsecret failure, permitting an explicit retry.
-      const error = typeof job.result?.error === "string" ? job.result.error : "bootstrap_failed";
+      const error = typeof job.result?.error === "string" && /^[a-z_]{1,80}$/.test(job.result.error) ? job.result.error : "bootstrap_failed";
+      await this.store.put(LAST_STARTUP, JSON.stringify({ error, at: new Date().toISOString() }), user);
       await this.call("/gateway/v1/runtime/bootstrap", "DELETE", controlToken);
       return { status: "failed", error };
     }

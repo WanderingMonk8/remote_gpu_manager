@@ -291,6 +291,23 @@ describe("automation controller", () => {
     await expect(controller.poll("other-user")).rejects.toThrow("credentials_required");
   });
 
+  test("preserves a startup failure before acknowledging it and across reinstalls", async () => {
+    const entries = new Map<string, string>(); const events: string[] = [];
+    const store = { async get(key: string, user: string) { return entries.get(`${user}:${key}`) ?? null; },
+      async put(key: string, value: string, user: string) { events.push(`save:${key}`); entries.set(`${user}:${key}`, value); } };
+    const call = async (path: string, method: string) => {
+      events.push(`${method}:${path}`);
+      return method === "GET" ? { status: "finished", httpStatus: 504, result: { error: "timeout" } } : { ok: true };
+    };
+    const controller = new AutomationController(store, call);
+    await controller.save("owner", secrets);
+    expect(await controller.poll("owner")).toEqual({ status: "failed", error: "timeout" });
+    expect(events.indexOf("save:automation-last-startup-v1")).toBeLessThan(events.indexOf("DELETE:/gateway/v1/runtime/bootstrap"));
+    const again = new AutomationController(store, call);
+    expect((await again.lastStartup("owner"))?.error).toBe("timeout");
+    expect(await again.lastStartup("other")).toBeNull();
+  });
+
   test("does not acknowledge identity if secure storage fails", async () => {
     const calls: string[] = [];
     const controller = new AutomationController({

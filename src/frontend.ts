@@ -116,12 +116,14 @@ export function setup(ctx: SpindleFrontendContext) {
       </label>
       <p class="rgm-idle-status" role="status">Default: 10 minutes. Changes are saved automatically.</p>
       <div class="rgm-automation-status rgm-status" data-tone="unknown">Automation not checked.</div>
+      <p class="rgm-last-startup" role="status"></p>
     </div>`;
 
   const out = drawer.root.querySelector(".rgm-out") as HTMLPreElement | null;
   const statusBox = drawer.root.querySelector(".rgm-status") as HTMLDivElement | null;
   const urlInput = drawer.root.querySelector(".rgm-gw-url") as HTMLInputElement | null;
   const automationStatus = drawer.root.querySelector(".rgm-automation-status") as HTMLDivElement | null;
+  const lastStartupStatus = drawer.root.querySelector(".rgm-last-startup") as HTMLParagraphElement;
   const credentialsStatus = drawer.root.querySelector(".rgm-credentials-status") as HTMLParagraphElement | null;
   const driveStatus = drawer.root.querySelector(".rgm-drive-status") as HTMLParagraphElement | null;
   const pickerSettingsStatus = drawer.root.querySelector(".rgm-picker-settings-status") as HTMLParagraphElement | null;
@@ -393,6 +395,13 @@ export function setup(ctx: SpindleFrontendContext) {
       queued.active = false;
       if (queued.pending) setTimeout(() => flushSave(payload.action), 0);
     }
+    if (payload?.action === "automation_last_startup_get") {
+      const failure = payload.result?.failure;
+      if (payload.type === "automation_result") lastStartupStatus.textContent = failure
+        ? `Last startup failure: ${failure.error} at ${new Date(failure.at).toLocaleString()}.` : "";
+      else lastStartupStatus.textContent = "Could not load the previous startup failure.";
+      return;
+    }
     if (payload?.action === "automation_workflow_download") {
       if (payload.type === "automation_result" && payload.result?.workflow) {
         const blob = new Blob([JSON.stringify(payload.result.workflow, null, 2)], { type: "application/json" });
@@ -606,7 +615,10 @@ export function setup(ctx: SpindleFrontendContext) {
       automationStatus.textContent = `${payload.action}: ${display}${result.error ? ` (${result.error})` : ""}${result.workerHealthy === true ? " — worker healthy" : result.workerHealthy === false ? " — worker health check failed" : ""}`;
       if (payload.action === "automation_poll" && result.status === "running") automationStatus.textContent = "Colab startup is still in progress. Checking again in 10 seconds.";
       if (payload.action === "automation_poll" && result.status === "finished" && result.workerHealthy === true) automationStatus.textContent = "Colab is ready; worker is healthy.";
-      if (payload.action === "automation_poll" && result.status === "failed") automationStatus.textContent = `The previous Colab startup failed: ${result.error ?? "bootstrap_failed"}. Check runtime before trying again.`;
+      if (payload.action === "automation_poll" && result.status === "failed") {
+        automationStatus.textContent = `The previous Colab startup failed: ${result.error ?? "bootstrap_failed"}. Check runtime before trying again.`;
+        send("automation_last_startup_get");
+      }
       if (payload.action === "automation_status") {
         if (result.worker) automationStatus.textContent += `; worker ${String(result.worker).replace(/_/g, " ")}`;
         if (result.jupyter) automationStatus.textContent += `; Jupyter connection ${result.jupyter}`;
@@ -639,6 +651,7 @@ export function setup(ctx: SpindleFrontendContext) {
     }
   });
 
+  send("automation_last_startup_get");
   send("automation_civitai_selection_get");
   send("automation_civitai_token_status");
   send("automation_picker_config_get");

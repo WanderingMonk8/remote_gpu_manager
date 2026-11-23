@@ -174,6 +174,7 @@ spindle.onFrontendMessage(async (payload: any, userId?: string) => {
           await automation.saveGpuPreference(userId, payload.choice);
           result = { saved: true };
           break;
+        case "automation_last_startup_get": result = { failure: await automation.lastStartup(userId) }; break;
         case "automation_poll": {
           const pollResult = await automation.poll(userId);
           result = pollResult;
