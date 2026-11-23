@@ -48,7 +48,10 @@ async function getGatewayUrl(): Promise<string> {
   return saved.url ?? DEFAULT_GATEWAY_URL;
 }
 
-function hintForStatus(status: number): string | undefined {
+function hintForStatus(status: number, body?: unknown): string | undefined {
+  if (status === 502 && (body as any)?.error === "upstream_dns_unresolved") {
+    return "The gateway cannot resolve the worker's tunnel hostname. It may be new, offline, or no longer current. Wait for DNS propagation, then check the worker; if it persists, verify the active tunnel address.";
+  }
   switch (status) {
     case 401:
       return "Worker is reachable but rejected the upstream credentials — check GATEWAY_BASIC_AUTH matches the notebook tunnel Basic Auth.";
@@ -223,7 +226,7 @@ spindle.onFrontendMessage(async (payload: any, userId?: string) => {
       } catch {
         body = undefined;
       }
-      const hint = hintForStatus(res.status);
+      const hint = hintForStatus(res.status, body);
       upstream = { ok: res.status >= 200 && res.status < 300, status: res.status, hint, body };
       if (!upstream.ok) gateway.hint = hint;
     } catch {

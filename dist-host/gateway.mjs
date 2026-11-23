@@ -1,4 +1,13 @@
 // @bun
+// host-gateway/upstream-error.ts
+function upstreamErrorCode(error) {
+  const e = error;
+  if (e?.name === "AbortError" || e?.name === "TimeoutError")
+    return "upstream_timeout";
+  const details = [e?.cause?.code, e?.cause?.message, e?.message].filter((value) => typeof value === "string").join(" ");
+  return /\b(?:ENOTFOUND|EAI_AGAIN|EAI_NONAME)\b/i.test(details) ? "upstream_dns_unresolved" : "upstream_unreachable";
+}
+
 // host-gateway/gateway.ts
 import { timingSafeEqual } from "crypto";
 import { appendFile, open, readFile, rename, stat, unlink } from "fs/promises";
@@ -307,9 +316,8 @@ async function proxyStreamingView(path, init, rule) {
     const e = err;
     const detail = String(e?.cause?.code ?? e?.cause?.message ?? e?.message ?? e?.name ?? "error").slice(0, 200);
     console.warn(`[rgm-gateway] ${path.split("?")[0]} upstream fetch failed: ${e?.name ?? "Error"} (${detail})`);
-    if (e?.name === "AbortError")
-      throw new HttpError(504, "upstream_timeout");
-    throw new HttpError(502, "upstream_unreachable");
+    const code = upstreamErrorCode(err);
+    throw new HttpError(code === "upstream_timeout" ? 504 : 502, code);
   }
   const contentType = (upstream.headers.get("content-type") ?? "application/octet-stream").split(";")[0];
   const declared = Number(upstream.headers.get("content-length") ?? "");
@@ -435,9 +443,8 @@ async function fetchUpstream(path, init, rule) {
         continue;
       }
       console.warn(`[rgm-gateway] upstream fetch failed: ${e?.name ?? "Error"} (${detailStr})`);
-      if (e?.name === "AbortError")
-        throw new HttpError(504, "upstream_timeout");
-      throw new HttpError(502, "upstream_unreachable");
+      const code = upstreamErrorCode(err);
+      throw new HttpError(code === "upstream_timeout" ? 504 : 502, code);
     } finally {
       clearTimeout(timer);
     }

@@ -1,3 +1,4 @@
+import { upstreamErrorCode } from "./upstream-error";
 /**
  * Remote GPU Manager — host-side gateway (M1).
  *
@@ -171,8 +172,8 @@ async function proxyStreamingView(
     const e = err as Error & { cause?: { code?: string; message?: string } };
     const detail = String(e?.cause?.code ?? e?.cause?.message ?? e?.message ?? e?.name ?? "error").slice(0, 200);
     console.warn(`[rgm-gateway] ${path.split("?")[0]} upstream fetch failed: ${e?.name ?? "Error"} (${detail})`);
-    if (e?.name === "AbortError") throw new HttpError(504, "upstream_timeout");
-    throw new HttpError(502, "upstream_unreachable");
+    const code = upstreamErrorCode(err);
+    throw new HttpError(code === "upstream_timeout" ? 504 : 502, code);
   }
 
   const contentType = (upstream.headers.get("content-type") ?? "application/octet-stream").split(";")[0];
@@ -315,8 +316,8 @@ async function fetchUpstream(
         continue;
       }
       console.warn(`[rgm-gateway] upstream fetch failed: ${e?.name ?? "Error"} (${detailStr})`);
-      if (e?.name === "AbortError") throw new HttpError(504, "upstream_timeout");
-      throw new HttpError(502, "upstream_unreachable");
+      const code = upstreamErrorCode(err);
+      throw new HttpError(code === "upstream_timeout" ? 504 : 502, code);
     } finally {
       clearTimeout(timer);
     }
