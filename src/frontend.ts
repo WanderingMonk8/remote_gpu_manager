@@ -287,8 +287,14 @@ export function setup(ctx: SpindleFrontendContext) {
     }
     input.addEventListener("input", () => { settingsDirty = true; if (field.type === "text" || field.type === "integer") { if (settingsTimer) clearTimeout(settingsTimer); settingsTimer = setTimeout(() => saveWorkbookSettings(), AUTOSAVE_DELAY_MS); } });
     input.addEventListener("change", () => { settingsDirty = true; if (settingsTimer) clearTimeout(settingsTimer); if (field.key === "MODEL_CHOICE") renderCacheFiles(); saveWorkbookSettings(); });
-    label.appendChild(input); settingsRoot.appendChild(label);
-    if (field.key === "LORA_URLS") settingsRoot.appendChild(drawer.root.querySelector(".rgm-workflow-lora-controls")!);
+    label.appendChild(input);
+    if (field.key === "LORA_URLS") {
+      const section = document.createElement("details");
+      const heading = document.createElement("summary"); heading.textContent = "LoRA settings";
+      section.appendChild(heading); section.appendChild(label);
+      section.appendChild(drawer.root.querySelector(".rgm-workflow-lora-controls")!);
+      settingsRoot.appendChild(section);
+    } else settingsRoot.appendChild(label);
   }
   function showWorkbookSettings(settings: Record<string, any>) {
     for (const field of workbookSettings) {
