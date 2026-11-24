@@ -7,7 +7,10 @@ const ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" wi
 
 export function setup(ctx: SpindleFrontendContext) {
   const STYLES = `
-    .rgm-panel { display: grid; min-width: 0; gap: 10px; padding: 16px; color: var(--lumiverse-text); }
+    .rgm-panel { display: grid; grid-template-columns: minmax(0, 1fr); width: 100%; min-width: 0; box-sizing: border-box; gap: 10px; padding: 16px; color: var(--lumiverse-text); }
+    .rgm-panel *, .rgm-panel details, .rgm-workbook-settings, .rgm-workflow-lora-controls { min-width: 0; max-width: 100%; box-sizing: border-box; }
+    .rgm-panel details, .rgm-panel label, .rgm-workbook-settings, .rgm-workflow-lora-controls { width: 100%; }
+    .rgm-panel p, .rgm-status { overflow-wrap: anywhere; }
     .rgm-panel h3 { margin: 0; font-size: 15px; }
     .rgm-panel p { margin: 0; color: var(--lumiverse-text-muted); font-size: 12px; line-height: 1.5; }
     .rgm-panel input { width: 100%; box-sizing: border-box; padding: 7px 9px; border: 1px solid var(--lumiverse-border); border-radius: 8px; background: var(--lumiverse-fill); color: var(--lumiverse-text); font: inherit; }
@@ -22,8 +25,9 @@ export function setup(ctx: SpindleFrontendContext) {
     .rgm-status[data-tone="bad"] { color: var(--lumiverse-error, #e57373); }
     .rgm-status[data-tone="unknown"] { color: var(--lumiverse-text-muted); }
     .rgm-out { margin: 0; max-height: 220px; overflow: auto; white-space: pre-wrap; font-size: 11px; color: var(--lumiverse-text-muted); }
-    .rgm-panel label { display: grid; gap: 4px; font-size: 12px; }
-    .rgm-panel select { padding: 7px; }
+    .rgm-panel label { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; font-size: 12px; }
+    .rgm-panel select { width: 100%; min-width: 0; max-width: 100%; box-sizing: border-box; padding: 7px; }
+    .rgm-panel button { white-space: normal; overflow-wrap: anywhere; }
     .rgm-cache-files { overflow-wrap: anywhere; font-size: 12px; line-height: 1.6; }
     .rgm-panel input[type=checkbox] { width: auto; }
   `;
