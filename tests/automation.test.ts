@@ -122,6 +122,18 @@ describe("automation controller", () => {
       .toEqual({ accelerator: "L4", shape: "SHAPE_STANDARD", confirm_non_default: true });
   });
 
+  test("persists workflow LoRA and weight across controller reinstalls per user", async () => {
+    const entries = new Map<string, string>();
+    const store = { async get(key: string, user: string) { return entries.get(`${user}:${key}`) ?? null; },
+      async put(key: string, value: string, user: string) { entries.set(`${user}:${key}`, value); } };
+    const first = new AutomationController(store, async () => ({}));
+    await first.saveWorkflowLora("owner", { name: "moss/custom.safetensors", weight: 0.65 });
+    const reinstalled = new AutomationController(store, async () => ({}));
+    expect(await reinstalled.getWorkflowLora("owner")).toEqual({ name: "moss/custom.safetensors", weight: 0.65 });
+    expect(await reinstalled.getWorkflowLora("other")).toEqual({ name: "", weight: 1 });
+    await expect(first.saveWorkflowLora("owner", { name: "bad", weight: Infinity })).rejects.toThrow("workflow_lora_invalid");
+  });
+
   test("saves and changes the GPU preference per user without allocating or saving confirmation", async () => {
     const entries = new Map<string, string>();
     const calls: string[] = [];

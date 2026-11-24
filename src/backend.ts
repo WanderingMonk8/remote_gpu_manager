@@ -9,7 +9,7 @@
  */
 
 import { AutomationController } from "./automation";
-import { workflowFromInventory } from "./workflow-export";
+import { workflowFromInventory, workerLoraOptions } from "./workflow-export";
 import { bundledWorkbook } from "./workbook";
 import { parseCivitaiUrl, parseCivitaiVersion } from "./civitai";
 declare const spindle: import("lumiverse-spindle-types").SpindleAPI;
@@ -153,16 +153,25 @@ spindle.onFrontendMessage(async (payload: any, userId?: string) => {
         case "automation_workbook_settings_save":
           await automation.saveWorkbookSettings(userId, payload.settings);
           result = { saved: true }; break;
+        case "automation_workflow_lora_get": result = { lora: await automation.getWorkflowLora(userId) }; break;
+        case "automation_workflow_lora_save": await automation.saveWorkflowLora(userId, payload.lora); result = { saved: true }; break;
+        case "automation_workflow_lora_options": {
+          const response = await spindle.cors(`${DEFAULT_GATEWAY_URL}/object_info/LoraLoaderModelOnly`, { method: "GET" });
+          if (response.status !== 200) throw new Error("workflow_worker_unreachable");
+          let data: any; try { data = JSON.parse(response.body); } catch { throw new Error("workflow_lora_inventory_invalid"); }
+          result = { options: workerLoraOptions(data) }; break;
+        }
         case "automation_workflow_download": {
           const inventory: Record<string, unknown> = {};
-          for (const node of ["UNETLoader", "CLIPLoader", "VAELoader"]) {
+          const lora = await automation.getWorkflowLora(userId);
+          for (const node of ["UNETLoader", "CLIPLoader", "VAELoader", ...(lora.name ? ["LoraLoaderModelOnly"] : [])]) {
             const response = await spindle.cors(`${DEFAULT_GATEWAY_URL}/object_info/${node}`, { method: "GET" });
             if (response.status !== 200) throw new Error("workflow_worker_unreachable");
             let data: any;
             try { data = JSON.parse(response.body); } catch { throw new Error("workflow_inventory_invalid"); }
             inventory[node] = data?.[node];
           }
-          result = { workflow: workflowFromInventory(inventory) };
+          result = { workflow: workflowFromInventory(inventory, lora) };
           break;
         }
         case "automation_workbook_info":

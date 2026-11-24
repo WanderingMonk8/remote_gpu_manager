@@ -96,6 +96,13 @@ export function setup(ctx: SpindleFrontendContext) {
           <p class="rgm-civitai-cache-status" role="status">Choose a custom checkpoint first.</p>
         </div>
         <p class="rgm-workbook-settings-status" role="status">Loading saved settings...</p>
+        <details><summary>LoRA in downloaded workflow</summary>
+          <p>After the worker starts, load its installed LoRAs and choose one. Its weight is included in the downloaded starter workflow; map the LoRA node in Lumiverse to override it. Download URLs above install files but do not select them.</p>
+          <button class="rgm-workflow-lora-refresh" type="button">Load installed LoRAs</button>
+          <label>LoRA<select class="rgm-workflow-lora" disabled><option value="">None</option></select></label>
+          <label>LoRA weight<input class="rgm-workflow-lora-weight" type="number" min="-5" max="5" step="0.05" value="1" disabled /></label>
+          <p class="rgm-workflow-lora-status" role="status">Loading saved LoRA setting...</p>
+        </details>
       </details>
       <label>Colab GPU
         <select class="rgm-gpu"><option value="T4|SHAPE_STANDARD">T4 — standard (default)</option></select>
@@ -172,6 +179,36 @@ export function setup(ctx: SpindleFrontendContext) {
     const value = entry.pending; entry.pending = null; entry.active = true;
     send(action, value());
   }
+  const workflowLora = drawer.root.querySelector(".rgm-workflow-lora") as HTMLSelectElement;
+  const workflowLoraWeight = drawer.root.querySelector(".rgm-workflow-lora-weight") as HTMLInputElement;
+  const workflowLoraStatus = drawer.root.querySelector(".rgm-workflow-lora-status") as HTMLParagraphElement;
+  let workflowLoraSaved = false;
+  let workflowLoraDirty = false;
+  let workflowLoraVersion = 0;
+  let workflowLoraSubmittedVersion = -1;
+  function restoreWorkflowLora(name: string) {
+    if (name && ![...workflowLora.options].some(option => option.value === name)) {
+      const option = document.createElement("option"); option.value = name; option.textContent = `${name} (saved; load to verify)`; workflowLora.appendChild(option);
+    }
+    workflowLora.value = name;
+  }
+  function saveWorkflowLora(delay = 0) {
+    workflowLoraDirty = true; workflowLoraSaved = false;
+    const version = ++workflowLoraVersion;
+    const lora = { name: workflowLora.value, weight: Number(workflowLoraWeight.value) };
+    if (!workflowLoraWeight.value || !Number.isFinite(lora.weight) || lora.weight < -5 || lora.weight > 5) {
+      const pending = saves.get("automation_workflow_lora_save");
+      if (pending) { pending.pending = null; if (pending.timer) clearTimeout(pending.timer); }
+      workflowLoraStatus.textContent = "Enter a weight between -5 and 5."; return;
+    }
+    workflowLoraStatus.textContent = "Saving LoRA setting...";
+    queueSave("automation_workflow_lora_save", () => { workflowLoraSubmittedVersion = version; return { lora }; }, delay);
+  }
+  workflowLora.addEventListener("change", () => saveWorkflowLora());
+  workflowLoraWeight.addEventListener("input", () => saveWorkflowLora(AUTOSAVE_DELAY_MS));
+  drawer.root.querySelector(".rgm-workflow-lora-refresh")?.addEventListener("click", () => {
+    workflowLoraStatus.textContent = "Checking installed LoRAs..."; send("automation_workflow_lora_options");
+  });
   const settingsRoot = drawer.root.querySelector(".rgm-workbook-settings") as HTMLDivElement;
   const settingsStatus = drawer.root.querySelector(".rgm-workbook-settings-status") as HTMLParagraphElement;
   let settingsDirty = false;
@@ -381,6 +418,7 @@ export function setup(ctx: SpindleFrontendContext) {
   drawer.root.querySelector(".rgm-runtime-status")?.addEventListener("click", () => { send("automation_status"); });
   const workflowDownloadStatus = drawer.root.querySelector(".rgm-workflow-download-status") as HTMLParagraphElement;
   drawer.root.querySelector(".rgm-workflow-download")?.addEventListener("click", () => {
+    if (!workflowLoraSaved) { workflowDownloadStatus.textContent = "Wait for the LoRA setting to save or correct its value."; return; }
     workflowDownloadStatus.textContent = "Checking the worker's model...";
     send("automation_workflow_download");
   });
@@ -397,6 +435,33 @@ export function setup(ctx: SpindleFrontendContext) {
     if (queued?.active && (payload.type === "automation_result" || payload.type === "automation_error")) {
       queued.active = false;
       if (queued.pending) setTimeout(() => flushSave(payload.action), 0);
+    }
+    if (payload?.action === "automation_workflow_lora_get") {
+      if (payload.type === "automation_result" && !workflowLoraDirty) {
+        restoreWorkflowLora(payload.result.lora.name); workflowLoraWeight.value = String(payload.result.lora.weight);
+        workflowLora.disabled = false; workflowLoraWeight.disabled = false; workflowLoraSaved = true;
+        workflowLoraStatus.textContent = "Saved LoRA setting loaded.";
+      } else if (payload.type === "automation_error") workflowLoraStatus.textContent = "Could not load the saved LoRA setting. Reopen the panel to retry.";
+      return;
+    }
+    if (payload?.action === "automation_workflow_lora_save") {
+      const entry = saves.get("automation_workflow_lora_save");
+      workflowLoraSaved = payload.type === "automation_result" && !entry?.pending && workflowLoraSubmittedVersion === workflowLoraVersion;
+      if (workflowLoraSubmittedVersion === workflowLoraVersion || entry?.pending) workflowLoraStatus.textContent = payload.type === "automation_error" ? "Could not save the LoRA setting. Change it to retry." : workflowLoraSaved ? "LoRA setting saved." : "Saving LoRA setting...";
+      return;
+    }
+    if (payload?.action === "automation_workflow_lora_options") {
+      if (payload.type === "automation_result" && Array.isArray(payload.result?.options)) {
+        const selected = workflowLora.value;
+        workflowLora.replaceChildren();
+        const none = document.createElement("option"); none.value = ""; none.textContent = "None"; workflowLora.appendChild(none);
+        for (const name of payload.result.options) { const option = document.createElement("option"); option.value = name; option.textContent = name; workflowLora.appendChild(option); }
+        restoreWorkflowLora(selected);
+        workflowLoraStatus.textContent = selected && !payload.result.options.includes(selected)
+          ? "Saved LoRA is not installed on this worker. Select an installed LoRA or None."
+          : "Installed LoRAs loaded. Choose a LoRA and weight.";
+      } else workflowLoraStatus.textContent = "Could not load LoRAs. Start the worker and try again.";
+      return;
     }
     if (payload?.action === "automation_last_startup_get") {
       const failure = payload.result?.failure;
@@ -417,6 +482,9 @@ export function setup(ctx: SpindleFrontendContext) {
           workflow_worker_unreachable: "Worker unavailable. Start Colab and wait until it is ready.",
           workflow_model_ambiguous: "The worker has zero or multiple checkpoints, so its model cannot be identified safely.",
           workflow_family_ambiguous: "The worker's model family cannot be identified safely.",
+          workflow_lora_missing: "The saved LoRA is not installed on this worker. Load installed LoRAs and choose another.",
+          workflow_lora_family_mismatch: "The saved LoRA belongs to a different model family.",
+          workflow_lora_inventory_invalid: "Could not read the worker's LoRA inventory.",
         };
         workflowDownloadStatus.textContent = messages[payload.error] ?? "Could not create a workflow from this worker.";
       }
@@ -655,6 +723,7 @@ export function setup(ctx: SpindleFrontendContext) {
   });
 
   send("automation_last_startup_get");
+  send("automation_workflow_lora_get");
   send("automation_civitai_selection_get");
   send("automation_civitai_token_status");
   send("automation_picker_config_get");

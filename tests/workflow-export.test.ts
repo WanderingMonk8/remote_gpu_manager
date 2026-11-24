@@ -14,6 +14,17 @@ describe("worker workflow export", () => {
     expect(graph["2"].inputs.type).toBe("stable_diffusion");
     expect(graph["6"].class_type).toBe("EmptyLatentImage");
   });
+  test("inserts the selected installed LoRA and weight into the starter graph", () => {
+    const data: Record<string, any> = inventory(["moss_image_sft_int8_convrot.safetensors"], ["qwen3.5_9b_w4a8_gptq.safetensors"], ["flux2-vae_small.safetensors"]);
+    data.LoraLoaderModelOnly = { input: { required: { lora_name: [["moss/example.safetensors"]] } } };
+    const graph = workflowFromInventory(data, { name: "moss/example.safetensors", weight: 0.65 });
+    expect(graph["100"]).toEqual({ class_type: "LoraLoaderModelOnly", inputs: { model: ["1", 0], lora_name: "moss/example.safetensors", strength_model: 0.65 } });
+    expect(graph["7"].inputs.model).toEqual(["100", 0]);
+    expect(() => workflowFromInventory(data, { name: "moss/missing.safetensors", weight: 1 })).toThrow("workflow_lora_missing");
+    expect(() => workflowFromInventory(data, { name: "moss/example.safetensors", weight: 6 })).toThrow("workflow_lora_invalid");
+    data.LoraLoaderModelOnly.input.required.lora_name[0].push("anima/wrong.safetensors");
+    expect(() => workflowFromInventory(data, { name: "anima/wrong.safetensors", weight: 1 })).toThrow("workflow_lora_family_mismatch");
+  });
   test("refuses ambiguous checkpoints or families", () => {
     expect(() => workflowFromInventory(inventory(["one", "two"], ["qwen_3_06b_base.safetensors"], ["qwen_image_vae.safetensors"]))).toThrow("workflow_model_ambiguous");
     expect(() => workflowFromInventory(inventory(["one"], [], []))).toThrow("workflow_family_ambiguous");

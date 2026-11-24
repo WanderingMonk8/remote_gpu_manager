@@ -1,3 +1,4 @@
+import { validateWorkflowLora, type WorkflowLora } from "./workflow-export";
 import { validateCivitaiSelection, type CivitaiSelection } from "./civitai";
 import { requiredModelCacheVersion, requiredModelFiles, validateWorkbookSettings, type WorkbookSettings } from "./workbook-settings";
 import { bundledWorkbook } from "./workbook";
@@ -27,6 +28,7 @@ const IDLE = "automation-idle-preference-v1";
 const CIVITAI_SELECTION = "automation-civitai-selection-v1";
 const CIVITAI_TOKEN = "automation-civitai-token-v1";
 const WORKBOOK_SETTINGS = "automation-workbook-settings-v1";
+const WORKFLOW_LORA = "automation-workflow-lora-v1";
 const LAST_STARTUP = "automation-last-startup-v1";
 const IDLE_CHOICES = new Set([0, 5, 10, 15, 30]);
 export type DriveFile = { id: string; name: string };
@@ -116,6 +118,16 @@ export class AutomationController {
   async civitaiToken(user: string): Promise<string> {
     if (!user) throw new Error("user_required");
     return (await this.store.get(CIVITAI_TOKEN, user)) ?? "";
+  }
+
+  async saveWorkflowLora(user: string, input: unknown): Promise<void> {
+    if (!user) throw new Error("user_required");
+    await this.store.put(WORKFLOW_LORA, JSON.stringify(validateWorkflowLora(input)), user);
+  }
+  async getWorkflowLora(user: string): Promise<WorkflowLora> {
+    if (!user) throw new Error("user_required");
+    const saved = await this.store.get(WORKFLOW_LORA, user);
+    return validateWorkflowLora(saved ? JSON.parse(saved) : { name: "", weight: 1 });
   }
 
   async saveWorkbookSettings(user: string, input: unknown): Promise<void> {

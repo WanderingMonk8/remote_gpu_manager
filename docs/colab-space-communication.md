@@ -88,7 +88,13 @@ The extension's model preference applies on the next worker start; it does not
 change an existing worker. Lumiverse's generation workflow is configured
 separately and must name compatible worker files. The workflow download feature
 uses live worker inventory and refuses ambiguous choices; it is a starter
-workflow, not a record of a successful generation.
+workflow, not a record of a successful generation. The advanced workflow LoRA
+control stores one selected installed LoRA and its model weight per user. The
+export checks that the worker lists that file and embeds a `LoraLoaderModelOnly`
+node. To override it with Lumiverse settings, map that node's LoRA name and
+model-strength inputs in Lumiverse; changing the saved extension setting alone
+does not alter a workflow already imported there. The startup URL field only
+installs files and does not itself activate them.
 
 ## Inspecting the Hugging Face Space
 
