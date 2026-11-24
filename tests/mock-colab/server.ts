@@ -15,6 +15,8 @@
  */
 const PORT = Number(process.env.MOCK_COLAB_PORT || 9400);
 const CREATE_FAIL = (process.env.MOCK_CREATE_FAIL ?? "") === "1";
+const OPERATION_ASYNC = (process.env.MOCK_OPERATION_ASYNC ?? "") === "1";
+const OPERATION_FAIL = (process.env.MOCK_OPERATION_FAIL ?? "") === "1";
 const FOREIGN = (process.env.MOCK_FOREIGN ?? "") === "1";
 // Slows POST /v1beta/runtimes so tests can hold the gateway mid-provisioning.
 const CREATE_DELAY_MS = Number(process.env.MOCK_CREATE_DELAY_MS || 800);
@@ -57,6 +59,7 @@ Bun.serve({
       if (CREATE_FAIL) {
         return json({ error: { code: 9, status: "FAILED_PRECONDITION", message: "Free tier has no T4 right now" } }, 400);
       }
+      if (OPERATION_FAIL) return json({ name: "operations/mock-rejection" });
       const request = await req.json() as any;
       if (CREATE_DELAY_MS > 0) {
         await new Promise((r) => setTimeout(r, CREATE_DELAY_MS));
@@ -71,7 +74,17 @@ Bun.serve({
           expireTime: new Date(Date.now() + 3_600_000).toISOString(),
         },
       });
-      return json({ name: `operations/op-${id}`, done: true }, 200);
+      return json(OPERATION_ASYNC ? { name: `operations/op-${id}` } : { name: `operations/op-${id}`, done: true, response: { name: `runtimes/${id}` } }, 200);
+    }
+
+    if (req.method === "GET" && path.startsWith("/v1/operations/op-") && OPERATION_ASYNC) {
+      const id = path.slice("/v1/operations/op-".length);
+      return runtimes.has(id) ? json({ name: `operations/op-${id}`, done: true, response: { name: `runtimes/${id}` } }) : json({}, 404);
+    }
+
+    if (req.method === "GET" && path === "/v1/operations/mock-rejection" && OPERATION_FAIL) {
+      return json({ name: "operations/mock-rejection", done: true,
+        error: { code: 9, message: "Not eligible", details: [{ "@type": "type.googleapis.com/google.rpc.ErrorInfo", reason: "RESOURCE_UNAVAILABLE" }] } });
     }
 
     if (req.method === "GET" && path === "/v1beta/runtimes") {

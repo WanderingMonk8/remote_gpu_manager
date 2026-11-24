@@ -679,6 +679,47 @@ async function startRuntime(req: Request, fromBootstrap = false): Promise<Respon
       throw colabError(status, json);
     }
     const name = `runtimes/${runtimeId}`;
+    // CreateRuntime returns a long-running Operation, including errors delivered
+    // inside an HTTP 200 response. Never infer success from the HTTP status alone.
+    let operation = json;
+    const operationName = operation?.name;
+    if (typeof operationName !== "string" || !/^operations\/[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*$/.test(operationName)) {
+      uncertainCreate = true;
+      throw new HttpError(502, "colab_operation_invalid");
+    }
+    const operationDeadline = Date.now() + CREATE_TIMEOUT_MS;
+    try {
+      while (operation?.done !== true) {
+        if (Date.now() > operationDeadline) throw new HttpError(504, "colab_allocation_timeout");
+        await new Promise((resolve) => setTimeout(resolve, 5_000));
+        const result = await colabRequest("GET", `/v1/${operationName}`);
+        if (result.status !== 200) throw colabError(result.status, result.json);
+        operation = result.json;
+        if (!operation || operation.name !== operationName || (operation.done !== undefined && typeof operation.done !== "boolean")) throw new HttpError(502, "colab_operation_invalid");
+      }
+    } catch (error) {
+      uncertainCreate = true;
+      throw error;
+    }
+    if (operation.error) {
+      const code = operation.error.code;
+      // ALREADY_EXISTS and unknown errors may indicate a live runtime: retain the fence.
+      const definiteRejection = [3, 7, 8, 9, 16].includes(code);
+      if (definiteRejection && INTENT_FILE) await unlink(INTENT_FILE);
+      else if (!definiteRejection) uncertainCreate = true;
+      const reason = Array.isArray(operation.error.details)
+        ? operation.error.details.find((d: any) => typeof d?.reason === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(d.reason))?.reason
+        : undefined;
+      console.warn(`[rgm-gateway] lifecycle: Colab allocation rejected (code ${Number.isInteger(code) ? code : "unknown"}${reason ? `, reason ${reason}` : ""})`);
+      if (code === 9) throw new HttpError(403, "colab_precondition_failed");
+      if (code === 8) throw new HttpError(429, "quota_exceeded");
+      if (code === 7 || code === 16) throw new HttpError(401, "auth_required");
+      throw new HttpError(502, "colab_allocation_failed");
+    }
+    if (!operation.response || operation.response.name !== name) {
+      uncertainCreate = true;
+      throw new HttpError(502, "colab_operation_invalid");
+    }
     // Preserve the allocation handle even if connectionInfo polling fails.
     owned = { name, url: "", spec, adoptedAt: new Date().toISOString(), tokenExpireTime: "" };
     lastMonitorState = "";

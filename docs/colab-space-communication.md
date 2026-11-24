@@ -54,7 +54,10 @@ refuse a start before allocation until the gateway is updated.
   advertising `bootstrap_allocation: 1`, allocation and bootstrap run as one
   gateway-owned background job. The extension polls its result every 10 seconds.
   A failed or interrupted create can still leave an allocation; do not blindly
-  repeat the create.
+  repeat the create. Google's create response is a long-running operation: the
+  gateway must inspect its completion or embedded provider error before treating
+  an HTTP 200 as an allocated runtime. Inconclusive operations retain the
+  allocation fence; an explicit provider refusal can be reported separately.
 - **Check runtime** queries the managed runtime and reports provider state,
   worker reachability, Jupyter connection, and job information. **Check worker**
   separately probes `/system_stats` through the gateway. A 502 with

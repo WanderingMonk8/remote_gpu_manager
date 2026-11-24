@@ -655,6 +655,51 @@ describe("provider refusals are typed (PRD §5)", () => {
     expect(body.detail).toContain("Free tier");
   });
 
+  test("surfaces a completed Colab operation error rather than timing out", async () => {
+    const providerPort = PORT_BASE + 30; const gatewayPort = PORT_BASE + 31;
+    const provider = Bun.spawn(["bun", "tests/mock-colab/server.ts"], {
+      env: { ...process.env, MOCK_COLAB_PORT: String(providerPort), MOCK_OPERATION_FAIL: "1" }, stdout: "ignore", stderr: "ignore",
+    });
+    const gateway = spawnGateway(gatewayPort, providerPort, `http://127.0.0.1:${MOCK_PORT}`, { GATEWAY_BOOTSTRAP: "1" });
+    const url = `http://127.0.0.1:${gatewayPort}`;
+    try {
+      await waitFor(async () => (await fetch(`${url}/system_stats`)).ok);
+      await ensureCreds(url);
+      const workbook = await bundledWorkbook();
+      const response = await fetch(`${url}/gateway/v1/runtime/bootstrap`, { method: "POST", headers: { ...auth, "Content-Type": "application/json" },
+        body: JSON.stringify({ allocate: {}, workbook, ts_authkey: "key", basic_user: "user", basic_pass: "pass", state: {} }) });
+      expect(response.status).toBe(202);
+      await waitFor(async () => (await (await fetch(`${url}/gateway/v1/runtime/bootstrap`, { headers: auth })).json()).status === "finished");
+      const job = await (await fetch(`${url}/gateway/v1/runtime/bootstrap`, { headers: auth })).json();
+      expect(job.httpStatus).toBe(403);
+      expect(job.result.error).toBe("colab_precondition_failed");
+      const calls = await (await fetch(`http://127.0.0.1:${providerPort}/__log`)).json();
+      expect(calls.calls.some((call: any) => call.path === "/v1/operations/mock-rejection")).toBe(true);
+      expect(calls.runtimes).toEqual([]);
+    } finally { gateway.kill("SIGKILL"); provider.kill("SIGKILL"); }
+  }, 15000);
+
+  test("waits for the provider operation to complete before using its runtime", async () => {
+    const providerPort = PORT_BASE + 32; const gatewayPort = PORT_BASE + 33;
+    const provider = Bun.spawn(["bun", "tests/mock-colab/server.ts"], {
+      env: { ...process.env, MOCK_COLAB_PORT: String(providerPort), MOCK_OPERATION_ASYNC: "1" }, stdout: "ignore", stderr: "ignore",
+    });
+    const gateway = spawnGateway(gatewayPort, providerPort, `http://127.0.0.1:${MOCK_PORT}`);
+    const url = `http://127.0.0.1:${gatewayPort}`;
+    try {
+      await waitFor(async () => (await fetch(`${url}/system_stats`)).ok);
+      await ensureCreds(url);
+      const response = await fetch(`${url}/gateway/v1/runtime`, { method: "POST", headers: auth });
+      expect(response.status).toBe(200);
+      const calls = await (await fetch(`http://127.0.0.1:${providerPort}/__log`)).json();
+      expect(calls.calls.some((call: any) => call.path.startsWith("/v1/operations/op-"))).toBe(true);
+      expect(calls.runtimes).toHaveLength(1);
+    } finally {
+      await fetch(`${url}/gateway/v1/runtime?force=1`, { method: "DELETE", headers: auth }).catch(() => {});
+      gateway.kill("SIGKILL"); provider.kill("SIGKILL");
+    }
+  }, 15000);
+
   test("a second start while provisioning is single-flight refused", async () => {
     // MOCK_CREATE_DELAY_MS holds the mock's create response, so the gateway is
     // still polling when the second request arrives and must get 409, not a
