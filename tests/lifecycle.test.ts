@@ -671,8 +671,8 @@ describe("provider refusals are typed (PRD §5)", () => {
       expect(response.status).toBe(202);
       await waitFor(async () => (await (await fetch(`${url}/gateway/v1/runtime/bootstrap`, { headers: auth })).json()).status === "finished");
       const job = await (await fetch(`${url}/gateway/v1/runtime/bootstrap`, { headers: auth })).json();
-      expect(job.httpStatus).toBe(403);
-      expect(job.result.error).toBe("colab_precondition_failed");
+      expect(job.httpStatus).toBe(503);
+      expect(job.result.error).toBe("colab_no_runtimes");
       const calls = await (await fetch(`http://127.0.0.1:${providerPort}/__log`)).json();
       expect(calls.calls.some((call: any) => call.path === "/v1/operations/mock-rejection")).toBe(true);
       expect(calls.runtimes).toEqual([]);

@@ -84,7 +84,7 @@ Bun.serve({
 
     if (req.method === "GET" && path === "/v1/operations/mock-rejection" && OPERATION_FAIL) {
       return json({ name: "operations/mock-rejection", done: true,
-        error: { code: 9, message: "Not eligible", details: [{ "@type": "type.googleapis.com/google.rpc.ErrorInfo", reason: "RESOURCE_UNAVAILABLE" }] } });
+        error: { code: 9, message: "Not eligible", details: [{ "@type": "type.googleapis.com/google.rpc.ErrorInfo", reason: "NO_RUNTIMES" }] } });
     }
 
     if (req.method === "GET" && path === "/v1beta/runtimes") {

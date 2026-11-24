@@ -124,6 +124,9 @@ export function setup(ctx: SpindleFrontendContext) {
   const urlInput = drawer.root.querySelector(".rgm-gw-url") as HTMLInputElement | null;
   const automationStatus = drawer.root.querySelector(".rgm-automation-status") as HTMLDivElement | null;
   const lastStartupStatus = drawer.root.querySelector(".rgm-last-startup") as HTMLParagraphElement;
+  const startupFailureText = (error: string) => error === "colab_no_runtimes"
+    ? "Google reported that no runtime is currently available for the requested GPU. Try again later or choose another GPU."
+    : error;
   const credentialsStatus = drawer.root.querySelector(".rgm-credentials-status") as HTMLParagraphElement | null;
   const driveStatus = drawer.root.querySelector(".rgm-drive-status") as HTMLParagraphElement | null;
   const pickerSettingsStatus = drawer.root.querySelector(".rgm-picker-settings-status") as HTMLParagraphElement | null;
@@ -398,7 +401,7 @@ export function setup(ctx: SpindleFrontendContext) {
     if (payload?.action === "automation_last_startup_get") {
       const failure = payload.result?.failure;
       if (payload.type === "automation_result") lastStartupStatus.textContent = failure
-        ? `Last startup failure: ${failure.error} at ${new Date(failure.at).toLocaleString()}.` : "";
+        ? `Last startup failure: ${startupFailureText(failure.error)} (${new Date(failure.at).toLocaleString()})` : "";
       else lastStartupStatus.textContent = "Could not load the previous startup failure.";
       return;
     }
@@ -616,7 +619,7 @@ export function setup(ctx: SpindleFrontendContext) {
       if (payload.action === "automation_poll" && result.status === "running") automationStatus.textContent = "Colab startup is still in progress. Checking again in 10 seconds.";
       if (payload.action === "automation_poll" && result.status === "finished" && result.workerHealthy === true) automationStatus.textContent = "Colab is ready; worker is healthy.";
       if (payload.action === "automation_poll" && result.status === "failed") {
-        automationStatus.textContent = `The previous Colab startup failed: ${result.error ?? "bootstrap_failed"}. Check runtime before trying again.`;
+        automationStatus.textContent = `The previous Colab startup failed: ${startupFailureText(result.error ?? "bootstrap_failed")} Check runtime before trying again.`;
         send("automation_last_startup_get");
       }
       if (payload.action === "automation_status") {

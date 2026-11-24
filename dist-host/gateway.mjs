@@ -827,6 +827,8 @@ async function startRuntime(req, fromBootstrap = false) {
         uncertainCreate = true;
       const reason = Array.isArray(operation.error.details) ? operation.error.details.find((d) => typeof d?.reason === "string" && /^[A-Z][A-Z0-9_]{0,63}$/.test(d.reason))?.reason : undefined;
       console.warn(`[rgm-gateway] lifecycle: Colab allocation rejected (code ${Number.isInteger(code) ? code : "unknown"}${reason ? `, reason ${reason}` : ""})`);
+      if (code === 9 && reason === "NO_RUNTIMES")
+        throw new HttpError(503, "colab_no_runtimes");
       if (code === 9)
         throw new HttpError(403, "colab_precondition_failed");
       if (code === 8)
