@@ -18,7 +18,7 @@ Related: [ADR-006](./adr-006-colab-runtime-lifecycle.md),
 | Allocate/delete a free-tier T4 through the Colab API | `runtimes/rgm-*` created and deleted repeatedly |
 | Bootstrap a blank runtime from the owner's notebook over the Jupyter API | cells executed, ComfyUI answered `/system_stats` |
 | Generate an image (`GENERATE=True`, in-memory) | cell 22 submitted and returned `ok`; its guards raise on failure |
-| Publish the worker publicly through Tailscale Funnel | `https://worker.tail00000.ts.net` |
+| Publish the worker publicly through Tailscale Funnel | `https://<worker>.ts.net` |
 | Enforcement of Basic Auth | `401` without credentials, `200` with |
 | The Space can reach the worker | panel: `Gateway OK (200) · Worker OK` |
 | Stable hostname across runtimes | state saved from run 1 restored in run 2, same URL |

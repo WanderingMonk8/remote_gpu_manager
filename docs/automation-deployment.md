@@ -1,5 +1,7 @@
 # Colab automation: deployment and first verification
 
+> Historical setup notes: for the current architecture, deployment safeguards, and diagnostics, see [Colab and Space communication](./colab-space-communication.md). Some status and cache requirements below predate later changes.
+
 This is a local implementation and has not yet been verified end to end on the
 Space. Follow the existing gateway patch in `space-gateway-patch.md` first.
 Changes to the deployed Space need the owner's explicit approval.
