@@ -20,7 +20,7 @@ export function parseCivitaiVersion(value: any): CivitaiVersion {
   const baseModel = value.baseModel.trim();
   const family: CivitaiFamily | null = /^anima(?:\b|[-_ ])/i.test(baseModel) ? "anima" : /^moss(?:[-_ ]?image)?(?:\b|[-_ ])/i.test(baseModel) ? "moss" : null;
   if (!family || !Array.isArray(value.files)) throw new Error("civitai_model_unsupported");
-  const files = value.files.filter((file: any) => file?.type === "Model" && Number.isSafeInteger(file.id) && file.id > 0 &&
+  const files = value.files.filter((file: any) => ["Model", "Diffusion Model"].includes(file?.type) && Number.isSafeInteger(file.id) && file.id > 0 &&
       typeof file.name === "string" && file.name.length <= 180 && /\.safetensors$/i.test(file.name) && !/[\x00-\x1f\x7f/\\]/.test(file.name) &&
       Number.isFinite(file.sizeKB) && file.sizeKB > 0 && file.sizeKB <= 100_000_000)
     .slice(0, 64).map((file: any) => ({ id: file.id, name: file.name, sizeKB: file.sizeKB,

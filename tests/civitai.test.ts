@@ -20,6 +20,14 @@ describe("Civitai checkpoint selection", () => {
     expect(() => validateCivitaiSelection({ version, fileId: 68 })).toThrow("civitai_selection_invalid");
     expect(() => parseCivitaiVersion({ ...raw, baseModel: "SDXL 1.0" })).toThrow("civitai_model_unsupported");
   });
+  test("accepts Civitai diffusion model files and preserves selection", () => {
+    const version = parseCivitaiVersion({ ...raw, baseModel: "MOSS Image", files: [
+      { id: 3308921, name: "moss_image_turbo_00004_bf16.safetensors", type: "Diffusion Model", sizeKB: 9926429.6796875 },
+      { id: 2, name: "encoder.safetensors", type: "Text Encoder", sizeKB: 100 },
+    ] });
+    expect(version.files.map(file => file.id)).toEqual([3308921]);
+    expect(validateCivitaiSelection({ version, fileId: 3308921 }).version.family).toBe("moss");
+  });
   test("custom choice sends private metadata only after preflight and never puts token in workbook", async () => {
     const map = new Map<string, string>();
     const calls: any[] = [];
