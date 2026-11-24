@@ -96,13 +96,14 @@ export function setup(ctx: SpindleFrontendContext) {
           <p class="rgm-civitai-cache-status" role="status">Choose a custom checkpoint first.</p>
         </div>
         <p class="rgm-workbook-settings-status" role="status">Loading saved settings...</p>
-        <details><summary>LoRA in downloaded workflow</summary>
+        <div class="rgm-workflow-lora-controls">
+          <p><strong>LoRA in downloaded workflow</strong></p>
           <p>After the worker starts, load its installed LoRAs and choose one. Its weight is included in the downloaded starter workflow; map the LoRA node in Lumiverse to override it. Download URLs above install files but do not select them.</p>
           <button class="rgm-workflow-lora-refresh" type="button">Load installed LoRAs</button>
           <label>LoRA<select class="rgm-workflow-lora" disabled><option value="">None</option></select></label>
           <label>LoRA weight<input class="rgm-workflow-lora-weight" type="number" min="-5" max="5" step="0.05" value="1" disabled /></label>
           <p class="rgm-workflow-lora-status" role="status">Loading saved LoRA setting...</p>
-        </details>
+        </div>
       </details>
       <label>Colab GPU
         <select class="rgm-gpu"><option value="T4|SHAPE_STANDARD">T4 — standard (default)</option></select>
@@ -283,6 +284,7 @@ export function setup(ctx: SpindleFrontendContext) {
     input.addEventListener("input", () => { settingsDirty = true; if (field.type === "text" || field.type === "integer") { if (settingsTimer) clearTimeout(settingsTimer); settingsTimer = setTimeout(() => saveWorkbookSettings(), AUTOSAVE_DELAY_MS); } });
     input.addEventListener("change", () => { settingsDirty = true; if (settingsTimer) clearTimeout(settingsTimer); if (field.key === "MODEL_CHOICE") renderCacheFiles(); saveWorkbookSettings(); });
     label.appendChild(input); settingsRoot.appendChild(label);
+    if (field.key === "LORA_URLS") settingsRoot.appendChild(drawer.root.querySelector(".rgm-workflow-lora-controls")!);
   }
   function showWorkbookSettings(settings: Record<string, any>) {
     for (const field of workbookSettings) {
