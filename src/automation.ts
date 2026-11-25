@@ -26,6 +26,7 @@ const PICKER = "automation-picker-config-v1";
 const GPU = "automation-gpu-preference-v1";
 const IDLE = "automation-idle-preference-v1";
 const CIVITAI_SELECTION = "automation-civitai-selection-v1";
+const CIVITAI_HISTORY = "automation-civitai-history-v1";
 const CIVITAI_TOKEN = "automation-civitai-token-v1";
 const WORKBOOK_SETTINGS = "automation-workbook-settings-v1";
 const WORKFLOW_LORA = "automation-workflow-lora-v1";
@@ -59,7 +60,30 @@ export class AutomationController {
 
   async saveCivitaiSelection(user: string, selection: unknown): Promise<void> {
     if (!user) throw new Error("user_required");
-    await this.store.put(CIVITAI_SELECTION, JSON.stringify(validateCivitaiSelection(selection)).replace(/[\u007f-\uffff]/g, ch => `\\u${ch.charCodeAt(0).toString(16).padStart(4, "0")}`), user);
+    const selected = validateCivitaiSelection(selection);
+    const history = await this.getCivitaiHistory(user);
+    const updated = [selected, ...history.filter(item => item.version.id !== selected.version.id || item.fileId !== selected.fileId)].slice(0, 50);
+    const encode = (value: unknown) => JSON.stringify(value).replace(/[\u007f-\uffff]/g, ch => `\\u${ch.charCodeAt(0).toString(16).padStart(4, "0")}`);
+    await this.store.put(CIVITAI_HISTORY, encode(updated), user);
+    await this.store.put(CIVITAI_SELECTION, encode(selected), user);
+  }
+
+  async getCivitaiHistory(user: string): Promise<CivitaiSelection[]> {
+    if (!user) throw new Error("user_required");
+    const raw = await this.store.get(CIVITAI_HISTORY, user);
+    const history = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(history) || history.length > 50) throw new Error("civitai_history_invalid");
+    const selections = history.map(validateCivitaiSelection);
+    const current = await this.getCivitaiSelection(user);
+    if (current && !selections.some(item => item.version.id === current.version.id && item.fileId === current.fileId)) selections.unshift(current);
+    return selections.slice(0, 50);
+  }
+
+  async selectCivitaiHistory(user: string, versionId: number, fileId: number): Promise<CivitaiSelection> {
+    const selection = (await this.getCivitaiHistory(user)).find(item => item.version.id === versionId && item.fileId === fileId);
+    if (!selection) throw new Error("civitai_selection_invalid");
+    await this.saveCivitaiSelection(user, selection);
+    return selection;
   }
 
   async getCivitaiSelection(user: string): Promise<CivitaiSelection | null> {

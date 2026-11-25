@@ -90,6 +90,8 @@ export function setup(ctx: SpindleFrontendContext) {
         <p class="rgm-civitai-token-status" role="status">Checking saved token...</p>
           </details>
           <p>Paste a Civitai model or version URL. Only Anima and MOSS SafeTensors checkpoints are supported. Selections are saved automatically for the next start. Optionally select an existing Drive copy to avoid downloading the checkpoint on each fresh runtime. Civitai SHA-256 is checked when available; otherwise only Drive integrity and the filename can be verified.</p>
+          <label>Saved checkpoints<select class="rgm-civitai-history"><option value="">No saved checkpoints</option></select></label>
+          <p>Choose a previously saved checkpoint, or add one using a Civitai URL below.</p>
           <label>Civitai model URL<input class="rgm-civitai-url" type="url" placeholder="https://civitai.com/models/..." /></label>
           <button class="rgm-civitai-lookup" type="button">Find versions</button>
           <label>Version<select class="rgm-civitai-versions"></select></label>
@@ -225,6 +227,14 @@ export function setup(ctx: SpindleFrontendContext) {
   const civitaiFiles = drawer.root.querySelector(".rgm-civitai-files") as HTMLSelectElement;
   const civitaiDetail = drawer.root.querySelector(".rgm-civitai-detail") as HTMLParagraphElement;
   const civitaiUrl = drawer.root.querySelector(".rgm-civitai-url") as HTMLInputElement;
+  const civitaiHistory = drawer.root.querySelector(".rgm-civitai-history") as HTMLSelectElement;
+  civitaiHistory.addEventListener("change", () => {
+    const [versionId, fileId] = civitaiHistory.value.split(":").map(Number);
+    if (!versionId || !fileId) return;
+    civitaiLookupDirty = false;
+    civitaiDetail.textContent = "Selecting saved checkpoint...";
+    send("automation_civitai_history_select", { versionId, fileId });
+  });
   civitaiUrl.addEventListener("input", () => { civitaiLookupDirty = true; });
   function showCivitaiVersion(version: any, fileId?: number) {
     civitaiVersion = version;
@@ -506,8 +516,19 @@ export function setup(ctx: SpindleFrontendContext) {
       civitaiCacheStatus.textContent = payload.type === "automation_result" ? (payload.result?.saved ? "A Drive copy is saved for this checkpoint; it will be verified before use." : "No Drive copy is saved; the checkpoint will download from Civitai.") : "Could not save that file. Select exactly the checkpoint filename shown above.";
       return;
     }
-    if (["automation_civitai_lookup", "automation_civitai_version", "automation_civitai_selection_get", "automation_civitai_selection_save"].includes(payload?.action)) {
+    if (["automation_civitai_lookup", "automation_civitai_version", "automation_civitai_selection_get", "automation_civitai_selection_save", "automation_civitai_history_select"].includes(payload?.action)) {
       if (payload.type === "automation_error") { civitaiDetail.textContent = `Civitai: ${String(payload.error).replace(/_/g, " ")}.`; return; }
+      if (Array.isArray(payload.result?.history)) {
+        civitaiHistory.replaceChildren();
+        const placeholder = document.createElement("option"); placeholder.value = ""; placeholder.textContent = payload.result.history.length ? "Choose a saved checkpoint" : "No saved checkpoints"; civitaiHistory.appendChild(placeholder);
+        for (const item of payload.result.history) {
+          const option = document.createElement("option"); option.value = `${item.version.id}:${item.fileId}`;
+          const file = item.version.files.find((entry: any) => entry.id === item.fileId);
+          option.textContent = `${item.version.modelName} — ${item.version.name} — ${file?.name ?? "Checkpoint"}`;
+          civitaiHistory.appendChild(option);
+        }
+        if (payload.result.selection) civitaiHistory.value = `${payload.result.selection.version.id}:${payload.result.selection.fileId}`;
+      }
       if (payload.result?.versions) {
         civitaiVersions.replaceChildren();
         for (const version of payload.result.versions) { const option = document.createElement("option"); option.value = String(version.id); option.textContent = version.name; civitaiVersions.appendChild(option); }
@@ -516,7 +537,7 @@ export function setup(ctx: SpindleFrontendContext) {
       if (payload.result?.version) showCivitaiVersion(payload.result.version);
       if (payload.result?.selection) {
         savedCivitaiSelection = payload.result.selection;
-        if (payload.action === "automation_civitai_selection_save" || !civitaiLookupDirty) {
+        if (["automation_civitai_selection_save", "automation_civitai_history_select"].includes(payload.action) || !civitaiLookupDirty) {
           const version = savedCivitaiSelection.version;
           civitaiVersions.replaceChildren();
           const option = document.createElement("option"); option.value = String(version.id); option.textContent = version.name; civitaiVersions.appendChild(option);

@@ -7,6 +7,30 @@ const raw = { id: 45, modelId: 12, name: "v1", baseModel: "Anima", model: { name
   { id: 68, name: "evil.ckpt", type: "Model", sizeKB: 1234 },
 ] };
 describe("Civitai checkpoint selection", () => {
+  test("checkpoint history restores selections and their Drive cache across reinstalls", async () => {
+    const map = new Map<string, string>();
+    const store = { async get(k: string, u: string) { return map.get(`${u}:${k}`) ?? null; }, async put(k: string, v: string, u: string) { map.set(`${u}:${k}`, v); } };
+    const c = new AutomationController(store, async () => ({}));
+    const first = { version: parseCivitaiVersion(raw), fileId: 67 };
+    await c.saveCivitaiSelection("alice", first);
+    await c.saveCivitaiCache("alice", [{ id: "drive-first", name: "model.safetensors" }]);
+    const second = { version: parseCivitaiVersion({ ...raw, id: 46, name: "v2", files: [{ ...raw.files[0], id: 69, name: "second.safetensors" }] }), fileId: 69 };
+    await c.saveCivitaiSelection("alice", second);
+    const reinstalled = new AutomationController(store, async () => ({}));
+    expect((await reinstalled.getCivitaiHistory("alice")).map(item => item.fileId)).toEqual([69, 67]);
+    expect(await reinstalled.getCivitaiHistory("bob")).toEqual([]);
+    await reinstalled.selectCivitaiHistory("alice", 45, 67);
+    expect((await reinstalled.getCivitaiSelection("alice"))?.fileId).toBe(67);
+    expect((await reinstalled.getCivitaiCache("alice"))?.id).toBe("drive-first");
+    await expect(reinstalled.selectCivitaiHistory("bob", 45, 67)).rejects.toThrow("civitai_selection_invalid");
+  });
+  test("includes the existing selection when history has not yet been created", async () => {
+    const map = new Map<string, string>();
+    const store = { async get(k: string, u: string) { return map.get(`${u}:${k}`) ?? null; }, async put(k: string, v: string, u: string) { map.set(`${u}:${k}`, v); } };
+    map.set("alice:automation-civitai-selection-v1", JSON.stringify({ version: parseCivitaiVersion(raw), fileId: 67 }));
+    const c = new AutomationController(store, async () => ({}));
+    expect((await c.getCivitaiHistory("alice"))[0].fileId).toBe(67);
+  });
   test("only accepts Civitai links and extracts model and version IDs", () => {
     expect(parseCivitaiUrl("https://civitai.com/models/12/name?modelVersionId=45")).toEqual({ modelId: 12, versionId: 45 });
     expect(parseCivitaiUrl("https://civitai.red/api/download/models/45?fileId=67")).toEqual({ versionId: 45 });

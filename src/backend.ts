@@ -102,12 +102,17 @@ spindle.onFrontendMessage(async (payload: any, userId?: string) => {
         case "automation_civitai_cache_save":
           await automation.saveCivitaiCache(userId, payload.files); result = { saved: true }; break;
         case "automation_civitai_selection_get":
-          result = { selection: await automation.getCivitaiSelection(userId) }; break;
+          result = { selection: await automation.getCivitaiSelection(userId), history: await automation.getCivitaiHistory(userId) }; break;
+        case "automation_civitai_history_select": {
+          if (!Number.isSafeInteger(payload.versionId) || !Number.isSafeInteger(payload.fileId)) throw new Error("civitai_selection_invalid");
+          const selection = await automation.selectCivitaiHistory(userId, payload.versionId, payload.fileId);
+          result = { selection, history: await automation.getCivitaiHistory(userId) }; break;
+        }
         case "automation_civitai_selection_save": {
           if (!Number.isSafeInteger(payload.versionId) || !Number.isSafeInteger(payload.fileId)) throw new Error("civitai_selection_invalid");
           const version = parseCivitaiVersion(await civitaiMetadata(`/api/v1/model-versions/${payload.versionId}`, userId));
           await automation.saveCivitaiSelection(userId, { version, fileId: payload.fileId });
-          result = { selection: await automation.getCivitaiSelection(userId) }; break;
+          result = { selection: await automation.getCivitaiSelection(userId), history: await automation.getCivitaiHistory(userId) }; break;
         }
         case "automation_civitai_token_save":
           await automation.saveCivitaiToken(userId, payload.token); result = await automation.civitaiTokenStatus(userId); break;
