@@ -524,7 +524,8 @@ export function setup(ctx: SpindleFrontendContext) {
         for (const item of payload.result.history) {
           const option = document.createElement("option"); option.value = `${item.version.id}:${item.fileId}`;
           const file = item.version.files.find((entry: any) => entry.id === item.fileId);
-          option.textContent = `${item.version.modelName} — ${item.version.name} — ${file?.name ?? "Checkpoint"}`;
+          const size = file ? `${(file.sizeKB / 1048576).toFixed(2)} GiB` : "size unavailable";
+          option.textContent = `${size} — ${item.version.modelName} — ${item.version.name} — ${file?.name ?? "Checkpoint"}`;
           civitaiHistory.appendChild(option);
         }
         if (payload.result.selection) civitaiHistory.value = `${payload.result.selection.version.id}:${payload.result.selection.fileId}`;
