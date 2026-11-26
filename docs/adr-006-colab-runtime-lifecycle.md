@@ -32,9 +32,9 @@ changed: the Colab API v1beta is now public (discovery revision 20261118).
 | `drive.mount()` blocks headless (no browser → `input()` never returns); a guard that skips Drive when `RGM_AUTOMATION=1` fixes it, with no other cell changes | cell 4, preflight timeout then guard |
 | **Colab Secrets are unavailable headless:** `userdata.get` fails with "Secrets can only be fetched when running from the Colab UI" | cell 6 HF token warning |
 | Without Drive, every start re-downloads 12.1 GiB (~10 min) | cell 6 timing |
-| **Tunnel works headless (2026-11-20):** cells 2,4,8,10,25 with the stub → Caddy on 8189 + tailscaled + Funnel; returned `https://worker.tail00000.ts.net`, captured as `GATEWAY_UPSTREAM`, runtime deleted | `tools/colab-bootstrap-probe.py --stub` |
+| **Tunnel works headless (2026-11-20):** cells 2,4,8,10,25 with the stub → Caddy on 8189 + tailscaled + Funnel; returned a tunnel URL (redacted), captured as `GATEWAY_UPSTREAM`, runtime deleted | `tools/colab-bootstrap-probe.py --stub` |
 | Ephemeral tailnet state ⇒ hostname gains a `-N` suffix (`moss-comfy` → `moss-comfy-1`) and a fresh TLS cert is issued every session | cell 25 output |
-| **State custody makes the endpoint stable (2026-11-20):** identity saved from run 1 was restored in run 2; both runs returned `https://worker.tail00000.ts.net` | two `--stub` runs sharing `tools/.tailnet-state` |
+| **State custody makes the endpoint stable (2026-11-20):** identity saved from run 1 was restored in run 2; both runs returned the same tunnel URL (redacted) | two `--stub` runs sharing `tools/.tailnet-state` |
 | **Space → worker egress proven (2026-11-20):** the Lumiverse panel reported `Gateway OK (200) · Worker OK` with real `/system_stats` (T4, 13.6 GB RAM) fetched through the Funnel with Basic Auth | owner test in the Space |
 
 The spike holds OAuth tokens in memory only and writes nothing but the masked result file.

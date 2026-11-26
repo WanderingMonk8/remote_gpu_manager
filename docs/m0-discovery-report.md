@@ -2,14 +2,14 @@
 
 **Milestone:** M0 · **Status:** Findings complete; ADRs written; live tests outstanding
 **Date:** 2026-11-17
-**Branch:** `m0-discovery` · Project root: `D:\Programming\remote_GPU_manager`
+**Branch:** `m0-discovery` · Project root: `<local checkout>`
 
 ## 1. Version and artifact records
 
 | Item | Record | Notes |
 |---|---|---|
-| Lumiverse upstream `main` (inspected) | `main` @ `45f8db563e1c314ed2aab227613b28eb5ea1084e` · package **1.2.5** | cloned `D:\Programming\Lumiverse` (depth 50) |
-| Lumiverse **staging** v1.3.0 (deployed build) | `staging` @ `5361e4fa` ("Merge PR #539 …exclude-html-island-images") · package **1.3.0** · pins `lumiverse-spindle-types` **0.6.80** | user reports Space on v1.3.0; staging worktree at `D:\Programming\Lumiverse-staging` |
+| Lumiverse upstream `main` (inspected) | `main` @ `45f8db563e1c314ed2aab227613b28eb5ea1084e` · package **1.2.5** | cloned `<local checkout>` (depth 50) |
+| Lumiverse **staging** v1.3.0 (deployed build) | `staging` @ `5361e4fa` ("Merge PR #539 …exclude-html-island-images") · package **1.3.0** · pins `lumiverse-spindle-types` **0.6.80** | user reports Space on v1.3.0; staging worktree at `<local checkout>` |
 | ComfyUI provider delta v1.2.5 → v1.3.0 | **None** — `comfyui.ts`, `comfy-runner.ts`, `comfyui-discovery.ts`, `comfyui-import.ts`, `comfyui-workflow-patch.ts`, `comfyui-workflow-parser.ts`, `comfyui-workflow-storage.ts` are byte-identical between main and staging | M0 findings carry over; no Basic Auth added |
 | New in v1.3.0 (not present on main) | Inference scheduler (in-process admission queue, opt-in via `inferenceSchedulerConfig`; chat/embeddings/image generation leases; ComfyUI requests admitted as class `user`; loopback endpoints grouped as "local" resources); image-gen service wraps every provider call in `withInferenceLease`; `resolveImageProviderApiUrl` for default api_url; ~20 new hosted image providers (BFL, Replicate, Stability, …); `lumiverse-spindle-types` 0.6.49 → **0.6.80** | ComfyUI auth, WS ordering, LoRA patching, and connection-profile read-only semantics unchanged. Scheduler is orthogonal to gateway readiness but relevant for single-concurrent-inference sizing |
 | Installed/deployed Space version | **v1.3.0** (user-reported; best match = `staging` @ `5361e4fa`; exact deployed commit unconfirmed) | behavior verified against staging, not against the running Space |
