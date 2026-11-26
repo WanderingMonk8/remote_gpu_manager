@@ -1,4 +1,4 @@
-import { validateWorkflowLora, type WorkflowLora } from "./workflow-export";
+import { validateWorkflowLora, validateWorkflowShift, type WorkflowLora } from "./workflow-export";
 import { validateCivitaiSelection, type CivitaiSelection } from "./civitai";
 import { requiredModelCacheVersion, requiredModelFiles, validateWorkbookSettings, type WorkbookSettings } from "./workbook-settings";
 import { bundledWorkbook } from "./workbook";
@@ -30,6 +30,7 @@ const CIVITAI_HISTORY = "automation-civitai-history-v1";
 const CIVITAI_TOKEN = "automation-civitai-token-v1";
 const WORKBOOK_SETTINGS = "automation-workbook-settings-v1";
 const WORKFLOW_LORA = "automation-workflow-lora-v1";
+const WORKFLOW_SHIFT = "automation-workflow-shift-v1";
 const LORA_HISTORY = "automation-lora-history-v1";
 const LORA_PENDING = "automation-lora-pending-v1";
 const LAST_STARTUP = "automation-last-startup-v1";
@@ -154,6 +155,15 @@ export class AutomationController {
     if (!user) throw new Error("user_required");
     const saved = await this.store.get(WORKFLOW_LORA, user);
     return validateWorkflowLora(saved ? JSON.parse(saved) : { name: "", weight: 1 });
+  }
+  async saveWorkflowShift(user: string, shift: unknown): Promise<void> {
+    if (!user) throw new Error("user_required");
+    await this.store.put(WORKFLOW_SHIFT, JSON.stringify(validateWorkflowShift(shift)), user);
+  }
+  async getWorkflowShift(user: string): Promise<number | null> {
+    if (!user) throw new Error("user_required");
+    const saved = await this.store.get(WORKFLOW_SHIFT, user);
+    return validateWorkflowShift(saved === null ? null : JSON.parse(saved));
   }
 
   async getLoraHistory(user: string): Promise<Array<{ id: string; name: string; url: string }>> {

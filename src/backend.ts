@@ -167,6 +167,8 @@ spindle.onFrontendMessage(async (payload: any, userId?: string) => {
           result = { url: entry.url }; break;
         }
         case "automation_workflow_lora_save": await automation.saveWorkflowLora(userId, payload.lora); result = { saved: true }; break;
+        case "automation_workflow_shift_get": result = { shift: await automation.getWorkflowShift(userId) }; break;
+        case "automation_workflow_shift_save": await automation.saveWorkflowShift(userId, payload.shift); result = { saved: true }; break;
         case "automation_workflow_lora_options": {
           const response = await spindle.cors(`${DEFAULT_GATEWAY_URL}/object_info/LoraLoaderModelOnly`, { method: "GET" });
           if (response.status !== 200) throw new Error("workflow_worker_unreachable");
@@ -176,14 +178,15 @@ spindle.onFrontendMessage(async (payload: any, userId?: string) => {
         case "automation_workflow_download": {
           const inventory: Record<string, unknown> = {};
           const lora = await automation.getWorkflowLora(userId);
-          for (const node of ["UNETLoader", "CLIPLoader", "VAELoader", ...(lora.name ? ["LoraLoaderModelOnly"] : [])]) {
+          const shift = await automation.getWorkflowShift(userId);
+          for (const node of ["UNETLoader", "CLIPLoader", "VAELoader", ...(lora.name ? ["LoraLoaderModelOnly"] : []), ...(shift !== null ? ["ModelSamplingAuraFlow"] : [])]) {
             const response = await spindle.cors(`${DEFAULT_GATEWAY_URL}/object_info/${node}`, { method: "GET" });
             if (response.status !== 200) throw new Error("workflow_worker_unreachable");
             let data: any;
             try { data = JSON.parse(response.body); } catch { throw new Error("workflow_inventory_invalid"); }
             inventory[node] = data?.[node];
           }
-          result = { workflow: workflowFromInventory(inventory, lora) };
+          result = { workflow: workflowFromInventory(inventory, lora, shift) };
           break;
         }
         case "automation_workbook_info":

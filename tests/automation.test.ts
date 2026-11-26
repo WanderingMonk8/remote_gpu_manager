@@ -6,6 +6,19 @@ const secrets: AutomationSecrets = { controlToken: "control", clientId: "id", cl
   refreshToken: "refresh", tailnetKey: "ts-secret", basicUser: "user", basicPass: "password" };
 
 describe("automation controller", () => {
+  test("persists optional workflow shift separately per user across reinstalls", async () => {
+    const values = new Map<string, string>();
+    const store = { async get(k: string, u: string) { return values.get(`${u}:${k}`) ?? null; }, async put(k: string, v: string, u: string) { values.set(`${u}:${k}`, v); } };
+    const controller = new AutomationController(store, async () => ({}));
+    expect(await controller.getWorkflowShift("alice")).toBeNull();
+    await controller.saveWorkflowShift("alice", 5.25);
+    const again = new AutomationController(store, async () => ({}));
+    expect(await again.getWorkflowShift("alice")).toBe(5.25);
+    expect(await again.getWorkflowShift("bob")).toBeNull();
+    await expect(again.saveWorkflowShift("alice", 101)).rejects.toThrow("workflow_shift_invalid");
+    await again.saveWorkflowShift("alice", null);
+    expect(await again.getWorkflowShift("alice")).toBeNull();
+  });
   test("remembers only successful LoRA downloads from the startup request across reinstalls", async () => {
     const entries = new Map<string, string>();
     const store = { async get(key: string, user: string) { return entries.get(`${user}:${key}`) ?? null; },

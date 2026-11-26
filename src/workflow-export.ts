@@ -1,5 +1,10 @@
 ﻿/** Construct an importable API workflow only when the worker inventory is unambiguous. */
 export type WorkflowLora = { name: string; weight: number };
+export function validateWorkflowShift(value: unknown): number | null {
+  if (value === null) return null;
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 100) throw new Error("workflow_shift_invalid");
+  return value;
+}
 export function validateWorkflowLora(value: unknown): WorkflowLora {
   const item = value as any;
   if (!item || typeof item.name !== "string" || item.name.length > 512 || /[\x00-\x1f\x7f]/.test(item.name) ||
@@ -11,8 +16,9 @@ export function workerLoraOptions(info: any): string[] {
   if (!Array.isArray(options) || options.length > 10000 || options.some(name => typeof name !== "string" || name.length > 512 || /[\x00-\x1f\x7f]/.test(name))) throw new Error("workflow_lora_inventory_invalid");
   return options;
 }
-export function workflowFromInventory(info: Record<string, any>, lora: WorkflowLora = { name: "", weight: 1 }) {
+export function workflowFromInventory(info: Record<string, any>, lora: WorkflowLora = { name: "", weight: 1 }, shift: number | null = null) {
   lora = validateWorkflowLora(lora);
+  shift = validateWorkflowShift(shift);
   const choices = (node: string, field: string): string[] => {
     const values = info[node]?.input?.required?.[field]?.[0];
     if (!Array.isArray(values) || values.some(value => typeof value !== "string")) throw new Error("workflow_inventory_invalid");
@@ -25,6 +31,7 @@ export function workflowFromInventory(info: Record<string, any>, lora: WorkflowL
   const anima = encoders.includes("qwen_3_06b_base.safetensors") && vaes.includes("qwen_image_vae.safetensors");
   const moss = encoders.includes("qwen3.5_9b_w4a8_gptq.safetensors") && vaes.includes("flux2-vae_small.safetensors");
   if (anima === moss) throw new Error("workflow_family_ambiguous");
+  if (anima && shift !== null) throw new Error("workflow_shift_moss_only");
   const turbo = anima && /turbo/i.test(checkpoints[0]);
   const prefix = anima ? "anima" : "moss";
   const graph: Record<string, any> = {
@@ -44,6 +51,11 @@ export function workflowFromInventory(info: Record<string, any>, lora: WorkflowL
     if ((normalized.startsWith("moss/") || normalized.startsWith("anima/")) && !normalized.startsWith(`${prefix}/`)) throw new Error("workflow_lora_family_mismatch");
     graph["100"] = { class_type: "LoraLoaderModelOnly", inputs: { model: ["1", 0], lora_name: lora.name, strength_model: lora.weight } };
     graph["7"].inputs.model = ["100", 0];
+  }
+  if (shift !== null) {
+    if (!info.ModelSamplingAuraFlow) throw new Error("workflow_shift_node_missing");
+    graph["101"] = { class_type: "ModelSamplingAuraFlow", inputs: { model: graph["7"].inputs.model, shift } };
+    graph["7"].inputs.model = ["101", 0];
   }
   return graph;
 }

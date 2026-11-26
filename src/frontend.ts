@@ -82,6 +82,9 @@ export function setup(ctx: SpindleFrontendContext) {
       <details><summary>Advanced workbook startup settings</summary>
         <p>Saved for future starts. Changes do not modify an already running worker. Choose the matching model and workflow in Lumiverse separately. BF16 weights need more memory. Anima 2.9B is a community model and requires a recent ComfyUI. Anima weights are licensed for non-commercial use.</p>
         <div class="rgm-workbook-settings"></div>
+        <label>MOSS shift in downloaded workflow (optional)<input class="rgm-workflow-shift" type="number" min="0" max="100" step="0.01" placeholder="Model default (normally 5)" disabled /></label>
+        <p>Leave blank to use the model default. Applies to newly downloaded MOSS workflows; re-import the workflow into Lumiverse after changing it.</p>
+        <p class="rgm-workflow-shift-status" role="status">Loading shift setting...</p>
         <div class="rgm-civitai-settings" hidden>
           <details><summary>Civitai API token</summary>
         <p>The API token is optional and saved privately. Leave the field blank to keep the saved token.</p>
@@ -187,6 +190,21 @@ export function setup(ctx: SpindleFrontendContext) {
     send(action, value());
   }
   const workflowLora = drawer.root.querySelector(".rgm-workflow-lora") as HTMLSelectElement;
+  const workflowShift = drawer.root.querySelector(".rgm-workflow-shift") as HTMLInputElement;
+  const workflowShiftStatus = drawer.root.querySelector(".rgm-workflow-shift-status") as HTMLParagraphElement;
+  let workflowShiftSaved = false, workflowShiftDirty = false, shiftVersion = 0, submittedShiftVersion = -1;
+  workflowShift.addEventListener("input", () => {
+    workflowShiftDirty = true; workflowShiftSaved = false;
+    const version = ++shiftVersion;
+    const shift = workflowShift.value === "" ? null : Number(workflowShift.value);
+    if (shift !== null && (!Number.isFinite(shift) || shift < 0 || shift > 100)) {
+      const pending = saves.get("automation_workflow_shift_save");
+      if (pending) { pending.pending = null; if (pending.timer) clearTimeout(pending.timer); }
+      workflowShiftStatus.textContent = "Enter a shift between 0 and 100, or leave it blank."; return;
+    }
+    workflowShiftStatus.textContent = "Saving shift...";
+    queueSave("automation_workflow_shift_save", () => { submittedShiftVersion = version; return { shift }; }, AUTOSAVE_DELAY_MS);
+  });
   const workflowLoraWeight = drawer.root.querySelector(".rgm-workflow-lora-weight") as HTMLInputElement;
   const workflowLoraStatus = drawer.root.querySelector(".rgm-workflow-lora-status") as HTMLParagraphElement;
   let workflowLoraSaved = false;
@@ -450,6 +468,7 @@ export function setup(ctx: SpindleFrontendContext) {
   const workflowDownloadStatus = drawer.root.querySelector(".rgm-workflow-download-status") as HTMLParagraphElement;
   drawer.root.querySelector(".rgm-workflow-download")?.addEventListener("click", () => {
     if (!workflowLoraSaved) { workflowDownloadStatus.textContent = "Wait for the LoRA setting to save or correct its value."; return; }
+    if (!workflowShiftSaved) { workflowDownloadStatus.textContent = "Wait for the shift setting to save or correct its value."; return; }
     workflowDownloadStatus.textContent = "Checking the worker's model...";
     send("automation_workflow_download");
   });
@@ -482,6 +501,19 @@ export function setup(ctx: SpindleFrontendContext) {
         if (!urls.includes(payload.result.url)) { urls.push(payload.result.url); input.value = urls.join(", "); settingsDirty = true; saveWorkbookSettings(); }
         settingsStatus.textContent = "Saved LoRA added for the next startup.";
       } else settingsStatus.textContent = "Could not add the saved LoRA.";
+      return;
+    }
+    if (payload?.action === "automation_workflow_shift_get") {
+      if (payload.type === "automation_result" && !workflowShiftDirty) {
+        workflowShift.value = payload.result.shift === null ? "" : String(payload.result.shift);
+        workflowShift.disabled = false; workflowShiftSaved = true; workflowShiftStatus.textContent = "Saved shift setting loaded.";
+      } else if (payload.type === "automation_error") workflowShiftStatus.textContent = "Could not load shift setting; reopen the panel to retry.";
+      return;
+    }
+    if (payload?.action === "automation_workflow_shift_save") {
+      const entry = saves.get("automation_workflow_shift_save");
+      workflowShiftSaved = payload.type === "automation_result" && !entry?.pending && submittedShiftVersion === shiftVersion;
+      if (submittedShiftVersion === shiftVersion || entry?.pending) workflowShiftStatus.textContent = payload.type === "automation_error" ? "Could not save shift; change it to retry." : workflowShiftSaved ? "Shift setting saved." : "Saving shift...";
       return;
     }
     if (payload?.action === "automation_workflow_lora_get") {
@@ -533,6 +565,8 @@ export function setup(ctx: SpindleFrontendContext) {
           workflow_lora_missing: "The saved LoRA is not installed on this worker. Load installed LoRAs and choose another.",
           workflow_lora_family_mismatch: "The saved LoRA belongs to a different model family.",
           workflow_lora_inventory_invalid: "Could not read the worker's LoRA inventory.",
+          workflow_shift_moss_only: "Custom shift is available for MOSS workflows. Clear it to export an Anima workflow.",
+          workflow_shift_node_missing: "The worker does not provide ModelSamplingAuraFlow. Update ComfyUI or clear the shift setting.",
         };
         workflowDownloadStatus.textContent = messages[payload.error] ?? "Could not create a workflow from this worker.";
       }
@@ -785,6 +819,7 @@ export function setup(ctx: SpindleFrontendContext) {
 
   send("automation_last_startup_get");
   send("automation_workflow_lora_get");
+  send("automation_workflow_shift_get");
   send("automation_lora_history_get");
   send("automation_civitai_selection_get");
   send("automation_civitai_token_status");

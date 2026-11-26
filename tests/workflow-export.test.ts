@@ -29,4 +29,17 @@ describe("worker workflow export", () => {
     expect(() => workflowFromInventory(inventory(["one", "two"], ["qwen_3_06b_base.safetensors"], ["qwen_image_vae.safetensors"]))).toThrow("workflow_model_ambiguous");
     expect(() => workflowFromInventory(inventory(["one"], [], []))).toThrow("workflow_family_ambiguous");
   });
+  test("adds the MOSS shift node after the selected LoRA, leaving defaults untouched", () => {
+    const data: Record<string, any> = inventory(["moss.safetensors"], ["qwen3.5_9b_w4a8_gptq.safetensors"], ["flux2-vae_small.safetensors"]);
+    data.LoraLoaderModelOnly = { input: { required: { lora_name: [["moss/example.safetensors"]] } } };
+    data.ModelSamplingAuraFlow = { input: { required: {} } };
+    const lora = { name: "moss/example.safetensors", weight: 1 };
+    const graph = workflowFromInventory(data, lora, 5);
+    expect(graph["101"]).toEqual({ class_type: "ModelSamplingAuraFlow", inputs: { model: ["100", 0], shift: 5 } });
+    expect(graph["7"].inputs.model).toEqual(["101", 0]);
+    expect(workflowFromInventory(data, lora)["101"]).toBeUndefined();
+    expect(() => workflowFromInventory(data, lora, -1)).toThrow("workflow_shift_invalid");
+    const anima = inventory(["anima"], ["qwen_3_06b_base.safetensors"], ["qwen_image_vae.safetensors"]);
+    expect(() => workflowFromInventory(anima, undefined, 5)).toThrow("workflow_shift_moss_only");
+  });
 });
