@@ -421,6 +421,15 @@ def bootstrap_runtime(args, cells, name, runtime, hooks=None):
 
     if hooks is not None:
         hooks["state"] = dump_state_data(ws, session_id)
+        ok, _, report = execute_live(ws, session_id, "import json; print('RGM_LORA_REPORT:' + json.dumps(globals().get('RGM_LORA_INSTALLED', [])))", timeout=30, echo=False)
+        match = re.search(r"RGM_LORA_REPORT:(\[[^\n]*\])", report or "") if ok else None
+        if match:
+            try:
+                entries = json.loads(match.group(1))
+                if isinstance(entries, list):
+                    hooks["lora_installed"] = entries
+            except (ValueError, TypeError):
+                pass
     elif not args.no_state:
         saved = dump_state(ws, session_id, Path(args.state_dir))
         print(f"\n[5c] tailnet state: saved {saved} file(s) to {args.state_dir}")

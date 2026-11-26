@@ -62,6 +62,8 @@ def main():
         if code != 0 or not hooks.get("funnel") or not hooks.get("state", {}).get("tailscaled.state"):
             raise ValueError("bootstrap failed")
         response = {"ok": True, "funnel": hooks["funnel"], "state": hooks["state"], "kernelId": hooks["kernel_id"]}
+        if "lora_installed" in hooks:
+            response["loraInstalled"] = hooks["lora_installed"]
     except Exception:
         response = {"ok": False, "error": "bootstrap_failed"}
     sys.stdout.write(json.dumps(response, separators=(",", ":")) + "\n")

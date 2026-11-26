@@ -6,6 +6,25 @@ const secrets: AutomationSecrets = { controlToken: "control", clientId: "id", cl
   refreshToken: "refresh", tailnetKey: "ts-secret", basicUser: "user", basicPass: "password" };
 
 describe("automation controller", () => {
+  test("remembers only successful LoRA downloads from the startup request across reinstalls", async () => {
+    const entries = new Map<string, string>();
+    const store = { async get(key: string, user: string) { return entries.get(`${user}:${key}`) ?? null; },
+      async put(key: string, value: string, user: string) { entries.set(`${user}:${key}`, value); } };
+    const good = "https://civitai.red/api/download/models/123?fileId=456";
+    const failed = "https://example.com/failed.safetensors";
+    entries.set("owner:automation-lora-pending-v1", JSON.stringify([good, failed]));
+    const call = async (path: string, method: string) => method === "GET" && path.endsWith("bootstrap")
+      ? { status: "finished", httpStatus: 200, result: { ok: true, workerHealthy: true, state: { "tailscaled.state": "state" }, loraInstalled: [
+        { url: good, name: "actual-lora.safetensors" }, { url: "https://example.com/unrequested", name: "other.safetensors" },
+      ] } } : {};
+    const controller = new AutomationController(store, call);
+    await controller.save("owner", secrets);
+    await controller.poll("owner");
+    const history = await new AutomationController(store, call).getLoraHistory("owner");
+    expect(history.map(entry => [entry.name, entry.url])).toEqual([["actual-lora.safetensors", good]]);
+    expect(history[0].id).toHaveLength(64);
+    expect(await controller.getLoraHistory("other")).toEqual([]);
+  });
   test("new model choices map to supported cache files and require gateway v3", () => {
     const models = ["MOSS SFT BF16", "MOSS Base BF16", "Anima Preview", "Anima Preview 2", "Anima Preview 3 Base", "Anima 2.9B Preview BF16", "Anima 2.9B Preview INT8"];
     const field = workbookSettings.find(field => field.key === "MODEL_CHOICE")!;

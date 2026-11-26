@@ -20,4 +20,9 @@ describe("bootstrap worker stdio", () => {
     const script = `console.error('password-secret'); console.log('proxy-secret'); process.exit(1)`;
     await expect(runBootstrap([process.execPath, "-e", script], request, 5000)).rejects.toThrow("bootstrap_failed");
   });
+  test("passes the successful LoRA report through the worker bridge", async () => {
+    const script = `console.log(JSON.stringify({ok:true, funnel:'https://worker.example', state:{}, kernelId:'kernel-1', loraInstalled:[{url:'https://civitai.red/api/download/models/1',name:'model.safetensors'}]}))`;
+    const result = await runBootstrap([process.execPath, "-e", script], request, 5000);
+    expect(result.loraInstalled).toEqual([{ url: "https://civitai.red/api/download/models/1", name: "model.safetensors" }]);
+  });
 });

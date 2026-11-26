@@ -159,6 +159,13 @@ spindle.onFrontendMessage(async (payload: any, userId?: string) => {
           await automation.saveWorkbookSettings(userId, payload.settings);
           result = { saved: true }; break;
         case "automation_workflow_lora_get": result = { lora: await automation.getWorkflowLora(userId) }; break;
+        case "automation_lora_history_get":
+          result = { entries: (await automation.getLoraHistory(userId)).map(({ id, name }) => ({ id, name })) }; break;
+        case "automation_lora_history_url": {
+          const entry = (await automation.getLoraHistory(userId)).find(item => item.id === payload.id);
+          if (!entry) throw new Error("lora_history_not_found");
+          result = { url: entry.url }; break;
+        }
         case "automation_workflow_lora_save": await automation.saveWorkflowLora(userId, payload.lora); result = { saved: true }; break;
         case "automation_workflow_lora_options": {
           const response = await spindle.cors(`${DEFAULT_GATEWAY_URL}/object_info/LoraLoaderModelOnly`, { method: "GET" });

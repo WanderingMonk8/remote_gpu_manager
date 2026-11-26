@@ -301,7 +301,16 @@ export function setup(ctx: SpindleFrontendContext) {
     if (field.key === "LORA_URLS") {
       const section = document.createElement("details");
       const heading = document.createElement("summary"); heading.textContent = "LoRA settings";
-      section.appendChild(heading); section.appendChild(label);
+      const savedLabel = document.createElement("label"); savedLabel.textContent = "Previously installed LoRAs";
+      const saved = document.createElement("select"); saved.className = "rgm-lora-history";
+      const placeholder = document.createElement("option"); placeholder.value = ""; placeholder.textContent = "Choose a saved LoRA to add"; saved.appendChild(placeholder);
+      saved.addEventListener("change", () => { if (saved.value) send("automation_lora_history_url", { id: saved.value }); });
+      savedLabel.appendChild(saved);
+      const savedHelp = document.createElement("p"); savedHelp.textContent = "Successful downloads appear here after startup with the updated gateway. Choose one to add it for future starts.";
+      const urlDetails = document.createElement("details");
+      const urlHeading = document.createElement("summary"); urlHeading.textContent = "Add or edit LoRA download URLs";
+      urlDetails.appendChild(urlHeading); urlDetails.appendChild(label);
+      section.appendChild(heading); section.appendChild(savedLabel); section.appendChild(savedHelp); section.appendChild(urlDetails);
       section.appendChild(drawer.root.querySelector(".rgm-workflow-lora-controls")!);
       settingsRoot.appendChild(section);
     } else settingsRoot.appendChild(label);
@@ -457,6 +466,23 @@ export function setup(ctx: SpindleFrontendContext) {
     if (queued?.active && (payload.type === "automation_result" || payload.type === "automation_error")) {
       queued.active = false;
       if (queued.pending) setTimeout(() => flushSave(payload.action), 0);
+    }
+    if (payload?.action === "automation_lora_history_get") {
+      const saved = settingsRoot.querySelector(".rgm-lora-history") as HTMLSelectElement;
+      saved.replaceChildren();
+      const placeholder = document.createElement("option"); placeholder.value = ""; placeholder.textContent = payload.type === "automation_error" ? "Could not load saved LoRAs" : payload.result.entries.length ? "Choose a saved LoRA to add" : "No successfully downloaded LoRAs yet"; saved.appendChild(placeholder);
+      if (payload.type === "automation_result") for (const item of payload.result.entries) { const option = document.createElement("option"); option.value = item.id; option.textContent = item.name; saved.appendChild(option); }
+      return;
+    }
+    if (payload?.action === "automation_lora_history_url") {
+      const saved = settingsRoot.querySelector(".rgm-lora-history") as HTMLSelectElement; saved.value = "";
+      if (payload.type === "automation_result" && typeof payload.result.url === "string") {
+        const input = settingsRoot.querySelector('[data-workbook-setting="LORA_URLS"]') as HTMLInputElement;
+        const urls = input.value.replace(/\n/g, ",").split(",").map(url => url.trim()).filter(Boolean);
+        if (!urls.includes(payload.result.url)) { urls.push(payload.result.url); input.value = urls.join(", "); settingsDirty = true; saveWorkbookSettings(); }
+        settingsStatus.textContent = "Saved LoRA added for the next startup.";
+      } else settingsStatus.textContent = "Could not add the saved LoRA.";
+      return;
     }
     if (payload?.action === "automation_workflow_lora_get") {
       if (payload.type === "automation_result" && !workflowLoraDirty) {
@@ -720,6 +746,7 @@ export function setup(ctx: SpindleFrontendContext) {
       automationStatus.textContent = `${payload.action}: ${display}${result.error ? ` (${result.error})` : ""}${result.workerHealthy === true ? " — worker healthy" : result.workerHealthy === false ? " — worker health check failed" : ""}`;
       if (payload.action === "automation_poll" && result.status === "running") automationStatus.textContent = "Colab startup is still in progress. Checking again in 10 seconds.";
       if (payload.action === "automation_poll" && result.status === "finished" && result.workerHealthy === true) automationStatus.textContent = "Colab is ready; worker is healthy.";
+      if (payload.action === "automation_poll" && result.status === "finished") send("automation_lora_history_get");
       if (payload.action === "automation_poll" && result.status === "failed") {
         automationStatus.textContent = `The previous Colab startup failed: ${startupFailureText(result.error ?? "bootstrap_failed")} Check runtime before trying again.`;
         send("automation_last_startup_get");
@@ -758,6 +785,7 @@ export function setup(ctx: SpindleFrontendContext) {
 
   send("automation_last_startup_get");
   send("automation_workflow_lora_get");
+  send("automation_lora_history_get");
   send("automation_civitai_selection_get");
   send("automation_civitai_token_status");
   send("automation_picker_config_get");

@@ -12,6 +12,7 @@ export interface BootstrapResult {
   funnel: string;
   state: Record<string, string>;
   kernelId: string;
+  loraInstalled?: Array<{ url: string; name: string }>;
 }
 
 export async function runBootstrap(
@@ -45,7 +46,10 @@ export async function runBootstrap(
         typeof result.kernelId !== "string" || !/^[a-zA-Z0-9-]{1,100}$/.test(result.kernelId)) {
       throw new Error("bootstrap_invalid_response");
     }
-    return { funnel: result.funnel, state: result.state, kernelId: result.kernelId };
+    const loraInstalled = result.loraInstalled;
+    if (loraInstalled !== undefined && (!Array.isArray(loraInstalled) || loraInstalled.length > 100 || loraInstalled.some((item: any) =>
+      typeof item?.url !== "string" || item.url.length > 8192 || typeof item.name !== "string" || item.name.length > 512))) throw new Error("bootstrap_invalid_response");
+    return { funnel: result.funnel, state: result.state, kernelId: result.kernelId, ...(loraInstalled ? { loraInstalled } : {}) };
   } catch {
     throw new Error("bootstrap_failed");
   } finally {

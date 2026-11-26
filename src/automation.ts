@@ -30,6 +30,8 @@ const CIVITAI_HISTORY = "automation-civitai-history-v1";
 const CIVITAI_TOKEN = "automation-civitai-token-v1";
 const WORKBOOK_SETTINGS = "automation-workbook-settings-v1";
 const WORKFLOW_LORA = "automation-workflow-lora-v1";
+const LORA_HISTORY = "automation-lora-history-v1";
+const LORA_PENDING = "automation-lora-pending-v1";
 const LAST_STARTUP = "automation-last-startup-v1";
 const IDLE_CHOICES = new Set([0, 5, 10, 15, 30]);
 export type DriveFile = { id: string; name: string };
@@ -152,6 +154,32 @@ export class AutomationController {
     if (!user) throw new Error("user_required");
     const saved = await this.store.get(WORKFLOW_LORA, user);
     return validateWorkflowLora(saved ? JSON.parse(saved) : { name: "", weight: 1 });
+  }
+
+  async getLoraHistory(user: string): Promise<Array<{ id: string; name: string; url: string }>> {
+    if (!user) throw new Error("user_required");
+    const raw = await this.store.get(LORA_HISTORY, user);
+    const entries = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(entries) || entries.length > 100) throw new Error("lora_history_invalid");
+    return entries;
+  }
+
+  private async recordLoraHistory(user: string, installed: unknown): Promise<void> {
+    if (!Array.isArray(installed)) return;
+    const pending = await this.store.get(LORA_PENDING, user);
+    if (!pending) return;
+    const allowed = new Set(JSON.parse(pending) as string[]);
+    const history = await this.getLoraHistory(user);
+    for (const item of installed.slice(0, 100)) {
+      if (typeof item?.url !== "string" || !allowed.has(item.url) || typeof item.name !== "string" ||
+          item.name.length > 255 || !/^[^/\\\x00-\x1f\x7f]+\.safetensors$/i.test(item.name)) continue;
+      const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(item.url));
+      const id = Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, "0")).join("");
+      const old = history.findIndex(entry => entry.id === id);
+      if (old >= 0) history.splice(old, 1);
+      history.unshift({ id, name: item.name, url: item.url });
+    }
+    await this.store.put(LORA_HISTORY, JSON.stringify(history.slice(0, 100)).replace(/[\u007f-\uffff]/g, ch => `\\u${ch.charCodeAt(0).toString(16).padStart(4, "0")}`), user);
   }
 
   async saveWorkbookSettings(user: string, input: unknown): Promise<void> {
@@ -297,6 +325,7 @@ export class AutomationController {
     if (filesToRestore.length) await this.call("/gateway/v1/runtime/cache-check", "POST", s.controlToken, { files: filesToRestore });
     const idleMinutes = await this.getIdlePreference(user);
     if (idleMinutes !== null) await this.call("/gateway/v1/runtime/idle", "PUT", s.controlToken, { minutes: idleMinutes });
+    await this.store.put(LORA_PENDING, JSON.stringify(String(workbookSettings.LORA_URLS).replace(/\n/g, ",").split(",").map(url => url.trim()).filter(Boolean)), user);
     await this.call("/gateway/v1/runtime/bootstrap", "POST", s.controlToken,
       { allocate: choice ? { accelerator: choice.accelerator, shape: choice.shape, confirm_non_default: choice.confirmNonDefault } : {},
         ts_authkey: s.tailnetKey, basic_user: s.basicUser, basic_pass: s.basicPass, state, drive_files: filesToRestore, workbook, ...(custom ? { civitai: { ...custom, token: await this.civitaiToken(user) } } : {}) });
@@ -328,6 +357,7 @@ export class AutomationController {
     }
     // Save before acknowledging: an enclave failure must leave the job recoverable.
     await this.store.put(STATE, JSON.stringify(job.result.state), user);
+    await this.recordLoraHistory(user, job.result.loraInstalled);
     await this.call("/gateway/v1/runtime/bootstrap", "DELETE", controlToken);
     return { status: "finished", workerHealthy: job.result.workerHealthy === true,
       ...(typeof job.result.error === "string" && /^[a-z_]+$/.test(job.result.error) ? { error: job.result.error } : {}) };

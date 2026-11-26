@@ -40,7 +40,10 @@ async function runBootstrap(command, request, timeoutMs = 30 * 60000) {
     if (result?.ok !== true || typeof result.funnel !== "string" || !result.state || typeof result.state !== "object" || Array.isArray(result.state) || typeof result.kernelId !== "string" || !/^[a-zA-Z0-9-]{1,100}$/.test(result.kernelId)) {
       throw new Error("bootstrap_invalid_response");
     }
-    return { funnel: result.funnel, state: result.state, kernelId: result.kernelId };
+    const loraInstalled = result.loraInstalled;
+    if (loraInstalled !== undefined && (!Array.isArray(loraInstalled) || loraInstalled.length > 100 || loraInstalled.some((item) => typeof item?.url !== "string" || item.url.length > 8192 || typeof item.name !== "string" || item.name.length > 512)))
+      throw new Error("bootstrap_invalid_response");
+    return { funnel: result.funnel, state: result.state, kernelId: result.kernelId, ...loraInstalled ? { loraInstalled } : {} };
   } catch {
     throw new Error("bootstrap_failed");
   } finally {
@@ -1097,7 +1100,7 @@ async function bootstrapRuntime(req) {
       body: JSON.stringify({ url: result.funnel, basic_auth: `${basic_user}:${basic_pass}` })
     }), "/gateway/v1/upstream");
     if (!adopted.ok) {
-      return Response.json({ ok: true, workerHealthy: false, error: "bootstrap_endpoint_invalid", state: result.state }, { headers: { "Cache-Control": "no-store" } });
+      return Response.json({ ok: true, workerHealthy: false, error: "bootstrap_endpoint_invalid", state: result.state, loraInstalled: result.loraInstalled }, { headers: { "Cache-Control": "no-store" } });
     }
     let workerHealthy = false;
     try {
@@ -1108,7 +1111,7 @@ async function bootstrapRuntime(req) {
       }
     } catch {}
     noteWork();
-    return Response.json({ ok: true, workerHealthy, upstream: GATEWAY_UPSTREAM, state: result.state }, { headers: { "Cache-Control": "no-store" } });
+    return Response.json({ ok: true, workerHealthy, upstream: GATEWAY_UPSTREAM, state: result.state, loraInstalled: result.loraInstalled }, { headers: { "Cache-Control": "no-store" } });
   } catch (err) {
     if (err instanceof HttpError)
       throw err;

@@ -961,7 +961,7 @@ async function bootstrapRuntime(req: Request): Promise<Response> {
     }), "/gateway/v1/upstream");
     if (!adopted.ok) {
       // The node identity must remain recoverable even if URL adoption fails.
-      return Response.json({ ok: true, workerHealthy: false, error: "bootstrap_endpoint_invalid", state: result.state },
+      return Response.json({ ok: true, workerHealthy: false, error: "bootstrap_endpoint_invalid", state: result.state, loraInstalled: result.loraInstalled },
         { headers: { "Cache-Control": "no-store" } });
     }
     let workerHealthy = false;
@@ -977,7 +977,7 @@ async function bootstrapRuntime(req: Request): Promise<Response> {
     }
     noteWork();
     // The authenticated caller must put this node identity into the enclave.
-    return Response.json({ ok: true, workerHealthy, upstream: GATEWAY_UPSTREAM, state: result.state },
+    return Response.json({ ok: true, workerHealthy, upstream: GATEWAY_UPSTREAM, state: result.state, loraInstalled: result.loraInstalled },
       { headers: { "Cache-Control": "no-store" } });
   } catch (err) {
     if (err instanceof HttpError) throw err;
