@@ -45,13 +45,25 @@ export class GoogleReconnect {
     if (!entry || entry.expires < Date.now()) throw new Error("google_reconnect_expired");
     if (params.error || !params.code || params.code.length > 4096) throw new Error("google_reconnect_cancelled");
     const body = new URLSearchParams({ code: params.code, client_id: entry.clientId, client_secret: entry.secret, redirect_uri: entry.redirect, code_verifier: entry.verifier, grant_type: "authorization_code" }).toString();
-    const response = await this.deps.request("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body });
+    let response: Response;
+    try { response = await this.deps.request("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body }); }
+    catch { throw new Error("google_reconnect_token_network"); }
     let tokens: any;
     try { tokens = JSON.parse(response.body); } catch { throw new Error("google_reconnect_exchange_failed"); }
-    if (response.status !== 200 || typeof tokens.access_token !== "string" || typeof tokens.refresh_token !== "string" || !tokens.refresh_token || typeof tokens.scope !== "string" || !SCOPES.every(scope => tokens.scope.split(/\s+/).includes(scope))) throw new Error("google_reconnect_exchange_failed");
-    const check = await this.deps.request("https://colaboratory.googleapis.com/v1beta/runtimespecs", { method: "GET", headers: { Authorization: `Bearer ${tokens.access_token}` } });
-    if (check.status !== 200) throw new Error("google_reconnect_colab_check_failed");
-    await this.deps.commit(entry.user, entry.clientId, entry.secret, tokens.refresh_token);
+    if (response.status !== 200) {
+      if (tokens?.error === "invalid_client") throw new Error("google_reconnect_invalid_client");
+      if (tokens?.error === "invalid_grant") throw new Error("google_reconnect_invalid_grant");
+      throw new Error("google_reconnect_exchange_failed");
+    }
+    if (typeof tokens.access_token !== "string" || !tokens.access_token) throw new Error("google_reconnect_access_missing");
+    if (typeof tokens.refresh_token !== "string" || !tokens.refresh_token) throw new Error("google_reconnect_refresh_missing");
+    if (typeof tokens.scope !== "string" || !SCOPES.every(scope => tokens.scope.split(/\s+/).includes(scope))) throw new Error("google_reconnect_scope_missing");
+    let check: Response;
+    try { check = await this.deps.request("https://colaboratory.googleapis.com/v1beta/runtimespecs", { method: "GET", headers: { Authorization: `Bearer ${tokens.access_token}` } }); }
+    catch { throw new Error("google_reconnect_colab_network"); }
+    if (check.status !== 200) throw new Error(check.status === 401 || check.status === 403 ? "google_reconnect_colab_denied" : "google_reconnect_colab_check_failed");
+    try { await this.deps.commit(entry.user, entry.clientId, entry.secret, tokens.refresh_token); }
+    catch { throw new Error("google_reconnect_save_failed"); }
     return entry.user;
   }
 }

@@ -521,7 +521,21 @@ export function setup(ctx: SpindleFrontendContext) {
       if (payload.type === "automation_result") {
         googleStatus.textContent = "Google authorization verified and saved. Check runtime before starting Colab.";
         send("automation_credentials_status");
-      } else googleStatus.textContent = "Google sign-in did not complete or Colab access could not be verified. Your existing credentials were not replaced; check the web client, permissions, and callback URL, then try again.";
+      } else {
+        const errors: Record<string, string> = {
+          google_reconnect_cancelled: "Google sign-in was cancelled or denied.",
+          google_reconnect_expired: "The sign-in request expired. Prepare a new sign-in.",
+          google_reconnect_invalid_client: "Google rejected the web client ID or secret. Enter the secret belonging to the web client saved in Drive model cache.",
+          google_reconnect_invalid_grant: "Google rejected the authorization code. Prepare a new sign-in and complete it once.",
+          google_reconnect_refresh_missing: "Google did not return a refresh token. Prepare a new sign-in and approve the requested permissions.",
+          google_reconnect_scope_missing: "Google did not grant both Colab and Drive file permissions. Prepare a new sign-in and grant both.",
+          google_reconnect_colab_denied: "Google accepted sign-in but denied Colab API access. Check that the Colab API is enabled for this web client's project and that you selected the correct account.",
+          google_reconnect_colab_network: "Could not contact the Colab API to verify the authorization.",
+          google_reconnect_token_network: "Could not contact Google to complete sign-in.",
+          google_reconnect_save_failed: "Google authorization succeeded, but the credentials could not be saved.",
+        };
+        googleStatus.textContent = `${errors[payload.error] ?? "Google sign-in could not be completed or verified."} Check the credentials before starting Colab.`;
+      }
       return;
     }
     if (payload?.action === "automation_lora_history_get") {

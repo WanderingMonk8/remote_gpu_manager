@@ -34,10 +34,16 @@ describe("Google reconnect", () => {
     await flow.begin("alice", client, "", "https://app.example", callback);
     await expect(flow.finish({ state: "s1", error: "access_denied" })).rejects.toThrow("google_reconnect_cancelled");
     scope = scopes.split(" ")[0]; await flow.begin("alice", client, "", "https://app.example", callback);
-    await expect(flow.finish({ state: "s2", code: "code" })).rejects.toThrow("google_reconnect_exchange_failed");
+    await expect(flow.finish({ state: "s2", code: "code" })).rejects.toThrow("google_reconnect_scope_missing");
     scope = scopes; status = 403; await flow.begin("alice", client, "", "https://app.example", callback);
-    await expect(flow.finish({ state: "s3", code: "code" })).rejects.toThrow("google_reconnect_colab_check_failed");
+    await expect(flow.finish({ state: "s3", code: "code" })).rejects.toThrow("google_reconnect_colab_denied");
     expect(writes).toEqual([]);
     await expect(flow.begin("alice", client, "", "https://app.example/evil", callback)).rejects.toThrow("google_redirect_invalid");
+  });
+  test("reports a rejected web client without exposing Google's error details", async () => {
+    const flow = new GoogleReconnect({ state: async () => "state", getSecret: async () => "", commit: async () => { throw new Error("must not commit"); },
+      request: async () => ({ status: 401, body: JSON.stringify({ error: "invalid_client", error_description: "sensitive detail" }) }) });
+    await flow.begin("alice", client, "wrong-secret", "https://app.example", callback);
+    await expect(flow.finish({ state: "state", code: "code" })).rejects.toThrow("google_reconnect_invalid_client");
   });
 });

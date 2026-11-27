@@ -55,9 +55,10 @@ spindle.oauth.onCallback(async params => {
   try {
     const user = await googleReconnect.finish(params);
     spindle.sendToFrontend({ type: "automation_result", action: "automation_google_reconnected", result: { saved: true } }, user);
-  } catch {
-    if (pendingUser) spindle.sendToFrontend({ type: "automation_error", action: "automation_google_reconnected", error: "google_reconnect_failed" }, pendingUser);
-    throw new Error("google_reconnect_failed");
+  } catch (error) {
+    const code = error instanceof Error && /^google_reconnect_(expired|cancelled|token_network|exchange_failed|invalid_client|invalid_grant|access_missing|refresh_missing|scope_missing|colab_network|colab_denied|colab_check_failed|save_failed)$/.test(error.message) ? error.message : "google_reconnect_failed";
+    if (pendingUser) spindle.sendToFrontend({ type: "automation_error", action: "automation_google_reconnected", error: code }, pendingUser);
+    throw new Error(code);
   }
 });
 
