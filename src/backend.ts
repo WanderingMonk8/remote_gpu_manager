@@ -12,6 +12,7 @@ import { AutomationController } from "./automation";
 import { workflowFromInventory, workerLoraOptions } from "./workflow-export";
 import { bundledWorkbook } from "./workbook";
 import { parseCivitaiUrl, parseCivitaiVersion } from "./civitai";
+import { GoogleReconnect } from "./google-reconnect";
 declare const spindle: import("lumiverse-spindle-types").SpindleAPI;
 
 const DEFAULT_GATEWAY_URL = "http://127.0.0.1:8189";
@@ -33,6 +34,32 @@ const automation = new AutomationController(
     return data;
   },
 );
+
+const googleReconnect = new GoogleReconnect({
+  state: () => spindle.oauth.createState(),
+  getSecret: async (user, clientId) => {
+    const raw = await spindle.enclave.get("google-web-reconnect-v1", user);
+    if (!raw) return "";
+    const saved = JSON.parse(raw);
+    return saved.clientId === clientId && typeof saved.secret === "string" ? saved.secret : "";
+  },
+  commit: async (user, clientId, secret, refreshToken) => {
+    await spindle.enclave.put("google-web-reconnect-v1", JSON.stringify({ clientId, secret }), user);
+    await automation.save(user, { clientId, clientSecret: secret, refreshToken } as any);
+  },
+  request: async (url, options) => await spindle.cors(url, options) as { status: number; body: string },
+});
+
+spindle.oauth.onCallback(async params => {
+  const pendingUser = googleReconnect.pendingUser(params.state);
+  try {
+    const user = await googleReconnect.finish(params);
+    spindle.sendToFrontend({ type: "automation_result", action: "automation_google_reconnected", result: { saved: true } }, user);
+  } catch {
+    if (pendingUser) spindle.sendToFrontend({ type: "automation_error", action: "automation_google_reconnected", error: "google_reconnect_failed" }, pendingUser);
+    throw new Error("google_reconnect_failed");
+  }
+});
 
 async function civitaiMetadata(path: string, user: string): Promise<any> {
   if (!/^\/api\/v1\/(?:models|model-versions)\/[1-9]\d{0,14}$/.test(path)) throw new Error("civitai_url_invalid");
@@ -72,6 +99,11 @@ spindle.onFrontendMessage(async (payload: any, userId?: string) => {
       if (!userId) throw new Error("user_required");
       let result: unknown;
       switch (payload.type) {
+        case "automation_google_reconnect": {
+          const config = await automation.getPickerConfig(userId);
+          result = await googleReconnect.begin(userId, config?.clientId ?? "", payload.secret ?? "", payload.origin, spindle.oauth.getCallbackUrl());
+          break;
+        }
         case "automation_save":
           await automation.save(userId, payload.secrets);
           result = { saved: true };

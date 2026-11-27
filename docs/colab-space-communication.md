@@ -50,6 +50,19 @@ refuse a start before allocation until the gateway is updated.
 
 ## Start, check and stop
 
+- **Reconnect Google** in Automation credentials uses the saved Picker web OAuth
+  client. Register the exact redirect URI shown by the extension on that web
+  client in Google Cloud, and enter its web client secret on the first use.
+  The extension requests Colab and `drive.file` consent, validates the grants
+  and performs a read-only Colab API check before replacing runtime credentials.
+  The web client must belong to the intended Google Cloud project and the user
+  must select the intended Google account during consent. The extension's new
+  `oauth` permission must be approved during installation or update. The OAuth
+  callback and pending request are short-lived and do not survive a restart.
+  A successful reconnect saves the web client secret in the user's enclave;
+  subsequent reconnects can leave its field blank. This does not bypass Google
+  consent or prevent Google from revoking or expiring a refresh token.
+
 - **Start Colab** performs workbook and cache preflight. For gateway versions
   advertising `bootstrap_allocation: 1`, allocation and bootstrap run as one
   gateway-owned background job. The extension polls its result every 10 seconds.

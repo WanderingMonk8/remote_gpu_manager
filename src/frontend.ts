@@ -58,6 +58,15 @@ export function setup(ctx: SpindleFrontendContext) {
       <p>Credentials are saved in your encrypted enclave. Starting allocates a Colab runtime; stop it when finished.</p>
       <details><summary>Automation credentials</summary>
         <p>Credential fields stay blank for security even when saved. Leave a field blank to keep its saved value.</p>
+        <details><summary>Reconnect Google</summary>
+          <p>First save the Google web OAuth client ID in Drive model cache. In Google Cloud, add this exact URL to that web client's authorized redirect URIs:</p>
+          <p class="rgm-google-redirect"></p>
+          <label>Google web OAuth client secret<input class="rgm-google-web-secret" type="password" autocomplete="off" /></label>
+          <p>Enter the web client secret the first time; leave it blank on later reconnects. The secret is saved in your encrypted enclave only after authorization succeeds.</p>
+          <button class="rgm-google-reconnect" type="button">Prepare Google sign-in</button>
+          <p><a class="rgm-google-link" target="_blank" rel="noopener noreferrer" hidden>Open Google sign-in</a></p>
+          <p class="rgm-google-status" role="status"></p>
+        </details>
         <p class="rgm-credentials-status" role="status">Checking for saved credentials...</p>
         <label>Gateway control token<input data-secret="controlToken" type="password" autocomplete="off" /></label>
         <label>Google OAuth client ID<input data-secret="clientId" type="password" autocomplete="off" /></label>
@@ -143,7 +152,7 @@ export function setup(ctx: SpindleFrontendContext) {
   const lastStartupStatus = drawer.root.querySelector(".rgm-last-startup") as HTMLParagraphElement;
   const startupFailureText = (error: string) => error === "colab_no_runtimes"
     ? "Google reported that no runtime is currently available for the requested GPU. Try again later or choose another GPU."
-    : error === "auth_required" ? "Google authorization failed. The saved refresh token may have expired or been revoked, or the OAuth client may lack access. Reauthorize Google and update the automation credentials."
+    : error === "auth_required" ? "Google authorization failed. The saved refresh token may have expired or been revoked, or the OAuth client may lack access. Use Reconnect Google under Automation credentials."
     : error;
   const credentialsStatus = drawer.root.querySelector(".rgm-credentials-status") as HTMLParagraphElement | null;
   const driveStatus = drawer.root.querySelector(".rgm-drive-status") as HTMLParagraphElement | null;
@@ -173,6 +182,17 @@ export function setup(ctx: SpindleFrontendContext) {
   let pendingSecrets: Record<string, string> | null = null;
   let pickerDirty = false;
   const send = (type: string, extra: object = {}) => ctx.sendToBackend({ type, ...extra });
+  const googleRedirect = drawer.root.querySelector(".rgm-google-redirect") as HTMLParagraphElement;
+  const googleSecret = drawer.root.querySelector(".rgm-google-web-secret") as HTMLInputElement;
+  const googleLink = drawer.root.querySelector(".rgm-google-link") as HTMLAnchorElement;
+  const googleStatus = drawer.root.querySelector(".rgm-google-status") as HTMLParagraphElement;
+  googleRedirect.textContent = `${window.location.origin}/api/spindle-oauth/remote_gpu_manager/callback`;
+  drawer.root.querySelector(".rgm-google-reconnect")?.addEventListener("click", () => {
+    googleLink.hidden = true; googleLink.removeAttribute("href");
+    googleStatus.textContent = "Preparing Google sign-in...";
+    const secret = googleSecret.value; googleSecret.value = "";
+    send("automation_google_reconnect", { origin: window.location.origin, secret });
+  });
   // Serialize writes by action so a slower earlier request cannot overwrite a newer choice.
   const AUTOSAVE_DELAY_MS = 1000;
   const saves = new Map<string, { active: boolean; pending: (() => object) | null; timer?: ReturnType<typeof setTimeout> }>();
@@ -487,6 +507,23 @@ export function setup(ctx: SpindleFrontendContext) {
       queued.active = false;
       if (queued.pending) setTimeout(() => flushSave(payload.action), 0);
     }
+    if (payload?.action === "automation_google_reconnect") {
+      if (payload.type === "automation_result" && typeof payload.result?.url === "string" && payload.result.url.startsWith("https://accounts.google.com/o/oauth2/v2/auth?")) {
+        googleLink.href = payload.result.url; googleLink.hidden = false; googleStatus.textContent = "Open Google sign-in and approve the requested permissions. The link expires after 10 minutes.";
+      } else {
+        const errors: Record<string, string> = { google_web_client_required: "First save your Google web OAuth client ID under Drive model cache.", google_web_secret_required: "Enter your Google web OAuth client secret.", google_web_secret_invalid: "Check the web OAuth client secret.", google_redirect_invalid: "The current application origin cannot be used for Google sign-in." };
+        googleStatus.textContent = errors[payload.error] ?? "Could not prepare Google sign-in.";
+      }
+      return;
+    }
+    if (payload?.action === "automation_google_reconnected") {
+      googleLink.hidden = true; googleLink.removeAttribute("href");
+      if (payload.type === "automation_result") {
+        googleStatus.textContent = "Google authorization verified and saved. Check runtime before starting Colab.";
+        send("automation_credentials_status");
+      } else googleStatus.textContent = "Google sign-in did not complete or Colab access could not be verified. Your existing credentials were not replaced; check the web client, permissions, and callback URL, then try again.";
+      return;
+    }
     if (payload?.action === "automation_lora_history_get") {
       const saved = settingsRoot.querySelector(".rgm-lora-history") as HTMLSelectElement;
       saved.replaceChildren();
@@ -739,7 +776,7 @@ export function setup(ctx: SpindleFrontendContext) {
         missing_basic_pass: "Enter the tunnel Basic Auth password.",
         invalid_basic_user: "The tunnel Basic Auth username cannot contain spaces or a colon.",
         invalid_credentials: "Check the credential fields and try again.",
-        auth_required: "Google authorization failed. The saved refresh token may have expired or been revoked, or the OAuth client may lack access. Reauthorize Google and update the automation credentials.",
+        auth_required: "Google authorization failed. The saved refresh token may have expired or been revoked, or the OAuth client may lack access. Use Reconnect Google under Automation credentials.",
         recovery_runtime_present: "A manager runtime is still present. Stop it before recovery.",
         recovery_intent_required: "No recoverable allocation record was found.",
         civitai_metadata_changed: "Civitai changed this file?s metadata. Look up and save the version again before starting.",

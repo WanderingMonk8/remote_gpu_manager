@@ -8,7 +8,8 @@
   "description": "Runtime lifecycle, secure connectivity and remote asset management for authenticated remote ComfyUI GPU workers (MOSS / Anima families).",
   "permissions": [
     "cors_proxy",
-    "ui_panels"
+    "ui_panels",
+    "oauth"
   ],
   "entry_backend": "dist/backend.js",
   "entry_frontend": "dist/frontend.js",
