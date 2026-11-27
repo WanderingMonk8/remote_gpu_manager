@@ -143,6 +143,7 @@ export function setup(ctx: SpindleFrontendContext) {
   const lastStartupStatus = drawer.root.querySelector(".rgm-last-startup") as HTMLParagraphElement;
   const startupFailureText = (error: string) => error === "colab_no_runtimes"
     ? "Google reported that no runtime is currently available for the requested GPU. Try again later or choose another GPU."
+    : error === "auth_required" ? "Google authorization failed. The saved refresh token may have expired or been revoked, or the OAuth client may lack access. Reauthorize Google and update the automation credentials."
     : error;
   const credentialsStatus = drawer.root.querySelector(".rgm-credentials-status") as HTMLParagraphElement | null;
   const driveStatus = drawer.root.querySelector(".rgm-drive-status") as HTMLParagraphElement | null;
@@ -738,6 +739,7 @@ export function setup(ctx: SpindleFrontendContext) {
         missing_basic_pass: "Enter the tunnel Basic Auth password.",
         invalid_basic_user: "The tunnel Basic Auth username cannot contain spaces or a colon.",
         invalid_credentials: "Check the credential fields and try again.",
+        auth_required: "Google authorization failed. The saved refresh token may have expired or been revoked, or the OAuth client may lack access. Reauthorize Google and update the automation credentials.",
         recovery_runtime_present: "A manager runtime is still present. Stop it before recovery.",
         recovery_intent_required: "No recoverable allocation record was found.",
         civitai_metadata_changed: "Civitai changed this file?s metadata. Look up and save the version again before starting.",
